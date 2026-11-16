@@ -39,3 +39,12 @@
 - Exercised migrated login/dashboard UI using temporary synthetic browser API responses, including failed login, queued-investigation display, resolution, and memory search. These checks are UI-only, not live integration evidence.
 
 Still unverified locally: PostgreSQL initialization, live Hub/authentication, Linux agent enrollment and WSS, Docker image builds, Linux AMD64/ARM64 binaries, and external AI providers. The original archive syntax checks do not replace these acceptance steps.
+
+## GitHub CI verification — 2026-11-16
+
+The [Checks run for commit `5d6b178`](https://github.com/kuenobaikbanget/opspilot/actions/runs/43803885453) completed successfully on Ubuntu runners:
+
+- Frozen Bun installation, Bun tests, all workspace typechecks, and the Web production build passed.
+- `go test -mod=readonly ./...` passed in the Linux Go job.
+
+Linux Go unit-test success is not live agent enrollment, WSS interoperability, or an AMD64/ARM64 release-binary validation.

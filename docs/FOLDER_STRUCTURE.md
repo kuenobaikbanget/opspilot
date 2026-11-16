@@ -3,7 +3,11 @@
 ```text
 opspilot/
 ├── README.md
+├── DESIGN.md                    # Implemented visual system; not backend design
 ├── package.json                 # Bun workspaces + developer scripts
+├── bun.lock                     # Reproducible TS workspace dependencies
+├── .gitattributes               # LF text files on Windows and Linux
+├── .impeccable/design.json      # Visual metadata and component previews
 ├── .env.example                 # No real secrets
 ├── compose.yaml                 # Local DB / optional full stack
 ├── apps/
@@ -11,7 +15,13 @@ opspilot/
 │   │   ├── app/
 │   │   │   ├── layout.tsx
 │   │   │   ├── page.tsx         # Dashboard, login, incidents, memory
-│   │   │   └── globals.css
+│   │   │   ├── globals.css      # Base, shared primitives, dashboard layout
+│   │   │   ├── tokens.css       # Semantic runtime design tokens
+│   │   │   └── design-system/
+│   │   │       ├── page.tsx     # Public reference route and metadata
+│   │   │       ├── catalog.tsx  # Synthetic interactive component catalog
+│   │   │       └── design-system.module.css
+│   │   ├── components/ui.tsx    # Shared native React controls
 │   │   ├── next.config.ts       # /api reverse-proxy rewrite to Hub
 │   │   ├── package.json
 │   │   └── tsconfig.json
@@ -39,6 +49,7 @@ opspilot/
 │   │   ├── agent.go             # Enrollment, /proc metrics, safe tools
 │   │   └── agent_test.go
 │   ├── go.mod
+│   ├── go.sum
 │   └── Makefile
 ├── infra/
 │   ├── db/001_init.sql
@@ -63,6 +74,7 @@ opspilot/
 ## Boundaries and ownership
 
 - `web` never receives provider API keys, agent secrets or direct DB credentials. It requests `/api/*` from Hub via Next rewrite.
+- The public `/design-system` route uses only synthetic examples and local state, without `/api` requests. Visual changes belong in shared tokens/primitives; root `DESIGN.md` records their contract, while `docs/DESIGN.md` records backend implementation.
 - `hub` performs authentication, rate/size admission, agent identity validation and state mutation; it **does not** directly call the external LLM.
 - `worker` only leases queued investigations and reads already-collected evidence. It never has direct reachability to agent WS sessions.
 - `agent` uses fixed tools; no arbitrary command registry or plugin execution in starter.
