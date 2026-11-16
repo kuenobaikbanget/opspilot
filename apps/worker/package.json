@@ -1,0 +1,14 @@
+{
+  "name": "@opspilot/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@opspilot/contracts": "workspace:*",
+    "@opspilot/ai": "workspace:*"
+  }
+}

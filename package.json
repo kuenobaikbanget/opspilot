@@ -1,0 +1,24 @@
+{
+  "name": "opspilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --parallel --filter @opspilot/hub --filter @opspilot/worker --filter @opspilot/web dev",
+    "dev:hub": "bun run --filter @opspilot/hub dev",
+    "dev:web": "bun run --filter @opspilot/web dev",
+    "dev:worker": "bun run --filter @opspilot/worker dev",
+    "test": "bun test",
+    "db:init": "bun run tools/migrate.ts",
+    "password:hash": "bun run tools/hash-password.ts",
+    "typecheck": "bun run --filter @opspilot/hub typecheck && bun run --filter @opspilot/worker typecheck && bun run --filter @opspilot/web typecheck"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.9.0"
+  }
+}

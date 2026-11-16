@@ -1,0 +1,13 @@
+{
+  "name": "@opspilot/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts",
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@opspilot/contracts": "workspace:*"
+  }
+}

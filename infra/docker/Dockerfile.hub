@@ -1,0 +1,14 @@
+FROM oven/bun:1
+WORKDIR /workspace
+COPY package.json ./
+COPY apps/hub/package.json apps/hub/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/ai/package.json packages/ai/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+RUN bun install
+COPY apps/hub apps/hub
+COPY packages packages
+ENV NODE_ENV=production
+EXPOSE 3001
+CMD ["bun","apps/hub/src/index.ts"]

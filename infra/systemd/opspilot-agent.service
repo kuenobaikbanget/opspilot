@@ -1,0 +1,24 @@
+[Unit]
+Description=OpsPilot diagnostics agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=opspilot
+Group=opspilot
+StateDirectory=opspilot
+EnvironmentFile=/etc/opspilot/agent.env
+Environment=OPSPILOT_AGENT_STATE_PATH=/var/lib/opspilot/identity.json
+ExecStart=/usr/local/bin/opspilot-agent
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/opspilot
+# Grant only explicitly necessary group/file access for journal/nginx configs.
+
+[Install]
+WantedBy=multi-user.target

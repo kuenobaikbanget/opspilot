@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-16T04:23:20.898Z",
+  "title": "Design System: OpsPilot",
+  "extensions": {
+    "colorMeta": {
+      "canvas": { "role": "neutral", "displayName": "Canvas navy" },
+      "surface": { "role": "neutral", "displayName": "Panel navy" },
+      "surface-raised": { "role": "neutral", "displayName": "Raised navy" },
+      "input": { "role": "neutral", "displayName": "Input navy" },
+      "border": { "role": "neutral", "displayName": "Structural border" },
+      "border-strong": { "role": "neutral", "displayName": "Control border" },
+      "text": { "role": "neutral", "displayName": "Primary text" },
+      "text-muted": { "role": "neutral", "displayName": "Secondary text" },
+      "accent": { "role": "primary", "displayName": "Action mint" },
+      "accent-hover": { "role": "primary", "displayName": "Hover mint" },
+      "on-accent": { "role": "neutral", "displayName": "On mint" },
+      "success": { "role": "semantic", "displayName": "Success mint" },
+      "warning": { "role": "semantic", "displayName": "Warning amber" },
+      "danger": { "role": "semantic", "displayName": "Danger coral" },
+      "info": { "role": "semantic", "displayName": "Information blue" },
+      "success-subtle": { "role": "semantic", "displayName": "Success surface" },
+      "warning-subtle": { "role": "semantic", "displayName": "Warning surface" },
+      "danger-subtle": { "role": "semantic", "displayName": "Danger surface" },
+      "info-subtle": { "role": "semantic", "displayName": "Information surface" }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "duration-fast", "value": "150ms", "purpose": "Button background/border and input border transitions; --duration-fast." },
+      { "name": "duration-normal", "value": "220ms", "purpose": "Meter width transition; --duration-normal." },
+      { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Shared transition easing; --ease-out." },
+      { "name": "reduced-motion", "value": "prefers-reduced-motion: reduce", "purpose": "Remove transitions and animations; restore automatic scrolling." }
+    ],
+    "breakpoints": [
+      { "name": "dashboard-columns-max", "value": "1100px" },
+      { "name": "catalog-compact-max", "value": "1000px" },
+      { "name": "catalog-stacked-max", "value": "720px" },
+      { "name": "dashboard-stacked-max", "value": "700px" },
+      { "name": "dashboard-metrics-stacked-max", "value": "380px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button", "kind": "button", "refersTo": "button-primary",
+      "description": "Button variant primary; native focus, hover, active, disabled and busy states.",
+      "html": "<button class=\"ds-primary\" type=\"button\">Investigate</button>",
+      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);min-height:42px;max-width:100%;padding:var(--space-2) var(--space-4);border:1px solid var(--color-accent);border-radius:var(--radius-sm);background:var(--color-accent);color:var(--color-on-accent);font:650 var(--text-base)/1.4 var(--font-sans);cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-primary:hover:not(:disabled){background:var(--color-accent-hover);border-color:var(--color-accent-hover)}.ds-primary:active:not(:disabled){border-color:var(--color-accent)}.ds-primary:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-primary:disabled{opacity:.55;cursor:not-allowed}.ds-primary[aria-busy=true]{cursor:wait;border-style:dashed}@media(prefers-reduced-motion:reduce){.ds-primary{transition:none}}"
+    },
+    {
+      "name": "Secondary button", "kind": "button", "refersTo": "button-secondary",
+      "description": "Default Button variant for supporting actions.",
+      "html": "<button class=\"ds-secondary\" type=\"button\">Refresh</button>",
+      "css": ".ds-secondary{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:var(--space-2) var(--space-4);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);background:var(--color-surface-raised);color:var(--color-text);font:650 var(--text-base)/1.4 var(--font-sans);cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-secondary:hover:not(:disabled){background:var(--color-border)}.ds-secondary:active:not(:disabled){border-color:var(--color-accent)}.ds-secondary:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-secondary:disabled{opacity:.55;cursor:not-allowed}.ds-secondary[aria-busy=true]{cursor:wait;border-style:dashed}@media(prefers-reduced-motion:reduce){.ds-secondary{transition:none}}"
+    },
+    {
+      "name": "Ghost button", "kind": "button", "refersTo": "button-ghost",
+      "description": "Low-emphasis Button variant, including dismissal actions.",
+      "html": "<button class=\"ds-ghost\" type=\"button\">Dismiss</button>",
+      "css": ".ds-ghost{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:var(--space-2) var(--space-4);border:1px solid transparent;border-radius:var(--radius-sm);background:transparent;color:var(--color-accent);font:650 var(--text-base)/1.4 var(--font-sans);cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-ghost:hover:not(:disabled){background:var(--color-border)}.ds-ghost:active:not(:disabled){border-color:var(--color-accent)}.ds-ghost:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-ghost:disabled{opacity:.55;cursor:not-allowed}.ds-ghost[aria-busy=true]{cursor:wait;border-style:dashed}@media(prefers-reduced-motion:reduce){.ds-ghost{transition:none}}"
+    },
+    {
+      "name": "Danger button", "kind": "button", "refersTo": "button-danger",
+      "description": "Explicit danger action variant; not an automatic remediation control.",
+      "html": "<button class=\"ds-danger\" type=\"button\">Danger action</button>",
+      "css": ".ds-danger{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:var(--space-2) var(--space-4);border:1px solid var(--color-danger);border-radius:var(--radius-sm);background:var(--color-danger-subtle);color:var(--color-danger);font:650 var(--text-base)/1.4 var(--font-sans);cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-danger:hover:not(:disabled){background:var(--color-danger);color:var(--color-danger-subtle)}.ds-danger:active:not(:disabled){border-color:var(--color-accent)}.ds-danger:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-danger:disabled{opacity:.55;cursor:not-allowed}.ds-danger[aria-busy=true]{cursor:wait;border-style:dashed}@media(prefers-reduced-motion:reduce){.ds-danger{transition:none}}"
+    },
+    {
+      "name": "Labeled input", "kind": "input", "refersTo": "input",
+      "description": "Field plus Input; callers own label, description and invalid-state associations.",
+      "html": "<div class=\"ds-field\"><label for=\"ds-host\">Server name</label><input class=\"ds-input\" id=\"ds-host\" placeholder=\"server-01\" aria-describedby=\"ds-host-hint\"><p id=\"ds-host-hint\">Synthetic example; no settings saved.</p></div>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;color:var(--color-text);font:400 var(--text-base)/1.5 var(--font-sans)}.ds-field label{font-weight:600}.ds-field p{margin:0;color:var(--color-text-muted);font-size:var(--text-sm)}.ds-input{width:100%;min-width:0;min-height:42px;padding:var(--space-2) var(--space-3);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);background:var(--color-input);color:var(--color-text);font:400 var(--text-base)/1.5 var(--font-sans);caret-color:var(--color-accent);transition:border-color var(--duration-fast) var(--ease-out)}.ds-input::placeholder{color:var(--color-text-muted);opacity:1}.ds-input:hover:not(:disabled){border-color:var(--color-text-muted)}.ds-input:focus-visible{border-color:var(--color-accent);outline:2px solid var(--color-accent);outline-offset:3px}.ds-input[aria-invalid=true]{border-color:var(--color-danger)}.ds-input:disabled{opacity:.55;cursor:not-allowed}@media(prefers-reduced-motion:reduce){.ds-input{transition:none}}"
+    },
+    {
+      "name": "Warning badge", "kind": "chip", "refersTo": "badge-warning",
+      "description": "Non-interactive status label; the dot is decorative, text supplies meaning.",
+      "html": "<span class=\"ds-badge\"><span class=\"ds-dot\" aria-hidden=\"true\"></span>Warning</span>",
+      "css": ".ds-badge{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);width:fit-content;max-width:100%;padding:var(--space-1) var(--space-2);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);background:var(--color-warning-subtle);color:var(--color-warning);font:600 var(--text-xs)/1.3 var(--font-sans);overflow-wrap:anywhere}.ds-dot{width:6px;height:6px;flex-shrink:0;border-radius:50%;background:currentColor}"
+    },
+    {
+      "name": "Panel", "kind": "card", "refersTo": "panel",
+      "description": "Flat bordered container; no interactive hover or focus state is implied.",
+      "html": "<div class=\"ds-panel\">Measured evidence</div>",
+      "css": ".ds-panel{min-width:0;padding:var(--space-6);border:1px solid var(--color-border);border-radius:var(--radius-lg);background:var(--color-surface);color:var(--color-text);font:400 var(--text-base)/1.5 var(--font-sans)}@media(max-width:700px){.ds-panel{padding:var(--space-4)}}"
+    },
+    {
+      "name": "Dashboard navigation", "kind": "nav", "refersTo": "navigation",
+      "description": "Dashboard navigation composition, not an exported Nav primitive. Current state uses aria-current.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Example navigation\"><button class=\"ds-nav-item\" type=\"button\" aria-current=\"page\">Overview</button><a class=\"ds-nav-item\" href=\"/design-system\">Design system</a></nav>",
+      "css": ".ds-nav{display:flex;flex-direction:column;gap:var(--space-2)}.ds-nav-item{display:inline-flex;align-items:center;justify-content:flex-start;min-height:44px;padding:var(--space-3);border:1px solid transparent;border-radius:var(--radius-sm);background:transparent;color:var(--color-text-muted);font:600 var(--text-base)/1.4 var(--font-sans);text-align:left;text-decoration:none;cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-nav-item:hover,.ds-nav-item[aria-current=page]{border-color:var(--color-border-strong);background:var(--color-surface-raised);color:var(--color-text)}.ds-nav-item[aria-current=page]{color:var(--color-accent)}.ds-nav-item:active{border-color:var(--color-accent)}.ds-nav-item:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}@media(max-width:700px){.ds-nav{flex-direction:row;flex-wrap:wrap}.ds-nav-item{flex:1 1 auto;justify-content:center;padding:var(--space-2);font-size:var(--text-sm);text-align:center}}@media(prefers-reduced-motion:reduce){.ds-nav-item{transition:none}}"
+    },
+    {
+      "name": "Information notice", "kind": "custom", "refersTo": "notice-info",
+      "description": "Informational container. Caller assigns announcement roles when appropriate; no interaction is implied.",
+      "html": "<div class=\"ds-notice\">Synthetic example. No production data or saved settings.</div>",
+      "css": ".ds-notice{padding:var(--space-3) var(--space-4);border:1px solid currentColor;border-radius:var(--radius-sm);background:var(--color-info-subtle);color:var(--color-info);font:400 var(--text-base)/1.6 var(--font-sans);overflow-wrap:anywhere}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Evidence before inference",
+    "overview": "OpsPilot is a compact operational interface for monitoring hosts and investigating incidents. Preserve its dark navy surfaces, mint actions, explicit status labels and restrained native controls. Measured observations, AI hypotheses and human-confirmed resolutions must remain visibly distinct.\n\nThis document records the implemented system, not a redesign or roadmap. `apps/web/app/tokens.css` is the executable token source; the frontmatter is its portable visual reference. Shared primitives live in `apps/web/components/ui.tsx`, their styles in `apps/web/app/globals.css`, and the public interactive reference at `/design-system`. The sidecar `.impeccable/design.json` extends this reference with states and preview snippets; it is not another runtime theme. `docs/DESIGN.md` remains the backend architecture document.",
+    "keyCharacteristics": ["Dark navy tonal surfaces with mint actions.", "Native controls, visible keyboard focus and explicit status text.", "Separate measured evidence, AI hypotheses and human-confirmed resolution.", "Compact responsive layouts without decorative elevation."],
+    "rules": [{ "name": "The Evidence Rule", "body": "Keep observations, AI hypotheses and human-confirmed resolution explicitly labeled; color alone is not provenance.", "section": "colors" }],
+    "dos": ["Do use shared native primitives and live CSS custom properties.", "Do label measured evidence, AI hypotheses and human-confirmed resolution separately.", "Do preserve visible focus, descriptive field errors and reduced-motion behavior.", "Do show missing measurements as unavailable rather than zero."],
+    "donts": ["Don't use color alone to communicate status or provenance.", "Don't add decorative shadows, gradients or a competing token palette.", "Don't present catalog examples as live telemetry or persisted configuration.", "Don't assume Field or Notice supplies accessibility attributes that callers must set."]
+  }
+}

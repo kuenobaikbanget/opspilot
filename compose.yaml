@@ -1,0 +1,79 @@
+name: opspilot
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: opspilot
+      POSTGRES_USER: opspilot
+      POSTGRES_PASSWORD: opspilot_dev
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/db/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opspilot -d opspilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  hub:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.hub
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://opspilot:opspilot_dev@db:5432/opspilot
+      NODE_ENV: production
+      PORT: 3001
+    ports:
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  worker:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://opspilot:opspilot_dev@db:5432/opspilot
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  web:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.web
+    environment:
+      HUB_INTERNAL_URL: http://hub:3001
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on: [hub]
+    restart: unless-stopped
+  agent:
+    profiles: ["agent"]
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.agent
+    environment:
+      OPSPILOT_HUB_URL: http://hub:3001
+      OPSPILOT_AGENT_STATE_PATH: /data/identity.json
+      OPSPILOT_ENROLL_TOKEN: ${OPSPILOT_ENROLL_TOKEN:-}
+      OPSPILOT_PROC_ROOT: /host/proc
+      OPSPILOT_DISK_PATH: /
+      OPSPILOT_INTERVAL_SECONDS: 15
+      OPSPILOT_ENABLE_DOCKER: "false"
+    volumes:
+      - agent_data:/data
+      - /proc:/host/proc:ro
+    depends_on: [hub]
+    restart: unless-stopped
+volumes:
+  pg_data:
+  agent_data:
