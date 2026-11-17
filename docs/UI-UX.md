@@ -39,7 +39,7 @@ The catalog and dashboard preserve the distinction between measured records, adv
 
 ## Fleet & services dashboard contract (target)
 
-**Status:** approved design direction from the supplied reference. The host-only table/inspector slice is implemented; workload inventory, HTTP monitoring and the complete navigation/metadata contract remain planned. The palette, shared primitives and evidence-first rules remain unchanged.
+**Status:** approved design direction from the supplied reference. Fleet & services composition, host table/inspector, in-page navigation and read-only provider availability are implemented. The selected-host service section explicitly reports unavailable collection; workload inventory, HTTP monitoring and their metadata remain planned. The palette, shared primitives and evidence-first rules remain unchanged.
 
 ![Fleet & services dashboard reference with host and service tables beside a contextual inspector](assets/fleet-services-reference.png)
 
@@ -47,12 +47,12 @@ The reference is authoritative for composition and information hierarchy, not it
 
 ### Hierarchy and navigation
 
-1. **Left rail:** OpsPilot and a `Self-hosted` context label; Overview, Hosts, Incidents, Configuration drift and Incident memory. Place Enroll host and Provider settings below the main destinations. Distinct destinations are target information architecture, not existing routes; never ship inert navigation.
-2. **Header:** context eyebrow, `Fleet & services` title, “Infrastructure signals and endpoint checks. Side by side, never conflated.”, refresh/time context and a secondary `Enroll host` action.
+1. **Left rail:** OpsPilot and a `Self-hosted` context label; Overview, Hosts, Incidents, Configuration drift and Incident memory. Place Enroll host and Provider settings below the main destinations. These now work as in-page destinations. Configuration drift filters the latest 100 incidents; Provider settings shows server-reported availability, not editable keys. Never ship inert navigation.
+2. **Header:** `Fleet & services` title, “Infrastructure signals and endpoint checks. Side by side, never conflated.”, refresh/time context and a secondary `Enroll host` action.
 3. **Summary strip:** hosts online / enrolled hosts, open host incidents, endpoints up / configured endpoints, and endpoints failing. Keep the counts inline with thin separators, not four large cards. Unknown/stale checks remain in the configured total but are not counted as up or failing; expose their count when nonzero. No configured checks means `No endpoints configured`, not `0 / 0 healthy`. Counts must state whether they cover the fleet or a filtered subset; never treat the current capped API list as a complete fleet total.
-4. **Main list:** `Linux hosts` with search/filter, then columns Host, Agent, CPU, Memory, Disk and Endpoints. Show a clear selected row. An offline host may still have reachable endpoints; describe last agent contact below the list without overwriting independently fresh endpoint results.
+4. **Main list:** `Linux hosts` with search/filter, then columns Host, Status, CPU, Memory, Disk and Last seen. Selection uses a tonal row. Last seen is agent contact, distinct from sample age; historical samples are labeled under the host. Endpoint observations remain a separate planned capability, never inferred from connectivity.
 5. **Selected-host inventory:** `Services on {hostname}`, workload count, read-only inventory label and collection timestamp, with a secondary `Add endpoint` action. Columns are Service / runtime, Process, Resources and Endpoint. Include Docker image/tag or systemd unit when collected. No inventory capability or permission is `Inventory unavailable`, not `0 workloads`.
-6. **Context inspector:** selected host name and agent state; OS/capacity when available; CPU/memory/disk values; timestamped CPU history; RX/TX and uptime when measured; then selected service name/runtime, independent process and endpoint states, target, observed response versus expected response, last check, consecutive failures, probe location, interval and timeout. End with `Inspect service & endpoint` and an explicit inference boundary.
+6. **Context inspector:** selected host name and agent state; OS/capacity when available; CPU/memory/disk buttons selecting timestamped resource bars, initially disk; RX/TX and uptime availability; a related open host incident with `Open investigation`; expandable identity/last contact. The link opens and focuses existing evidence without calling AI. Real selected-service/runtime and independent endpoint details remain planned.
 
 Keep lists flat on the canvas and the inspector on one tonal surface. Use the root [design contract](../DESIGN.md#layout) for target sizing and responsive behavior. Sans-serif headings and labels provide hierarchy; monospace identifies hosts, runtime metadata, measurements and timestamps. Amber/coral mark the relevant measured condition, not an entire host row merely because one endpoint failed.
 
@@ -82,7 +82,7 @@ The reference case must remain representable: `web-01` has high host CPU; `store
 
 ### Charts, freshness and responsive states
 
-- CPU history has a 0–100% scale, actual timestamps/timezone, window and aggregation. Never stretch a handful of samples into a fictitious 30-minute history; missing intervals remain gaps. Provide a text summary or accessible data alternative.
+- Resource history has a 0–100% scale, actual timestamps/timezone, window and aggregation. Each bar represents one raw sample; CPU/memory/disk buttons select the measured series. Never stretch a handful of samples into a fictitious 30-minute history; missing intervals remain empty. Accessible chart descriptions and per-observation titles provide measurement context.
 - Display the actual alert rule. The starter uses two consecutive high samples and a 15-minute cooldown; the image's ≥80% for 10 minutes is an example, not an implemented policy. Metric color is not proof that an incident was opened.
 - RX/TX rates require counter deltas over an observed interval, correct units and reset handling. Current byte counters cannot be labeled MiB/s directly. OS/capacity, per-service resources and probe metadata remain unavailable until collected.
 - Show sample/check timestamps independently. A page refresh timestamp does not make old telemetry or endpoint results fresh; staleness thresholds must come from the implemented collection policy.
@@ -99,7 +99,7 @@ The current starter has host telemetry and on-demand diagnostics, not continuous
 flowchart TD
   A[Login] --> B[Overview]
   B --> H[Searchable host table]
-  H --> S[Selected host inspector and CPU history]
+  H --> S[Selected host inspector and resource history]
   B --> I[Incidents]
   I --> D[Incident detail]
   D --> E[Evidence list]
@@ -118,7 +118,7 @@ flowchart TD
 Admin password only, error feedback, warning when keys absent. Login is separate from agent enrollment.
 
 ### Overview
-Inline fleet host totals, a searchable/selectable host table, contextual host inspector and raw timestamped CPU history. Host list and selected history refresh every 10 seconds; samples older than the API's 60-second display policy are stale, disconnected-host samples historical, and failed fetches explicitly retain stale observations. The history uses actual sample times, a 0–100% scale and breaks across gaps. Workload inventory, endpoint checks and OS/capacity metadata remain explicitly unavailable. Existing incident list, enrollment, manual incident form and incident detail remain available; incident counts describe the returned incident list, not a fleet-wide total.
+`Fleet & services` header, inline scoped host/incident totals and explicitly unavailable endpoint totals, a searchable/selectable Linux-host table with last agent contact and contextual inspector. CPU/memory/disk buttons switch timestamped utilization bars; disk is selected initially. Recorded drift appears below the table with a causality disclaimer and evidence link. Unavailable service/endpoint collection is in a native disclosure, not a large empty service workspace. The inspector links related open host incidents to the existing evidence detail and focuses its heading without starting AI. The first loaded host is selected initially; valid selections persist across refreshes. Host list and selected history refresh every 10 seconds; samples older than the API's 60-second policy are stale, disconnected-host samples historical, and failed fetches retain explicit stale observations. Actual sample times, a 0–100% scale and empty collection gaps remain visible. Workload inventory, endpoint checks, RX/TX rates, uptime and OS/capacity remain unavailable. Incidents and Configuration drift have separate in-page views; counts and related records describe the latest 100 incidents, not complete fleet totals.
 
 ### Incident detail
 Host/category/status, timestamp, evidence source/content, provider selection, async investigation status, diagnosis and evidence IDs, resolution input. Measured records, advisory AI hypotheses and human-confirmed resolution are separately labeled. Clickable evidence-ID anchors, model/cost, safety warnings and evidence freshness remain future work.
@@ -127,7 +127,10 @@ Host/category/status, timestamp, evidence source/content, provider selection, as
 Simple FTS query, prior confirmed resolution list. A later UI should show which previous case was retrieved, how similar, and provenance/recency.
 
 ### Enrollment
-Admin-only one-use token generation and copy, visible expiry and agent launch instructions. Tokens are not persisted in browser storage and clear on sign-out/expiry. Remote deployments require HTTPS/WSS; local smoke tests do not establish production TLS readiness.
+Header and rail `Enroll host` controls reveal and focus the admin-only single-use token generation/instructions section; closing returns focus to the header trigger. Token copy/hide, visible expiry and agent launch instructions are retained. Tokens are not persisted in browser storage and clear on sign-out/expiry. Remote deployments require HTTPS/WSS; local smoke tests do not establish production TLS readiness.
+
+### Provider settings
+Read-only availability for OpenAI, Anthropic and Gemini from the existing authenticated Hub endpoint. Keys are managed in the server environment, never entered or exposed here. Opening settings or inspecting hosts does not call a model.
 
 ## Core UX acceptance tests
 

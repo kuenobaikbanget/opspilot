@@ -14,6 +14,7 @@
     "dev:worker": "bun run --filter @opspilot/worker dev",
     "test": "bun test",
     "db:init": "bun run tools/migrate.ts",
+    "db:seed:demo": "bun run tools/seed-demo.ts",
     "password:hash": "bun run tools/hash-password.ts",
     "typecheck": "bun run --filter @opspilot/hub typecheck && bun run --filter @opspilot/worker typecheck && bun run --filter @opspilot/web typecheck"
   },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../components/ui";
 import type { Host } from "@opspilot/contracts";
@@ -10,6 +10,15 @@ type Evidence = { id: string; source: string; content: string; created_at: strin
 type Investigation = { id: string; provider: string; status: string; result_json: { probable_cause?: string; confidence?: number | string; evidence_ids?: string[]; recommended_checks?: string[] } | null; error: string | null };
 type Detail = { incident: Incident; evidence: Evidence[]; investigations: Investigation[] };
 type Memory = { id: string; summary: string; resolution: string; created_at: string };
+
+const destinations = [
+  { id: "overview", label: "Overview", title: "Fleet & services", description: "Infrastructure signals and endpoint checks. Side by side, never conflated.", icon: "M3 3h18v18H3z M3 9h18 M9 9v12" },
+  { id: "hosts", label: "Hosts", title: "Linux hosts", description: "Agent connectivity, measured resources and selected-host observations.", icon: "M3 3h18v7H3z M3 14h18v7H3z M6 6h.01 M6 17h.01" },
+  { id: "incidents", label: "Incidents", title: "Host incidents", description: "Measured evidence, advisory AI hypotheses and human-confirmed resolutions.", icon: "M12 8v5 M12 16h.01 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0" },
+  { id: "drift", label: "Configuration drift", title: "Configuration drift", description: "Recorded configuration hash changes. Correlation is not causation.", icon: "M14 2H5v20h14V7z M14 2v5h5 M8 12h8 M8 16h5" },
+  { id: "memory", label: "Incident memory", title: "Incident memory", description: "Human-confirmed resolutions from previous investigations.", icon: "M12 5v16 M3 3h5l4 2 4-2h5v16h-5l-4 2-4-2H3z" },
+] as const;
+type Destination = typeof destinations[number]["id"] | "providers";
 
 async function api(path: string, method = "GET", payload?: unknown) {
   const response = await fetch(`/api${path}`, {
@@ -42,10 +51,14 @@ export default function Home() {
   const [hostId, setHostId] = useState("");
   const [resolution, setResolution] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"overview" | "memory">("overview");
+  const [tab, setTab] = useState<Destination>("overview");
   const [memories, setMemories] = useState<Memory[]>([]);
   const [search, setSearch] = useState("");
   const [hostRefresh, setHostRefresh] = useState(0);
+  const [enrollmentOpen, setEnrollmentOpen] = useState(false);
+  const enrollmentTrigger = useRef<HTMLButtonElement>(null);
+  const focusIncident = useRef(false);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   useEffect(() => {
     const unauthorized = () => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); };
     window.addEventListener("opspilot-unauthorized", unauthorized);
@@ -59,6 +72,7 @@ export default function Home() {
       setIncidents(i);
       setProviders(p.available);
       setProvider(old => p.available.includes(old) ? old : (p.available[0] || ""));
+      setRefreshedAt(new Date().toISOString());
       setLogged(old => old === null ? true : old);
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
@@ -78,6 +92,12 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [refresh]);
   useEffect(() => { if (selected) void loadDetail(selected); }, [selected, loadDetail]);
+  useEffect(() => {
+    if (detail && focusIncident.current) {
+      focusIncident.current = false;
+      document.getElementById("incident-detail-title")?.focus();
+    }
+  }, [detail]);
   useEffect(() => {
     if (tab === "memory") void api(`/memory?q=${encodeURIComponent(search)}`).then(setMemories).catch(e => setError(e.message));
   }, [tab, search]);
@@ -133,58 +153,63 @@ export default function Home() {
   );
 
   const open = incidents.filter(i => i.status === "open").length;
+  const page = destinations.find(item => item.id === tab);
+  const fleetVisible = tab === "overview" || tab === "hosts";
+  const incidentView = tab === "incidents" || tab === "drift";
+  const visibleIncidents = tab === "drift" ? incidents.filter(i => i.category === "config_drift") : incidents;
 
   return (
     <div className="shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
       <aside className="sidebar">
-        <div className="logo">OpsPilot</div>
+        <div className="sidebar-brand"><div className="logo">OpsPilot</div><span className="self-hosted">Self-hosted</span></div>
         <nav aria-label="Main navigation">
-          <Button variant="ghost" className={`nav ${tab === "overview" ? "active" : ""}`} aria-current={tab === "overview" ? "page" : undefined} onClick={() => setTab("overview")}>Overview</Button>
-          <Button variant="ghost" className={`nav ${tab === "memory" ? "active" : ""}`} aria-current={tab === "memory" ? "page" : undefined} onClick={() => setTab("memory")}>Incident memory</Button>
-          <Link className="nav" href="/design-system">Design system</Link>
+          {destinations.map(item => <Button key={item.id} variant="ghost" className={`nav ${tab === item.id ? "active" : ""}`} aria-current={tab === item.id ? "page" : undefined} onClick={() => { setTab(item.id); setDetail(null); setSelected(null); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d={item.icon} /></svg>{item.label}</Button>)}
         </nav>
         <div className="sidebar-bottom">
-          <p>Single-admin mode</p>
-          <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setBusy(true); void api("/auth/logout", "POST").then(() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }).catch(e => setError(e.message)).finally(() => setBusy(false)); }}>Sign out</Button>
+          <Button variant="ghost" className="nav" onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>Enroll host</Button>
+          <Button variant="ghost" className={`nav ${tab === "providers" ? "active" : ""}`} aria-current={tab === "providers" ? "page" : undefined} onClick={() => setTab("providers")}>Provider settings</Button>
+          <Link className="nav" href="/design-system">Design system</Link>
+          <div className="sidebar-session"><p>Single-admin · Read-only diagnostics</p><Button variant="ghost" size="sm" disabled={busy} onClick={() => { setBusy(true); void api("/auth/logout", "POST").then(() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }).catch(e => setError(e.message)).finally(() => setBusy(false)); }}>Sign out</Button></div>
         </div>
       </aside>
 
       <main className="content" id="main-content" tabIndex={-1}>
+        <div className="dashboard-context"><span>{refreshedAt ? <>Incident/provider refresh <time dateTime={refreshedAt}>{new Date(refreshedAt).toLocaleTimeString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}</time></> : "Waiting for observations"}</span></div>
         <header className="topbar">
           <div>
-            <h1>{tab === "overview" ? "Server overview" : "Incident memory"}</h1>
-            <p className="muted">Independent hub · Outbound agents · Evidence-first AI</p>
+            <h1>{page?.title ?? "Provider settings"}</h1>
+            <p className="muted">{page?.description ?? "Server-side AI configuration. Keys never leave the Hub."}</p>
           </div>
-          <Button onClick={() => void refresh()}>Refresh</Button>
+          <div className="header-actions"><Button size="sm" variant="ghost" onClick={() => void refresh()}>Refresh</Button><Button ref={enrollmentTrigger} aria-expanded={enrollmentOpen} aria-controls="host-enrollment" onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>Enroll host</Button></div>
         </header>
 
         {error && <Notice tone="danger" role="alert" className="dashboard-alert"><span>{error}</span><Button variant="ghost" size="sm" onClick={() => setError("")}>Dismiss</Button></Notice>}
 
-        {tab === "overview" ? (
+        <div hidden={!fleetVisible}><HostWorkspace refreshKey={hostRefresh} onHosts={setHosts} onUnauthorized={() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }} openIncidents={open} incidents={incidents} onOpenIncident={id => { focusIncident.current = true; setTab("incidents"); setDetail(null); setSelected(id); setResolution(""); }} enrollmentOpen={enrollmentOpen && fleetVisible} onCloseEnrollment={() => { setEnrollmentOpen(false); enrollmentTrigger.current?.focus(); }} /></div>
+        {incidentView && (
           <>
-            <HostWorkspace refreshKey={hostRefresh} onHosts={setHosts} onUnauthorized={() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }} openIncidents={open} />
             <Panel role="region" aria-labelledby="incidents-title">
-              <div className="panel-head"><div><h2 id="incidents-title">Incidents</h2><p>Diagnostics, evidence and AI analysis</p></div><Badge tone={open ? "warning" : "neutral"}>{open} open</Badge></div>
+              <div className="panel-head"><div><h2 id="incidents-title">{tab === "drift" ? "Recorded hash changes" : "Incidents"}</h2><p>{tab === "drift" ? "Configuration drift incidents from the latest 100 records. This is not a complete file inventory." : "Diagnostics, evidence and AI analysis · Latest 100 records"}</p></div><Badge tone={visibleIncidents.some(i => i.status === "open") ? "warning" : "neutral"}>{visibleIncidents.filter(i => i.status === "open").length} open</Badge></div>
               <div className="list">
-                {incidents.length === 0 ? <div className="empty">No incidents recorded. Create one manually to test the investigation flow.</div> : incidents.map(i => (
+                {visibleIncidents.length === 0 ? <div className="empty">{tab === "drift" ? "No configuration drift in the latest 100 incident records. This does not establish that all configurations are unchanged." : "No incidents recorded. Create one manually to test the investigation flow."}</div> : visibleIncidents.map(i => (
                   <Button key={i.id} className={`incident ${selected === i.id ? "selected" : ""}`} aria-pressed={selected === i.id} onClick={() => { setSelected(i.id); setResolution(""); }}>
                     <span className="incident-main"><strong>{i.title}</strong><small>{i.hostname} · {i.category} · {new Date(i.created_at).toLocaleString()}</small></span>
                     <Badge tone={i.status === "resolved" ? "success" : "warning"}>{i.status}</Badge>
                   </Button>
                 ))}
               </div>
-                <form className="panel-footer" onSubmit={e => { e.preventDefault(); void act(async () => { const x = await api("/incidents", "POST", { agentId: hostId, title }); setSelected(x.id); }); }}>
+                {tab === "incidents" && <form className="panel-footer" onSubmit={e => { e.preventDefault(); void act(async () => { const x = await api("/incidents", "POST", { agentId: hostId, title }); setSelected(x.id); }); }}>
                   <h3>Create a test incident</h3>
                   <Field id="incident-host" label="Server" required><Select id="incident-host" value={hostId} onChange={e => setHostId(e.target.value)} required><option value="">Choose a server</option>{hosts.map(h => <option key={h.id} value={h.id}>{h.hostname}</option>)}</Select></Field>
                   <Field id="incident-title" label="Incident title" required><Input id="incident-title" value={title} onChange={e => setTitle(e.target.value)} required minLength={3} /></Field>
                   <Button type="submit" loading={busy} disabled={!hostId || title.length < 3}>Create incident</Button>
-                </form>
+                </form>}
               </Panel>
 
             {detail && (
               <Panel className="detail" role="region" aria-labelledby="incident-detail-title">
-                <div className="panel-head"><div><h2 id="incident-detail-title">{detail.incident.title}</h2><p>{detail.incident.hostname} · {detail.incident.status}</p></div><Button variant="ghost" size="sm" onClick={() => { setDetail(null); setSelected(null); }}>Close detail</Button></div>
+                <div className="panel-head"><div><h2 id="incident-detail-title" tabIndex={-1}>{detail.incident.title}</h2><p>{detail.incident.hostname} · {detail.incident.status}</p></div><Button variant="ghost" size="sm" onClick={() => { setDetail(null); setSelected(null); }}>Close detail</Button></div>
                 <div className="detail-grid">
                   <div>
                     <h3>Collected evidence</h3>
@@ -216,13 +241,15 @@ export default function Home() {
               </Panel>
             )}
           </>
-        ) : (
+        )}
+        {tab === "memory" && (
           <Panel role="region" aria-labelledby="memory-title">
             <div className="panel-head"><div><h2 id="memory-title">Resolved incident knowledge</h2><p>Full-text incident retrieval for future investigations</p></div></div>
             <Field id="memory-search" label="Search confirmed resolutions"><Input id="memory-search" type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search symptoms, service, resolution…" /></Field>
             {memories.length === 0 ? <p className="empty">No matching resolved incidents yet.</p> : memories.map(m => <div key={m.id} className="memory"><Badge tone="success">Human-confirmed</Badge><h3>{m.summary}</h3><p>{m.resolution}</p><small>{new Date(m.created_at).toLocaleString()}</small></div>)}
           </Panel>
         )}
+        {tab === "providers" && <Panel className="provider-settings" role="region" aria-labelledby="provider-settings-title"><div className="panel-head"><div><h2 id="provider-settings-title">AI provider availability</h2><p>Configuration status reported by the Hub; no credentials are returned.</p></div><Badge tone="info">Read-only configuration</Badge></div><dl className="provider-list">{["openai", "anthropic", "gemini"].map(name => <div key={name}><dt>{name}</dt><dd><Badge tone={providers.includes(name) ? "success" : "neutral"}>{providers.includes(name) ? "Configured" : "Not configured"}</Badge></dd></div>)}</dl><p className="muted">Provider keys are managed in the Hub server environment. After updating that environment, restart the Hub and refresh this page.</p><Notice tone="info">Inspection does not call a model. AI investigation remains a separate explicit action on an open incident.</Notice></Panel>}
         <footer>OpsPilot starter · No automatic remediation · Read-only diagnostics only</footer>
       </main>
     </div>

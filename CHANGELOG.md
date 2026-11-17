@@ -2,6 +2,13 @@
 
 ## Unreleased — 2026-11-17
 
+- Changed the default Web development port to 3100; production remains on port 3000.
+- Applied the host-dashboard reference: flat Host/Status/CPU/Memory/Disk/Last seen table, tonal selection, selectable raw resource bars (disk initially), recorded-drift notice and related-incident investigation link. Unavailable services move into a disclosure; no synthetic telemetry, thresholds or capabilities are added.
+- Verified persisted local demo data through Hub/PostgreSQL in Chromium at 1440/1024/390px: host search/selection, CPU/memory/disk switching, missing measurements and related-incident navigation. Web typecheck passed; existing meter-animation/root-font detector findings are outside this change.
+- Added and ran the opt-in local `db:seed:demo` command: labeled host/history, incident/evidence, terminal AI-report examples and searchable resolution fixtures. Transactional/no-overwrite reruns and production/non-loopback refusal keep the seed bounded; offline status and unavailable service/endpoint capabilities remain truthful.
+- Verified persisted examples through the real local Hub/PostgreSQL dashboard and passed two isolated seed safety negatives. No agents, diagnostics, probes or provider calls were started.
+- Aligned the dashboard with the approved Fleet & services composition: quiet navigation rail, inline scoped summary, Linux-host/service workspace and a compact resource/history inspector. Added working in-page incident/drift/provider destinations and focused enrollment reveal/close; unsupported inventory/endpoint actions remain explicitly unavailable.
+- Verified this UI alignment in Chromium at 1440/1024/390px with synthetic API responses, including selection/search, cached failures/removals, missing data, navigation and enrollment states; Web typecheck passed. No new live inventory, probe or authentication-integration claim.
 - Delivered the live host-only Fleet slice: typed host read models and full-fleet host totals, searchable/selectable table, contextual inspector, raw timestamped CPU history with gap breaks, historical/offline/stale states and explicit unavailable workload/endpoint capabilities.
 - Completed admin enrollment instructions, token copy/hide/expiry handling and stale-cache/removal feedback without changing the Go agent protocol or enabling diagnostics/probes from inspection.
 - Verified with isolated PostgreSQL + Hub + real Linux amd64 Go agent and browser at 1440/1024/390px, including enrollment, metric persistence, disconnect/reconnect, auth negatives and capped-list totals. Hub/Web typechecks passed; see `docs/TESTING.md` for evidence and limits.

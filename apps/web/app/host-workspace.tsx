@@ -4,10 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import type { Host, HostList, HostMetric } from "@opspilot/contracts";
 import { Badge, Button, Field, Input, Notice, Panel } from "../components/ui";
 
-type Props = { refreshKey: number; onHosts: (hosts: Host[]) => void; onUnauthorized: () => void; openIncidents: number };
-const percent = (n: number | null) => n == null || !Number.isFinite(n) ? "Unavailable" : `${n.toFixed(1)}%`;
+type FleetIncident = { id: string; agent_id: string; hostname: string; title: string; category: string; status: string; created_at: string };
+type Props = { refreshKey: number; onHosts: (hosts: Host[]) => void; onUnauthorized: () => void; openIncidents: number; incidents: FleetIncident[]; onOpenIncident: (id: string) => void; enrollmentOpen: boolean; onCloseEnrollment: () => void };
+type Resource = "cpu_percent" | "memory_percent" | "disk_percent";
+const resources = [{ key: "cpu_percent", label: "CPU" }, { key: "memory_percent", label: "Memory" }, { key: "disk_percent", label: "Disk" }] as const;
+const percent = (n: number | null) => n == null || !Number.isFinite(n) ? "—" : `${Number(n.toFixed(1))}%`;
 const stamp = (s: string | null) => s ? new Date(s).toLocaleString() : "Not observed";
-const age = (s: string | null, now: number) => s ? `${Math.max(0, Math.floor((now - Date.parse(s)) / 1000))}s ago` : "Not observed";
+const age = (s: string | null, now: number) => {
+  if (!s) return "Not observed";
+  const seconds = Math.max(0, Math.floor((now - Date.parse(s)) / 1000));
+  return seconds < 60 ? `${seconds}s ago` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago` : seconds < 86400 ? `${Math.floor(seconds / 3600)}h ago` : `${Math.floor(seconds / 86400)}d ago`;
+};
+const measurementClass = (n: number | null) => n == null || !Number.isFinite(n) ? "measurement--unknown" : n > 90 ? "measurement--danger" : n > 75 ? "measurement--warning" : "";
 async function request(path: string, signal?: AbortSignal, method = "GET") {
   const r = await fetch(`/api${path}`, { credentials: "same-origin", cache: "no-store", signal, method });
   if (r.status === 401) throw new Error("Unauthorized");
@@ -16,49 +24,53 @@ async function request(path: string, signal?: AbortSignal, method = "GET") {
   return value;
 }
 
-function CpuHistory({ samples }: { samples: HostMetric[] }) {
+function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resource: Resource }) {
+  const label = resources.find(r => r.key === resource)!.label;
   const rows = [...samples].sort((a, b) => Date.parse(a.sampled_at) - Date.parse(b.sampled_at));
-  const valid = rows.filter(r => r.cpu_percent != null && Number.isFinite(r.cpu_percent));
-  if (!rows.length) return <p className="empty">No CPU samples received yet. History is unavailable.</p>;
+  const valid = rows.filter(r => r[resource] != null && Number.isFinite(r[resource]));
+  if (!rows.length) return <p className="empty">No {label} samples received yet. History is unavailable.</p>;
   const start = Date.parse(rows[0].sampled_at), end = Date.parse(rows[rows.length - 1].sampled_at);
-  const x = (t: number) => 40 + ((t - start) / (end - start || 1)) * 520;
-  const y = (n: number) => 150 - n * 1.3;
-  const paths: string[] = [];
-  let path = "", previous: number | null = null;
-  for (const row of rows) {
-    const t = Date.parse(row.sampled_at);
-    if (row.cpu_percent == null || !Number.isFinite(row.cpu_percent)) { if (path) paths.push(path); path = ""; previous = null; continue; }
-    if (previous != null && t - previous > 60000) { if (path) paths.push(path); path = ""; }
-    path += `${path ? " L" : "M"}${x(t)},${y(row.cpu_percent)}`;
-    previous = t;
+  const duration = end - start;
+  const width = 480, height = 180;
+  const x = (t: number) => 48 + ((t - start) / (duration || 1)) * width;
+  const y = (n: number) => 16 + height * (1 - n / 100);
+  let interval = 15000;
+  for (let i = 1; i < rows.length; i++) {
+    const gap = Date.parse(rows[i].sampled_at) - Date.parse(rows[i - 1].sampled_at);
+    if (gap > 0) interval = Math.min(interval, gap);
   }
-  if (path) paths.push(path);
-  return <figure className="cpu-history">
-    <figcaption><h3>CPU history</h3><p>{rows.length} raw samples · No aggregation · Up to 120 retained samples</p></figcaption>
-    <svg viewBox="0 0 580 180" role="img" aria-label={`CPU usage, 0 to 100 percent. ${valid.length} measured samples from ${stamp(rows[0].sampled_at)} to ${stamp(rows[rows.length - 1].sampled_at)}. Gaps over 60 seconds are not connected.`}>
-      {[0, 50, 100].map(n => <g key={n}><line x1="40" x2="560" y1={y(n)} y2={y(n)} className="chart-grid" /><text x="0" y={y(n) + 4}>{n}%</text></g>)}
-      {paths.map((d, i) => <path key={i} d={d} className="chart-line" />)}
-      {valid.map((r, i) => <circle key={i} cx={x(Date.parse(r.sampled_at))} cy={y(r.cpu_percent!)} r="2.5" className="chart-point"><title>{stamp(r.sampled_at)} · {percent(r.cpu_percent)}</title></circle>)}
+  const barWidth = Math.max(1, Math.min(24, duration ? width * interval / duration * .72 : 24));
+  const time = (s: string) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return <figure className="resource-history">
+    <figcaption><h3>{label} utilization</h3><span>{duration ? `${Math.round(duration / 60000)} min` : "Single sample"} · Raw samples</span></figcaption>
+    <svg viewBox="0 0 548 232" role="img" aria-label={`${label} usage, 0 to 100 percent. ${valid.length} measured samples from ${stamp(rows[0].sampled_at)} to ${stamp(rows[rows.length - 1].sampled_at)}. Each bar is one observation; missing intervals remain empty.`}>
+      <text x="0" y="20">100%</text><text x="0" y="196">0%</text>
+      <line x1="36" x2="544" y1="196" y2="196" className="chart-grid" />
+      {valid.map((r, i) => <rect key={i} x={x(Date.parse(r.sampled_at)) - barWidth / 2} y={y(r[resource])} width={barWidth} height={height * r[resource] / 100} rx="1.5" className={`chart-bar ${measurementClass(r[resource])}`}><title>{stamp(r.sampled_at)} · {percent(r[resource])}</title></rect>)}
+      <text x="48" y="224">{time(rows[0].sampled_at)}</text>
+      {duration > 0 && <text x="528" y="224" textAnchor="end">{time(rows[rows.length - 1].sampled_at)}</text>}
     </svg>
-    <div className="chart-range"><time>{stamp(rows[0].sampled_at)}</time><time>{stamp(rows[rows.length - 1].sampled_at)}</time></div>
-    <p className="tiny">Server receipt timestamps · 0–100% · Gaps over 60s remain gaps.</p>
-    {!valid.length && <p>CPU measurements unavailable for this range.</p>}
+    <p className="tiny">{valid.length} measurements · No aggregation · {Intl.DateTimeFormat().resolvedOptions().timeZone}<br /><time dateTime={rows[0].sampled_at}>{stamp(rows[0].sampled_at)}</time> – <time dateTime={rows[rows.length - 1].sampled_at}>{stamp(rows[rows.length - 1].sampled_at)}</time></p>
+    {!valid.length && <p>{label} measurements unavailable for this range.</p>}
   </figure>;
 }
 
-export function HostWorkspace({ refreshKey, onHosts, onUnauthorized, openIncidents }: Props) {
+export function HostWorkspace({ refreshKey, onHosts, onUnauthorized, openIncidents, incidents, onOpenIncident, enrollmentOpen, onCloseEnrollment }: Props) {
   const [fleet, setFleet] = useState<HostList | null>(null);
   const [failure, setFailure] = useState("");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [selectionNotice, setSelectionNotice] = useState("");
   const selectedRef = useRef(selected);
+  const loadedOnce = useRef(false);
   selectedRef.current = selected;
   const [history, setHistory] = useState<{ id: string; samples: HostMetric[] } | null>(null);
   const [historyError, setHistoryError] = useState("");
+  const [resource, setResource] = useState<Resource>("disk_percent");
   const [now, setNow] = useState(Date.now());
   const [token, setToken] = useState<{ value: string; expires: number } | null>(null);
   const [enrolling, setEnrolling] = useState(false);
+  const enrollmentPanel = useRef<HTMLElement>(null);
   const [enrollError, setEnrollError] = useState("");
   const [copied, setCopied] = useState(false);
   const [hubUrl, setHubUrl] = useState("");
@@ -74,6 +86,10 @@ export function HostWorkspace({ refreshKey, onHosts, onUnauthorized, openInciden
         const next: HostList = await request("/hosts", controller.signal);
         if (!active) return;
         setFleet(next); setFailure(""); callbacks.current.onHosts(next.hosts);
+        if (!loadedOnce.current) {
+          loadedOnce.current = true;
+          setSelected(next.hosts[0]?.id ?? null);
+        }
         if (selectedRef.current && !next.hosts.some(h => h.id === selectedRef.current)) {
           setSelected(null);
           setSelectionNotice("The selected host is no longer in the loaded host list. Select another host.");
@@ -109,10 +125,18 @@ export function HostWorkspace({ refreshKey, onHosts, onUnauthorized, openInciden
     return () => { active = false; controller.abort(); clearInterval(poll); };
   }, [selected]);
   useEffect(() => { if (token && now >= token.expires) setToken(null); }, [now, token]);
+  useEffect(() => {
+    if (enrollmentOpen) {
+      enrollmentPanel.current?.focus();
+      enrollmentPanel.current?.scrollIntoView({ block: "start" });
+    }
+  }, [enrollmentOpen]);
   const hosts = fleet?.hosts ?? [];
   const visible = hosts.filter(h => `${h.hostname} ${h.id}`.toLowerCase().includes(query.trim().toLowerCase()));
   const host = hosts.find(h => h.id === selected);
   const stale = (h: Host) => !h.sampled_at || now - Date.parse(h.sampled_at) > (fleet?.stale_after_seconds ?? 60) * 1000;
+  const relatedIncident = host ? incidents.find(i => i.agent_id === host.id && i.status === "open") : undefined;
+  const drift = incidents.find(i => i.category === "config_drift");
   async function enroll() {
     setEnrolling(true); setEnrollError(""); setCopied(false); setToken(null);
     try { const result = await request("/agents/enrollment-token", undefined, "POST"); setToken({ value: result.token, expires: Date.now() + result.expiresInSeconds * 1000 }); }
@@ -120,36 +144,53 @@ export function HostWorkspace({ refreshKey, onHosts, onUnauthorized, openInciden
     finally { setEnrolling(false); }
   }
   return <section aria-labelledby="fleet-title" className="fleet-section">
-    <div className="fleet-summary" aria-label="Fleet summary"><span>Hosts online <strong>{fleet ? `${fleet.online} / ${fleet.total}` : "Unavailable"}</strong></span><span>Open incidents (latest 100) <strong>{openIncidents}</strong></span><span>Workloads: unavailable</span><span>Endpoints: unavailable</span></div>
+    <div className="fleet-summary" aria-label="Fleet summary">
+      <span><strong className={failure ? undefined : "measurement--success"}>{fleet ? `${fleet.online} / ${fleet.total}` : "—"}</strong> hosts online <small>fleet{failure ? " · cached" : ""}</small></span>
+      <span><strong className={openIncidents ? "measurement--warning" : undefined}>{openIncidents}</strong> open host incidents <small>latest 100</small></span>
+      <span><strong>—</strong> endpoints up <small>Monitoring unavailable</small></span>
+      <span><strong>—</strong> endpoints failing <small>Monitoring unavailable</small></span>
+    </div>
     {failure && <Notice tone="warning" role="alert">Host refresh failed: {failure}. {fleet ? `Showing stale cached values from ${stamp(fleet.observed_at)}; connectivity may have changed.` : "Fleet data is unavailable, not an empty fleet."}</Notice>}
     <div className="fleet-workspace">
       <div className="fleet-list">
-        <div className="panel-head"><div><h2 id="fleet-title">Hosts</h2><p>Agent connectivity and measured resources · Freshness window {fleet?.stale_after_seconds ?? 60}s</p></div></div>
-        <div className="host-search"><Field id="host-search" label="Search hosts"><Input id="host-search" type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Hostname or host ID" /></Field>{query && <Button onClick={() => setQuery("")}>Clear search</Button>}</div>
-        <p className="tiny">{fleet ? `${hosts.length} of ${fleet.total} hosts loaded (limit ${fleet.limit}). Fleet observed ${stamp(fleet.observed_at)}.` : "Loading host inventory…"}</p>
+        <div className="panel-head fleet-list-heading"><div><h2 id="fleet-title">Linux hosts</h2><p>Agent connectivity and host resources</p></div><div className="host-search"><label className="sr-only" htmlFor="host-search">Search hosts</label><Input id="host-search" type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search hosts or ID…" />{query && <Button size="sm" variant="ghost" onClick={() => setQuery("")}>Clear</Button>}</div></div>
+        <p className="tiny fleet-coverage" role="status">{fleet ? `${visible.length} matching · ${hosts.length} of ${fleet.total} hosts loaded · Limit ${fleet.limit}` : failure ? "Host inventory unavailable" : "Loading host inventory…"}</p>
         <div className="host-table-scroll" role="region" aria-label="Host inventory table, horizontally scrollable" tabIndex={0}>
-          <table className="host-table"><caption className="sr-only">Host connectivity, resources and telemetry freshness</caption><thead><tr><th scope="col">Host</th><th scope="col">Agent</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Telemetry</th></tr></thead><tbody>{visible.map(h => <tr key={h.id} className={selected === h.id ? "host-selected" : ""}>
-            <th scope="row"><Button variant="ghost" aria-pressed={selected === h.id} onClick={() => { setSelected(h.id); setSelectionNotice(""); }}>{h.hostname}<span className="sr-only">{selected === h.id ? ", selected" : ", inspect host"}</span></Button><small>{h.version || "Version unavailable"}</small></th>
-            <td><Badge tone={failure ? "neutral" : h.status === "online" ? "success" : "neutral"}>{h.status}{failure ? " (cached)" : ""}</Badge></td>
-            {[h.cpu_percent, h.memory_percent, h.disk_percent].map((v, i) => <td key={i}>{percent(v)}{v != null && (h.status === "offline" || stale(h) || failure) && <small>Historical</small>}</td>)}
-            <td><span>{age(h.sampled_at, now)}</span><small>{stale(h) ? "Stale / unavailable" : "Within freshness window"}</small></td>
+          <table className="host-table"><caption className="sr-only">Host connectivity, measured resources and last agent contact. Offline or stale samples are historical; missing measurements are unavailable, not zero.</caption><thead><tr><th scope="col">Host</th><th scope="col">Status</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Last seen</th></tr></thead><tbody>{visible.map(h => <tr key={h.id} className={selected === h.id ? "host-selected" : ""}>
+            <th scope="row"><Button variant="ghost" aria-pressed={selected === h.id} onClick={() => { setSelected(h.id); setSelectionNotice(""); }}>{h.hostname}<span className="sr-only">{selected === h.id ? ", selected" : ", inspect host"}</span></Button>{(failure || h.status === "offline" || stale(h)) && <small>{failure ? "Cached" : h.sampled_at ? "Historical sample" : "No measurement"}{h.sampled_at && <> · <time dateTime={h.sampled_at} title={stamp(h.sampled_at)}>{age(h.sampled_at, now)}</time></>}</small>}</th>
+            <td><span className={failure ? "measurement--unknown" : h.status === "online" ? "measurement--success" : "measurement--warning"}>{h.status === "online" ? "Online" : "Offline"}{failure ? " (cached)" : ""}</span></td>
+            {[h.cpu_percent, h.memory_percent, h.disk_percent].map((v, i) => <td key={i}><span className={measurementClass(v)} aria-label={v == null || !Number.isFinite(v) ? "No measurement" : undefined}>{percent(v)}</span></td>)}
+            <td><time dateTime={h.last_seen_at ?? undefined} title={stamp(h.last_seen_at)}>{age(h.last_seen_at, now)}</time></td>
           </tr>)}</tbody></table>
         </div>
-        {fleet && !hosts.length && <p className="empty">No hosts enrolled. Create a one-time token below to connect your first Linux host.</p>}
+        {fleet && !hosts.length && <p className="empty">No hosts enrolled. Use Enroll host to create a one-time token and connect your first Linux host.</p>}
         {hosts.length > 0 && !visible.length && <p className="empty" role="status">No hosts match “{query}”. <Button variant="ghost" onClick={() => setQuery("")}>Clear search</Button></p>}
+        <p className="tiny fleet-freshness">{fleet && <>Fleet observed <time dateTime={fleet.observed_at}>{stamp(fleet.observed_at)}</time>. </>}Samples older than {fleet?.stale_after_seconds ?? 60}s are stale. Offline agents retain historical observations; connectivity is not endpoint reachability.</p>
+        {drift && <section className="fleet-drift" aria-labelledby="fleet-drift-title"><h2 id="fleet-drift-title">Monitored file changed</h2><p className="drift-observation">{drift.hostname} · <time dateTime={drift.created_at}>{stamp(drift.created_at)}</time></p><Button variant="ghost" onClick={() => onOpenIncident(drift.id)}>{drift.title}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14 M13 6l6 6-6 6" /></svg></Button><p className="muted">Hash change recorded. Relationship to resource incidents is unknown.</p><small className="muted">Latest recorded drift in the last 100 incidents · {drift.status}</small></section>}
+        <details className="service-inventory"><summary>Service &amp; endpoint availability <span className="muted">Not collected</span></summary><section aria-labelledby="services-title">
+          <div className="panel-head"><div><h2 id="services-title">{host ? `Services on ${host.hostname}` : "Services on selected host"}</h2><p>Read-only inventory · Collection unavailable</p></div><Button size="sm" disabled aria-describedby="inventory-unavailable">Add endpoint</Button></div>
+          <div className="host-table-scroll" role="region" aria-label="Service inventory table, horizontally scrollable" tabIndex={0}>
+            <table className="host-table service-table"><caption className="sr-only">Service runtime, process state, resources and independent endpoint checks. Inventory is unavailable.</caption><thead><tr><th scope="col">Service / runtime</th><th scope="col">Process</th><th scope="col">Resources</th><th scope="col">Endpoint</th></tr></thead></table>
+          </div>
+          <div className="inventory-unavailable" id="inventory-unavailable"><strong>{host ? "Inventory unavailable" : "Select a host to view inventory availability"}</strong><p>Continuous Docker/systemd inventory is not collected. Workload count, process state and per-service resources are unavailable—not zero.</p><p>Endpoint configuration and HTTP checks are not available. No reachability result has been inferred.</p></div>
+          <div className="signal-boundary"><p>Running is not the same as reachable.</p><p className="muted small">Agent telemetry describes the host. Endpoint checks require independent observations from a named probe.</p></div>
+        </section></details>
       </div>
       <Panel className="host-inspector" role="region" aria-labelledby="host-inspector-title">
-        <div className="panel-head"><h2 id="host-inspector-title">{host ? host.hostname : "Host inspector"}</h2>{host && <Button size="sm" variant="ghost" onClick={() => setSelected(null)}>Close</Button>}</div>
-        {!host ? <p className="muted" role="status">{selectionNotice || "Select a host to inspect its observations and CPU history."}</p> : <>
-          <Badge tone={host.status === "online" && !failure ? "success" : "neutral"}>{host.status}{failure ? " (cached)" : ""}</Badge>
-          <dl className="host-facts"><dt>Host ID</dt><dd>{host.id}</dd><dt>Agent version</dt><dd>{host.version || "Unavailable"}</dd><dt>Last seen</dt><dd>{stamp(host.last_seen_at)} · {age(host.last_seen_at, now)}</dd><dt>Sample received</dt><dd>{stamp(host.sampled_at)} · {age(host.sampled_at, now)}</dd><dt>Sample freshness</dt><dd>{stale(host) ? "Stale / unavailable" : "Within 60s window"}</dd>{([['CPU', host.cpu_percent], ['Memory', host.memory_percent], ['Disk', host.disk_percent]] as const).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{percent(value)}{value != null && (host.status === "offline" || stale(host) || failure) ? " · Historical, not live" : ""}</dd></div>)}</dl>
-          {historyError && <Notice tone="warning">CPU history refresh failed: {historyError}. {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}</Notice>}
-          {history && history.id === host.id ? <CpuHistory samples={history.samples} /> : !historyError && <p role="status">Loading CPU history…</p>}
-          <p className="tiny">Workloads unavailable — not collected. Endpoints unavailable — not monitored. Agent connectivity does not establish service health. No root cause inferred.</p>
+        <div className="panel-head"><h2 id="host-inspector-title">{host ? host.hostname : "Host inspector"}</h2>{host && <Badge tone={host.status === "online" && !failure ? "success" : "warning"}>{host.status === "online" ? "Online" : "Offline"}{failure ? " (cached)" : ""}</Badge>}</div>
+        {!host ? <p className="muted" role="status">{selectionNotice || "Select a host to inspect its observations and resource history."}</p> : <>
+          <p className="tiny host-platform">OS and capacity unavailable · Not collected</p>
+          <div className="inspector-resources" role="group" aria-label="Resource history"><span className="sr-only">Choose a resource to view its history</span>{resources.map(({ key, label }) => <Button key={key} variant="ghost" aria-pressed={resource === key} onClick={() => setResource(key)}><span className={`resource-value ${measurementClass(host[key])}`} aria-label={host[key] == null ? "No measurement" : undefined}>{percent(host[key])}</span><span className="resource-label">{label}</span></Button>)}</div>
+          <p className="tiny inspector-sample">Sample <time dateTime={host.sampled_at ?? undefined}>{stamp(host.sampled_at)}</time> · {failure ? "Cached, not live" : host.status === "offline" ? "Historical, not live" : stale(host) ? "Stale / unavailable" : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}</p>
+          {historyError && <Notice tone="warning">Resource history refresh failed: {historyError}. {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}</Notice>}
+          {history && history.id === host.id ? <ResourceHistory samples={history.samples} resource={resource} /> : !historyError && <p role="status">Loading resource history…</p>}
+          <div className="inspector-network"><p>RX / TX <span className="muted">Rates unavailable</span></p><p>Uptime <span className="muted">Not collected</span></p></div>
+          <section className="inspector-incident" aria-labelledby="related-incident-title"><h3 id="related-incident-title">Related incident</h3>{relatedIncident ? <><p>{relatedIncident.title}</p><Button variant="primary" onClick={() => onOpenIncident(relatedIncident.id)}>Open investigation <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14 M13 6l6 6-6 6" /></svg></Button></> : <p className="muted small">No open incident for this host in the latest 100 records.</p>}<p className="tiny">Measured signals only. No root cause inferred.</p></section>
+          <details className="host-metadata"><summary>Host identity &amp; last contact</summary><dl className="host-facts"><dt>Host ID</dt><dd>{host.id}</dd><dt>Agent version</dt><dd>{host.version || "Unavailable"}</dd><dt>Last agent contact</dt><dd>{stamp(host.last_seen_at)} · {age(host.last_seen_at, now)}</dd></dl></details>
         </>}
       </Panel>
     </div>
-    <section className="host-enrollment" aria-labelledby="enroll-host-title"><h2 id="enroll-host-title">Enroll a Linux host</h2><p className="muted">Admin-only, one-time secret. Expires in 10 minutes; never stored in this browser.</p><Button loading={enrolling} onClick={() => void enroll()}>Generate enrollment token</Button>
+    <section ref={enrollmentPanel} tabIndex={-1} className="host-enrollment" id="host-enrollment" aria-labelledby="enroll-host-title" hidden={!enrollmentOpen}><div className="panel-head"><div><h2 id="enroll-host-title">Enroll a Linux host</h2><p>Admin-only, one-time secret. Expires in 10 minutes; never stored in this browser.</p></div><Button size="sm" variant="ghost" onClick={onCloseEnrollment}>Close enrollment</Button></div><Button loading={enrolling} onClick={() => void enroll()}>Generate enrollment token</Button>
       {enrollError && <Notice tone="danger" role="alert">{enrollError}</Notice>}
       {token && <div className="enrollment-secret"><p>Expires {new Date(token.expires).toLocaleTimeString()} · {Math.max(0, Math.ceil((token.expires - now) / 1000))}s remaining. Usable once; creating another does not revoke earlier tokens.</p><div className="token"><code>{token.value}</code><Button size="sm" onClick={() => void navigator.clipboard.writeText(token.value).then(() => setCopied(true)).catch(() => setEnrollError("Clipboard unavailable. Select and copy the token manually."))}>{copied ? "Copied" : "Copy token"}</Button><Button size="sm" variant="ghost" onClick={() => setToken(null)}>Hide secret</Button></div></div>}
       <Field id="agent-hub-url" label="Hub URL reachable from the Linux host" hint="Use HTTPS for remote hosts. The hub must accept agent HTTP/WebSocket connections." ><Input id="agent-hub-url" type="url" value={hubUrl} onChange={e => setHubUrl(e.target.value)} placeholder="https://your-hub.example.com" aria-describedby="agent-hub-url-hint" /></Field>

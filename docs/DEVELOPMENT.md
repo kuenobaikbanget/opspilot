@@ -23,9 +23,9 @@ Backend can be run individually with `bun run dev:hub`, `bun run dev:worker`, `b
 
 ## Design system preview
 
-Run `bun run dev:web`, then open `http://localhost:3000/design-system`. This public reference route requires no Hub, database, `.env`, login, or provider credentials. Its examples and interactions are explicitly synthetic and local-only.
+Run `bun run dev:web`, then open `http://localhost:3100/design-system`. This public reference route requires no Hub, database, `.env`, login, or provider credentials. Its examples and interactions are explicitly synthetic and local-only.
 
-If port 3000 is occupied: `bun run --cwd apps/web dev --port 3100`, then open `http://localhost:3100/design-system`.
+If port 3100 is occupied: `bun run --cwd apps/web dev --port 3200`, then open `http://localhost:3200/design-system`.
 
 - Semantic CSS tokens: `apps/web/app/tokens.css`, imported once by `globals.css`.
 - Shared native React components: `apps/web/components/ui.tsx`.
@@ -64,6 +64,18 @@ Configure a GitHub branch rule for `main` requiring pull requests and successful
 7. Change a deliberately monitored harmless file; verify baseline/change behavior.
 
 For the host-only dashboard slice, follow [the executed smoke coverage](TESTING.md#host-only-slice-verification--2026-11-17): verify first enrollment, selected CPU history, disconnect/historical values, stale samples and reconnect gaps. Host reads poll every 10 seconds; the list is capped at 100 and history at 120, while host totals cover the full fleet. This slice adds no telemetry stream, sampling frequency or metric writes; retention/backpressure remains unchanged and unbounded storage still requires the roadmap work.
+
+## Local dashboard demo data
+
+After initializing the local database, run `bun run db:seed:demo` from the repository root with the same `DATABASE_URL` used by the Hub (Bun loads the root `.env`).
+
+The seed adds six `Demo data` hosts, 365 historical metric samples with a collection gap, five incidents (three open, two resolved), synthetic evidence, completed/failed authored investigation examples and two searchable resolution memories. One host has no measurements. All hosts remain offline because connectivity comes from actual agent sockets, not database status.
+
+The script refuses `NODE_ENV=production` and non-loopback database connections. It inserts atomically under reserved fixture identities, never deletes or overwrites existing records, and a complete existing host set makes reruns a no-op. Partial/colliding fixture identities fail rather than repairing user data. Samples intentionally remain historical; rerunning does not make them live or refresh timestamps.
+
+No agent, diagnostic, HTTP probe or model request is started. Investigation examples have terminal states so the Worker does not execute them. Workload inventory and endpoint checks remain unavailable; this seed does not implement their APIs. Refresh the dashboard and use Incidents, Configuration drift and Incident memory to inspect the persisted examples.
+
+Run the isolated safety negatives with `bun test tests/seed-demo.test.ts`; these reject production and non-loopback targets before connecting to any database.
 
 ## Do not overengineer initially
 

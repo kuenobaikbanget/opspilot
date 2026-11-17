@@ -24,6 +24,28 @@ Executed against a separate PostgreSQL 16 database, real Bun Hub, Next.js browse
 
 These checks do not establish production TLS/WSS, ARM64 builds, full Docker images, 24-hour stability, retention bounds, LLM investigations, workload inventory or HTTP monitoring. The original generated-archive limitations below are historical, not the scope of this executed host smoke.
 
+## Dashboard contract alignment verification — 2026-11-17
+
+Executed Web workspace typecheck (`bun run --cwd apps/web typecheck`) and the actual Next.js dashboard in Chromium with synthetic API responses. This pass did not rerun the live PostgreSQL/Hub/Go-agent integration above.
+
+- Captured 1440px, 1024px and 390px surfaces: 208px desktop rail, side-by-side desktop workspace, stacked tablet/mobile inspector, and no document-level horizontal overflow. Mobile tables scroll inside 358px regions; unavailable-inventory prose wraps outside them.
+- Search/no matches/clear preserved full-fleet totals (80/106 from the aggregate response, independent of six loaded records). Keyboard host selection exposed a 2px solid focus outline; refresh preserved selection.
+- Offline samples remained historical. Simulated host-read 503 retained cached observations and selection with explicit stale context; removing the selected host cleared its inspector. Missing measurements rendered unavailable, empty history produced no fabricated chart, and an empty fleet offered enrollment.
+- Incidents displayed the returned records; Configuration drift filtered `config_drift`; incident detail retained evidence/AI provenance. Incident memory search and read-only configured/unconfigured provider states worked.
+- Header enrollment revealed/focused its section. Simulated token failure displayed an error without a secret; synthetic token generation/hide worked, and closing returned focus to the header trigger. Keyboard sign-out removed the protected surface; local/session storage remained empty.
+- Unsupported endpoint creation and service inspection remained disabled with explanations. No service inventory, HTTP probe, AI integration or live auth enforcement is established by these synthetic UI checks.
+
+The one mechanical design scan reported only the existing shared meter-width transition and documented 16px root-font advisory; neither was introduced by this dashboard alignment.
+
+## Persisted demo seed verification — 2026-11-17
+
+- Seeded the running local PostgreSQL database with six demo hosts, 365 historical samples, five incidents, five evidence records, two terminal investigation examples and two resolution memories. Rerunning the seed left the dataset unchanged. No queued/running investigation fixtures were present.
+- `bun test tests/seed-demo.test.ts`: two negative tests passed, rejecting production and non-loopback database targets before a connection.
+- Verified the actual Next.js → Hub → PostgreSQL dashboard without mocked API responses: six offline hosts, two CPU-chart segments around the seeded gap, five incidents, completed/failed authored report examples, one configuration-drift result and two incident-memory records. Searching `upstream` returned its persisted resolution.
+- Verified structured JSON persistence as a PostgreSQL JSONB object and rendered confidence/evidence after correcting the seed's initial double-encoded report. Only this run's demo report/audit data was corrected.
+
+Browser verification used a locally signed admin session, not a password-login test. All observations/reports/resolutions here are explicitly synthetic fixtures; this does not establish live collection, real AI output, endpoint reachability or agent connectivity.
+
 ## Manual smoke test
 
 | # | Test | Expected result |

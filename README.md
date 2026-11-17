@@ -31,7 +31,7 @@ bun run db:init
 bun run dev
 ```
 
-Open **http://localhost:3000**. Hub health: **http://localhost:3001/healthz**.
+Open **http://localhost:3100**. Hub health: **http://localhost:3001/healthz**.
 
 Dependency locks (`bun.lock` and `agent/go.sum`) are committed. GitHub Actions runs Bun tests, workspace typechecks, the Next.js production build, and Linux Go tests on pushes and pull requests.
 
@@ -42,9 +42,9 @@ bun install --frozen-lockfile
 bun run dev:web
 ```
 
-Open **http://localhost:3000/design-system**. The catalog uses synthetic examples only; it needs no `.env`, PostgreSQL, Hub, admin login, or AI key. It includes semantic tokens, shared components, validation/loading/empty states, and evidence provenance patterns.
+Open **http://localhost:3100/design-system**. The catalog uses synthetic examples only; it needs no `.env`, PostgreSQL, Hub, admin login, or AI key. It includes semantic tokens, shared components, validation/loading/empty states, and evidence provenance patterns.
 
-If port 3000 is occupied, run `bun run --cwd apps/web dev --port 3100` and open **http://localhost:3100/design-system**.
+If port 3100 is occupied, run `bun run --cwd apps/web dev --port 3200` and open **http://localhost:3200/design-system**.
 
 Visual authority: [Design system](DESIGN.md). Implementation: `apps/web/app/tokens.css` and `apps/web/components/ui.tsx`. The live dashboard consumes the same primitives. Backend technical design remains in [docs/DESIGN.md](docs/DESIGN.md).
 
