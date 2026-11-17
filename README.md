@@ -48,6 +48,8 @@ If port 3000 is occupied, run `bun run --cwd apps/web dev --port 3100` and open 
 
 Visual authority: [Design system](DESIGN.md). Implementation: `apps/web/app/tokens.css` and `apps/web/components/ui.tsx`. The live dashboard consumes the same primitives. Backend technical design remains in [docs/DESIGN.md](docs/DESIGN.md).
 
+Dashboard direction: [Fleet & services contract](docs/UI-UX.md#fleet-services-dashboard-contract-target), based on the supplied reference. Host/service tables and a contextual inspector keep agent connectivity, process state and endpoint reachability distinct. Service inventory and HTTP monitoring are planned, not shipped; see the [delivery gates](docs/ROADMAP.md#fleet-services-dashboard-delivery-planned).
+
 ### Enroll a host
 
 1. Sign in → **Generate enrollment token**. Token expires in 10 minutes, usable once.
@@ -110,6 +112,7 @@ The container agent intentionally has narrower host visibility than a properly p
 | Incident resolution | Implemented baseline | manual resolution, no auto-remediation |
 | Cross-server RCA / robust reconnect backfill | Planned | not implemented |
 | Metrics retention / downsampling | Planned | must be added before long-term use |
+| Fleet & services dashboard / workload inventory / HTTP checks | Host-only slice implemented; inventory/HTTP checks planned | typed host totals, searchable table, inspector and timestamped CPU history; no workload or endpoint collection |
 | Hardened production release | Not ready | see threat model |
 
 ## Repository documents
@@ -122,8 +125,8 @@ The container agent intentionally has narrower host visibility than a properly p
 - [API & agent protocol](docs/API.md) — endpoints, payloads and message contract.
 - [AI design](docs/AI-DESIGN.md) — providers, prompts, safety, evaluation, memory.
 - [Security](docs/SECURITY.md) — trust boundaries and shipping blockers.
-- [UI/UX](docs/UI-UX.md) — layout, states, workflows.
-- [Design system](DESIGN.md) — implemented UI tokens, component APIs, and visual rules; interactive catalog at `/design-system`.
+- [UI/UX](docs/UI-UX.md) — implemented screens plus the approved Fleet & services target, reference image and behavior contract.
+- [Design system](DESIGN.md) — implemented UI tokens/component APIs and target dashboard composition; interactive primitive catalog at `/design-system`.
 - [Deployment](docs/DEPLOYMENT.md) — binary, Compose, reverse proxy.
 - [Development](docs/DEVELOPMENT.md) — day-to-day workflows.
 - [Testing](docs/TESTING.md) — tests, incident fixtures, validation checklist.

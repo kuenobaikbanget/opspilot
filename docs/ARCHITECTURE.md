@@ -77,6 +77,7 @@ sequenceDiagram
 - Config hash change is a fact about bytes, **not** proof of causation.
 - `evidence.id` is a trusted server-minted reference; external log content is untrusted.
 - Human resolution is authoritative for the incident memory record, but remains a fallible prior in future cases.
+- Host connectivity, workload process state and endpoint reachability are independent signals. Future HTTP check results must identify the actual probe location/time; neither a running process nor a correlated CPU spike establishes availability or root cause.
 
 ## Failure modes and required behavior
 
@@ -98,3 +99,5 @@ sequenceDiagram
 4. Add separate agent capability discovery; forbid dispatch of unsupported tools.
 5. Add pgvector semantic memory when measured FTS recall is insufficient; embeddings provider can differ from reasoning provider.
 6. Scale Hub gateway nodes only after introducing shared ephemeral connection routing and distributed alert state (current in-memory maps are one-Hub only).
+
+The [Fleet & services dashboard plan](ROADMAP.md#fleet-services-dashboard-delivery-planned) stays within these module boundaries: Go agent for opt-in workload inventory, Hub for authenticated configuration/read models and Worker for bounded scheduled HTTP checks. This is a planned extension, not a shipped probe service or a reason to add another independently deployed app. See the [data boundary](DESIGN.md#fleet-services-data-boundary-planned) and [security prerequisites](SECURITY.md#planned-inventory-and-endpoint-monitoring).

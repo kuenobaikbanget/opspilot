@@ -118,15 +118,20 @@ components:
 
 **Creative North Star: "Evidence before inference"**
 
-OpsPilot is a compact operational interface for monitoring hosts and investigating incidents. Preserve its dark navy surfaces, mint actions, explicit status labels and restrained native controls. Measured observations, AI hypotheses and human-confirmed resolutions must remain visibly distinct.
+OpsPilot is a compact operational interface for monitoring hosts and investigating incidents. Preserve its dark navy surfaces, mint actions, explicit status labels and restrained native controls. Measured observations, AI hypotheses and human-confirmed resolutions must remain visibly distinct. Host connectivity, workload process state and endpoint reachability are separate measured signals, never a single inferred health state.
 
-This document records the implemented system, not a redesign or roadmap. `apps/web/app/tokens.css` is the executable token source; the frontmatter is its portable visual reference. Shared primitives live in `apps/web/components/ui.tsx`, their styles in `apps/web/app/globals.css`, and the public interactive reference at `/design-system`. The sidecar `.impeccable/design.json` extends this reference with states and preview snippets; it is not another runtime theme. `docs/DESIGN.md` remains the backend architecture document.
+This contract covers the implemented design system and the approved **Fleet & services** dashboard direction. `apps/web/app/tokens.css` is the executable token source; the frontmatter is its portable visual reference. Shared primitives live in `apps/web/components/ui.tsx`, their styles in `apps/web/app/globals.css`, and the public interactive reference at `/design-system`. The sidecar `.impeccable/design.json` extends this reference with states and preview snippets; it is not another runtime theme. `docs/DESIGN.md` remains the backend architecture document.
+
+The [supplied dashboard reference](docs/assets/fleet-services-reference.png) establishes the target composition, not shipped functionality. [UI/UX](docs/UI-UX.md#fleet-services-dashboard-contract-target) owns its detailed behavior and acceptance criteria. Existing tokens and component APIs below remain implemented facts; sections marked **target** are implementation requirements, not claims that service inventory or endpoint monitoring already exists.
+
+The host-only slice now implements the searchable/selectable table, full-fleet host totals, contextual inspector, raw timestamped CPU history and one-time enrollment flow. Offline samples are historical; fetch failures retain explicit stale observations. Workload/endpoint collection and the complete target remain unimplemented.
 
 **Key Characteristics:**
 - Dark navy tonal surfaces with mint actions.
 - Native controls, visible keyboard focus and explicit status text.
 - Separate measured evidence, AI hypotheses and human-confirmed resolution.
 - Compact responsive layouts without decorative elevation.
+- Table-led host scanning with a contextual inspector; workload/endpoint inspection remains planned.
 
 ## Colors
 
@@ -141,6 +146,8 @@ Mint `accent` identifies primary actions, links, selection and focus. `accent-ho
 
 **The Evidence Rule.** Keep observations, AI hypotheses and human-confirmed resolution explicitly labeled; color alone is not provenance.
 
+**The Independent Signals Rule.** An online agent or running process does not establish endpoint reachability; a failed endpoint does not establish host failure or root cause.
+
 ## Typography
 
 Use the system sans stack for operational text, with the monospace stack for code, identifiers and measurements. The root is 16px; body text uses the base role. Body line-height is 1.5; paragraphs use 1.6. Headings use 1.25.
@@ -149,11 +156,21 @@ The page heading uses `headline`. Catalog section headings use `title`; dashboar
 
 ## Layout
 
-The dashboard has a 240px left rail in normal flex flow, not a fixed overlay. Content is fluid with a 1500px maximum and 2.5rem horizontal padding; main host/incident columns are two equal tracks. At **1100px and below**, columns stack and content padding becomes 1.75rem by 1.5rem. At **700px and below**, the rail becomes a full-width top navigation with wrapping items, content padding becomes 1.5rem by 1rem, detail grids stack and panels use 1rem padding. Resource metrics remain three columns until **380px and below**, when they stack. Summary statistics remain three columns on narrow screens.
+### Implemented layouts
+
+The host dashboard uses a 208px rail and 2rem horizontal inset at **1280px and above**, with a 1.7:1 table/inspector grid, 320px minimum inspector and 1.5rem gap. Below **1280px**, the inspector follows the host list; the rail uses its existing 240px width until **700px**, when navigation moves above content. At **1100px and below**, content uses 1.75rem by 1.5rem padding; at **700px and below**, 1.5rem by 1rem. The inline summary wraps, and the semantic host table scrolls within a named focusable region rather than widening the page. Incident and memory panels retain shared primitives.
 
 The catalog is capped at 1280px with 2rem horizontal padding, a sticky 180px section index and a 2.5rem gap. At **1000px and below**, the index is 150px, palette changes from four to three columns and state examples reflow. At **720px and below**, the index becomes an inline wrapping link list, palette becomes two columns, foundation/status grids stack and horizontal padding becomes 1.25rem. Catalog form/incident panels use 1rem padding there.
 
 Use the existing quarter-rem spacing steps rather than independent local scales. Prefer wrapping labels and minmax(0, 1fr) tracks to truncating evidence.
+
+### Fleet & services layout (target)
+
+Use a quiet left rail, a compact page header, one inline summary strip and a table-led workspace—not a grid of metric cards. The wide layout places the host table and selected host's services on the left, with one shared host/service inspector on the right. Use tonal row selection, horizontal separators and aligned measurement columns; reserve a contained surface for the inspector. No nested card around every table or number.
+
+The host slice implements a 208px rail, 2rem content inset, 1.5rem workspace gap and roughly 1.7:1 list-to-inspector proportions, with a 320px minimum inspector. Below 1280px, its inspector follows the host list; at 700px and below, navigation moves above content. The complete target adds selected-host services before that inspector. Preserve semantic tables in labeled horizontal scroll regions when columns cannot fit; never hide status, freshness or evidence to fit the viewport. Details must remain reachable without scrolling back to the top.
+
+The summary presents hosts online, host incidents, endpoints up and endpoints failing as independently labeled counts. AI provider configuration belongs in settings/investigation, not a fleet-health statistic. Keep the existing catalog layout independent of this dashboard composition.
 
 ## Elevation & Depth
 
@@ -174,9 +191,17 @@ Import from `apps/web/components/ui.tsx`: the dashboard uses `../components/ui`,
 - **Panel:** native div props; bordered surface with large corners and responsive padding. It is not automatically a landmark or focus target.
 - **Notice:** `tone="success" | "warning" | "danger" | "info"` (default info), plus div props. Uses a current-color border and subtle background. Callers choose `role="alert"` or `role="status"` when the message requires announcement.
 - **MetricMeter:** `{ value: number | null, label: string }`. Finite values clamp to 0–100 and expose a meter with percentage value text. Values above 75 are warning, above 90 danger, otherwise success. Null/non-finite data renders “No measurement,” with an accessible image label and no numeric value. It is not zero utilization.
-- **Navigation:** dashboard buttons switch Overview / Incident memory; a link opens the public catalog. Current items carry `aria-current="page"`, accent text and a raised surface. This is page composition, not an exported Nav component. Catalog navigation is an anchor index and includes a skip link.
+- **Navigation (implemented):** dashboard buttons switch Overview / Incident memory; a link opens the public catalog. Current items carry `aria-current="page"`, accent text and a raised surface. This is page composition, not an exported Nav component. Catalog navigation is an anchor index and includes a skip link.
 
 All focusable elements receive a 2px mint `:focus-visible` outline with 3px offset globally; the catalog uses 4px on links, summaries and inputs. Native disclosure and range controls retain keyboard interaction. The catalog uses synthetic data, local validation and a loading demonstration; it does not save settings or contact the API.
+
+### Dashboard patterns (host slice implemented; service/endpoint target planned)
+
+- **Fleet and service tables:** flat rows with column headers, text status and explicit host/service selection controls. Selection uses `surface-raised` plus an accessible selected/current indication, not color alone. Preserve keyboard access and do not turn a table row into an unlabeled click target.
+- **Context inspector:** selected host identity, separate resource values and timestamped CPU history, then selected workload/runtime and endpoint check details. Reset the service selection when the host changes; refresh must preserve valid selections.
+- **Signal labels:** show agent `Online`/`Offline`, process `Running`/`Stopped`/`Unknown`, and endpoint `Up`/`Down`/`Unknown`/`Not configured` independently. Missing or stale samples carry timestamps and unavailable text, not healthy zeroes.
+- **Chart:** actual time axis, units, observation window and aggregation; gaps remain gaps. The screenshot's 30-minute window and ≥80% for 10 minutes annotation are illustrative, not the starter's alert rule. Only display thresholds and network rates backed by real configuration and observations.
+- **Action hierarchy:** quiet `Enroll host`, host search/filter and `Add endpoint` controls; mint for the selected service's `Inspect service & endpoint` action. Do not render enabled controls until their real flows exist. Inspection remains read-only and does not automatically trigger AI or remediation.
 
 ## Do's and Don'ts
 
@@ -185,9 +210,12 @@ All focusable elements receive a 2px mint `:focus-visible` outline with 3px offs
 - **Do** label measured evidence, AI hypotheses and human-confirmed resolution separately.
 - **Do** preserve visible focus, descriptive field errors and reduced-motion behavior.
 - **Do** show missing measurements as unavailable rather than zero.
+- **Do** keep host connectivity, process state and endpoint reachability independently labeled.
 
 ### Don't:
 - **Don't** use color alone to communicate status or provenance.
 - **Don't** add decorative shadows, gradients or a competing token palette.
 - **Don't** present catalog examples as live telemetry or persisted configuration.
 - **Don't** assume Field or Notice supplies accessibility attributes that callers must set.
+- **Don't** infer reachability or root cause from a running process, high CPU or overlapping timestamps.
+- **Don't** pass screenshot data, example thresholds or planned controls off as live behavior.

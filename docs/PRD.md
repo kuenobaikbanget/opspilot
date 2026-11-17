@@ -49,6 +49,19 @@ A self-hosted Hub + lightweight Go agent, combined with bounded read-only eviden
 
 **Delivered as starter:** basic implementation of FR-01 to FR-12. This does not imply production-grade completion; see README limitations. Enhanced config diff and vector similarity are explicitly **post-starter** milestones, rather than dishonestly presented as complete.
 
+### Dashboard direction — planned extension, not delivered starter scope
+
+The supplied **Fleet & services** reference defines the dashboard direction; [UI/UX](UI-UX.md#fleet-services-dashboard-contract-target) owns the screen contract. The host-only table, selection/inspector and raw CPU-history slice is implemented. Preserve the starter requirements above while adding the remaining capabilities below; the host slice alone does not complete FR-13–FR-16.
+
+| ID | Planned requirement | Definition of acceptance |
+|---|---|---|
+| FR-13 | Table-led fleet and contextual inspection | Host table, selected-host services and a shared inspector follow the reference; independent host/endpoint summary counts, keyboard selection, freshness and responsive states are explicit. |
+| FR-14 | Read-only workload inventory | Supported, explicitly enabled Docker/systemd inventory exposes process state, source/time and available per-workload resources; denied/unsupported collection is not an empty healthy list. Docker socket access remains disabled by default. |
+| FR-15 | Independent HTTP endpoint monitoring | Persist a validated target, host/service association, expected response, supported probe identity, interval/timeout and timestamped results. A running process can have a down endpoint; an offline agent can have an up endpoint. SSRF/egress controls and negative tests are mandatory before enabling checks. |
+| FR-16 | Honest trends and status provenance | Real time axes, gaps, actual alert policy, source timestamps and correctly derived network rates; distinguish unknown, stale and not configured. Correlation never becomes an inferred root cause. |
+
+Implementation requires the [roadmap gates](ROADMAP.md#fleet-services-dashboard-delivery-planned), typed data/API contracts and security validation. A visual mockup or synthetic catalog example alone does not satisfy FR-13–FR-16.
+
 ## 6. Non-goals for the MVP
 
 - Auto-restart of services, automatic shell remediation, privilege escalation.
@@ -65,6 +78,9 @@ Admin sets up hub → login → creates one-time token → installs binary/Docke
 
 ### Automatic alert
 Agent telemetry → threshold evaluator → 2 consecutive high samples → recent-incident dedup → `incident.open` → dashboard. LLM **not** invoked merely because a metric exists.
+
+### Fleet and service inspection (planned)
+Admin opens Fleet & services → selects host → inspects read-only workload inventory → selects service → compares process state with independently timestamped endpoint checks and host trends. The inspector defaults to `No root cause inferred`. Opening details does not call an LLM; an explicit investigation remains a separate flow.
 
 ### Drift
 Agent computes SHA-256 for explicit regular files ≤1 MiB → hub stores baseline → different hash creates snapshot + incident → operator may ask for bounded diagnostics → evidence-based summary. SHA delta alone cannot prove causality.

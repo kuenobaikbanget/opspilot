@@ -2,7 +2,7 @@ import { db, audit } from "./db";
 import { createSession, checkPassword, isAuthed, sessionCookie, logoutCookie } from "./auth";
 import { authenticateAgent, createEnrollmentToken, enrollAgent, socketOpened, socketClosed, socketMessage, agentOnline, requestDiagnostics, type SocketData } from "./agents";
 import { createIncident } from "./incidents";
-import type { Provider, DiagnosticTool } from "@opspilot/contracts";
+import type { Provider, DiagnosticTool, Host, HostList, HostMetric } from "@opspilot/contracts";
 
 const port=Number(process.env.PORT||3001);
 if(process.env.NODE_ENV==="production" && !process.env.ADMIN_PASSWORD_HASH) throw new Error("ADMIN_PASSWORD_HASH required in production");
@@ -11,6 +11,10 @@ function j(data:unknown,status=200,headers:Record<string,string>={}){return Resp
 async function body(req:Request):Promise<any> { const raw=await req.text(); if(raw.length>16000)throw new Error("Body too large"); try{return JSON.parse(raw||"{}");}catch{throw new SyntaxError("Invalid JSON body");} }
 const invalid=(error:string,status=400)=>j({error},status);
 function urlUUID(s:string){return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);}
+type HostRow = Omit<Host, "status" | "last_seen_at" | "created_at" | "sampled_at"> & {
+  last_seen_at: Date | null; created_at: Date; sampled_at: Date | null;
+};
+type HostMetricRow = Omit<HostMetric, "sampled_at"> & { sampled_at: Date };
 async function router(req:Request):Promise<Response>{
   const path=new URL(req.url).pathname; const method=req.method.toUpperCase();
   if(path==="/healthz") {try{await db`SELECT 1`;return j({ok:true,db:true});}catch{return j({ok:false,db:false},503);}}
@@ -31,14 +35,31 @@ async function router(req:Request):Promise<Response>{
   if(path==="/api/ai/providers"&&method==="GET")return j({available:providers(),configuration:"server-environment"});
   if(path==="/api/agents/enrollment-token"&&method==="POST")return j(await createEnrollmentToken(),201);
   if(path==="/api/hosts"&&method==="GET"){
-    const rows=await db`SELECT a.id,a.hostname,a.version,a.status,a.last_seen_at,a.created_at, m.cpu_percent,m.memory_percent,m.disk_percent, m.sampled_at
-      FROM agents a LEFT JOIN LATERAL (SELECT * FROM metric_samples WHERE agent_id=a.id ORDER BY sampled_at DESC LIMIT 1) m ON true ORDER BY a.created_at DESC LIMIT 100`;
-    return j(rows.map((x:any)=>({...x,status:agentOnline(x.id)?"online":"offline"})));
+    const limit=100;
+    const [fleet,rows]=await Promise.all([
+      db<{id:string}[]>`SELECT id FROM agents`,
+      db<HostRow[]>`SELECT a.id,a.hostname,a.version,a.last_seen_at,a.created_at, m.cpu_percent,m.memory_percent,m.disk_percent, m.sampled_at
+        FROM agents a LEFT JOIN LATERAL (SELECT cpu_percent,memory_percent,disk_percent,sampled_at FROM metric_samples WHERE agent_id=a.id ORDER BY sampled_at DESC LIMIT 1) m ON true ORDER BY a.created_at DESC,a.id LIMIT ${limit}`
+    ]);
+    const hosts:Host[]=rows.map(row=>({
+      ...row,status:agentOnline(row.id)?"online":"offline",
+      last_seen_at:row.last_seen_at?.toISOString()??null,
+      created_at:row.created_at.toISOString(),sampled_at:row.sampled_at?.toISOString()??null
+    }));
+    const result:HostList={
+      hosts,total:fleet.length,online:fleet.reduce((count,host)=>count+Number(agentOnline(host.id)),0),
+      limit,observed_at:new Date().toISOString(),stale_after_seconds:60
+    };
+    return j(result);
   }
   let match=path.match(/^\/api\/hosts\/([^/]+)\/metrics$/);
   if(match && method==="GET"){
     if(!urlUUID(match[1]))return invalid("Invalid host id");
-    return j(await db`SELECT sampled_at,cpu_percent,memory_percent,disk_percent,network_rx_bytes,network_tx_bytes FROM metric_samples WHERE agent_id=${match[1]} ORDER BY sampled_at DESC LIMIT 120`);
+    const host=await db<{id:string}[]>`SELECT id FROM agents WHERE id=${match[1]}`;
+    if(!host.length)return invalid("Host not found",404);
+    const rows=await db<HostMetricRow[]>`SELECT sampled_at,cpu_percent,memory_percent,disk_percent,network_rx_bytes::double precision AS network_rx_bytes,network_tx_bytes::double precision AS network_tx_bytes FROM metric_samples WHERE agent_id=${match[1]} ORDER BY sampled_at DESC LIMIT 120`;
+    const metrics:HostMetric[]=rows.map(row=>({...row,sampled_at:row.sampled_at.toISOString()}));
+    return j(metrics);
   }
   if(path==="/api/incidents"&&method==="GET") {
     return j(await db`SELECT i.*,a.hostname FROM incidents i JOIN agents a ON a.id=i.agent_id ORDER BY i.created_at DESC LIMIT 100`);

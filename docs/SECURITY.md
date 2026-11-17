@@ -23,6 +23,8 @@
 - Use environment files with restrictive modes and protect backups.
 - API keys belong **only to Hub/Worker environment**; no client-side key storage.
 - Agent identity secret stored 0600 on host or in protected Docker volume; remote use HTTPS/WSS.
+- Host lists/history remain behind the existing admin cookie; enrollment token creation retains the existing Origin check, one-use token and audit path. The live inspector performs no diagnostics, outbound probe, LLM call or remediation. Workload/endpoint unavailability never implicitly enables Docker or shell access.
+- The host dashboard's 60-second telemetry freshness label is a display policy, not a transport heartbeat or replay defense. `Online` means a socket is currently registered in this single Hub; silent network partitions still require transport TTL hardening. Enrollment tokens must not enter persistent browser storage, URLs, screenshots or logs; the admin-only enrollment view clears them on sign-out/expiry.
 - An agent with Docker group membership often has root-equivalent power; never assume `docker.sock:ro` is safe just because the mount says `ro`.
 
 ## Agent tool policy
@@ -36,6 +38,19 @@ Tools are fixed in source code:
 5. `docker_status` → `docker ps`, **agent flag required**, no docker socket mount in default Compose.
 
 No arbitrary URL fetch, filesystem read, or shell script tool is permitted. Add filesystem restrictions before broad deployment.
+
+## Planned inventory and endpoint monitoring
+
+The [Fleet & services dashboard](UI-UX.md#fleet-services-dashboard-contract-target) introduces future collection requirements, not currently enabled tools or network access. The prohibition on arbitrary URL-fetch/shell diagnostics above remains unchanged.
+
+- **Workload inventory:** opt-in, enumerated read-only collectors; agent-local runtime/service allowlists; fixed executable/API operations, deadlines and output bounds. Missing capability or denied permission is explicit unavailable data. Do not mount `docker.sock`, enable Docker access or grant journal/root privileges merely to populate a dashboard.
+- **HTTP checks:** dedicated operator-configured monitors, never model-selected targets or a generic agent fetch tool. Require admin authorization and same-origin mutation protection; persist and audit target, association and schedule changes. Do not add a new unauthenticated probe endpoint.
+- **SSRF/egress:** validate HTTP(S) schemes, ports and normalized targets; reject URL credentials, local files, cloud metadata, loopback, link-local, multicast and unspecified destinations. Private homelab ranges require an explicit operator-controlled allowlist, not a client override. Resolve and validate all IPv4/IPv6 destinations at execution, bind the connection to an approved address while retaining TLS hostname verification, and prevent DNS rebinding. Disable redirects by default; any later redirect support must reapply the complete policy at every hop.
+- **Execution bounds:** explicit connect/total timeouts, bounded concurrency/schedule frequency and response size; do not store response bodies by default. Audit monitor changes and bounded execution outcomes without turning checks into a full request/response log warehouse.
+- **Sensitive targets/results:** minimize stored URLs; prohibit secrets in query strings and redact sensitive target/header values from UI, logs, audits and provider context. Any later authenticated-check credentials must remain server-side and scoped to the configured destination; never forward browser admin cookies or provider keys. Hostnames, service metadata and HTTP errors remain untrusted data, not instructions.
+- **Provenance and retention:** timestamp and identify each actual probe location independently of the monitored agent. Define bounded result retention/deletion before enabling persistence. No automatic LLM call, evidence upload or remediation occurs when a check fails or a user opens the inspector.
+
+Before enablement, add positive and negative tests for monitor authorization, invalid targets/associations, denied inventory, DNS/redirect bypasses, IPv6/encoded addresses, timeouts/output/concurrency bounds, redaction and audit records. See [planned acceptance](TESTING.md#fleet-services-dashboard-acceptance-planned). These controls are requirements, not a claim that the starter already implements SSRF-safe HTTP monitoring.
 
 ## Minimum recommended network exposure
 
