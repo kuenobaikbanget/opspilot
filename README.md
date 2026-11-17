@@ -11,7 +11,7 @@ OpsPilot is a **Bun workspaces monorepo / modular monolith**, with separately de
 - **Agent** — Go binary or Docker container, outbound WSS connection, telemetry, allowlisted read-only diagnostics.
 - **PostgreSQL** — telemetry, incidents, evidence, config-hash snapshots, audit, resolved-incident memory.
 
-**No Beszel dependency.** No Redis, Kafka, Kubernetes, or automatic remediation needed to develop the MVP.
+No Redis, Kafka, Kubernetes, or automatic remediation needed to develop the MVP.
 
 ## Quickstart — local development
 
