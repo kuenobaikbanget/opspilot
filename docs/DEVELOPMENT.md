@@ -37,6 +37,10 @@ Use shared primitives instead of introducing parallel button/field styles. Conne
 
 GitHub Actions uses Bun 1.4.2 and frozen installation, then runs existing tests, all workspace typechecks, the Web production build, and Go tests on Linux. Browser checks using synthetic API responses verify UI behavior only, not live authentication, diagnostics, or AI integrations.
 
+The workflow is **CI-only**: pushes and pull requests run validation, with no deployment, release publishing, or production credentials. Actions are pinned to full commit SHAs; update the SHA and version comment together after reviewing upstream changes. Checkout does not persist credentials, and the workflow token has only `contents: read`.
+
+Configure a GitHub branch rule for `main` requiring pull requests and successful `typescript` and `go` checks before merge; require checks against the latest base branch and disallow bypasses/direct pushes. Workflow YAML alone does not enforce this merge gate. A green CI run covers the commands above, not live DB/auth/WSS/provider integration or production security.
+
 ## Definition of done for code changes
 
 - [ ] Update relevant API/DB/contracts/design docs.
