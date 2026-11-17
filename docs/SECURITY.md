@@ -50,6 +50,12 @@ The Next.js route `/design-system` is intentionally accessible without an admin 
 
 This route does not grant access to protected `/api` endpoints. Do not import server credentials or populate reference examples from live operational data. Dashboard and login UI checks using synthetic browser responses are not proof of authentication or authorization enforcement; the backend release blockers below remain unchanged.
 
+## CI trust boundary
+
+`.github/workflows/checks.yml` runs untrusted pull-request code only on GitHub-hosted runners using `pull_request`, not `pull_request_target`. It requests only `contents: read`, disables persisted checkout credentials, pins third-party actions to full commit SHAs, and bounds job duration. Keep production credentials and deployment steps out of this CI-only workflow.
+
+Require the `typescript` and `go` checks through a protected `main` branch rule without bypasses; successful workflow runs alone cannot prevent unchecked merges or direct pushes. SHA pinning prevents silent tag movement, not vulnerabilities in a pinned action or dependency. CI does not replace the release blockers below.
+
 ## Open security issues — explicit release blockers
 
 - [ ] Add admin login rate limiting, CSRF defenses, secure cookie lifecycle / revoke-on-logout server-side.

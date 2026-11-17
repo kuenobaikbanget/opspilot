@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — 2026-11-17
+
+- Hardened the CI-only GitHub Actions workflow with full action commit SHA pins and disabled persisted checkout credentials; no CD or deployment added.
+- Documented the CI trust boundary and required branch-rule setup for enforcing TypeScript/Go checks before merge.
+
 ## Unreleased — 2026-11-16
 
 - Initialized the private GitHub repository and repeatable CI for Bun tests, workspace typechecks, Web production builds, and Linux Go tests.
