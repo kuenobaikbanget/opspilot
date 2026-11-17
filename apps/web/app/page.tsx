@@ -52,6 +52,8 @@ export default function Home() {
   const [resolution, setResolution] = useState("");
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Destination>("overview");
+  const [utilitiesOpen, setUtilitiesOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [search, setSearch] = useState("");
   const [hostRefresh, setHostRefresh] = useState(0);
@@ -64,6 +66,24 @@ export default function Home() {
     window.addEventListener("opspilot-unauthorized", unauthorized);
     return () => window.removeEventListener("opspilot-unauthorized", unauthorized);
   }, []);
+
+  useEffect(() => {
+    try {
+      setSidebarCollapsed(localStorage.getItem("opspilot-sidebar-collapsed") === "true");
+    } catch {
+      // Navigation still works when browser storage is unavailable.
+    }
+  }, []);
+
+  function toggleSidebar() {
+    const collapsed = !sidebarCollapsed;
+    setSidebarCollapsed(collapsed);
+    try {
+      localStorage.setItem("opspilot-sidebar-collapsed", String(collapsed));
+    } catch {
+      // Keep the current session's preference without persistent storage.
+    }
+  }
 
   const refresh = useCallback(async () => {
     setHostRefresh(value => value + 1);
@@ -159,27 +179,63 @@ export default function Home() {
   const visibleIncidents = tab === "drift" ? incidents.filter(i => i.category === "config_drift") : incidents;
 
   return (
-    <div className="shell">
+    <div className="shell" data-sidebar-collapsed={sidebarCollapsed}>
       <a className="skip-link" href="#main-content">Skip to content</a>
-      <aside className="sidebar">
-        <div className="sidebar-brand"><div className="logo">OpsPilot</div><span className="self-hosted">Self-hosted</span></div>
-        <nav aria-label="Main navigation">
-          {destinations.map(item => <Button key={item.id} variant="ghost" className={`nav ${tab === item.id ? "active" : ""}`} aria-current={tab === item.id ? "page" : undefined} onClick={() => { setTab(item.id); setDetail(null); setSelected(null); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d={item.icon} /></svg>{item.label}</Button>)}
+      <aside className="sidebar" id="opspilot-sidebar" aria-label="OpsPilot">
+        <div className="sidebar-header">
+          <div className="sidebar-brand">
+            <div className="logo sidebar-brand-name">OpsPilot</div>
+            <span className="sidebar-monogram" aria-hidden="true">OP</span>
+            <span className="sidebar-context">Self-hosted</span>
+          </div>
+          <Button variant="ghost" className="sidebar-utilities-toggle" aria-expanded={utilitiesOpen} aria-controls="sidebar-utilities" onClick={() => setUtilitiesOpen(value => !value)}>
+            Utilities
+            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={utilitiesOpen ? "m6 12 4-4 4 4" : "m6 8 4 4 4-4"} /></svg>
+          </Button>
+        </div>
+        <nav className="sidebar-navigation" aria-label="Main navigation" data-active={tab}>
+          <span className="sidebar-indicator" aria-hidden="true" />
+          {destinations.map(item => (
+            <Button key={item.id} variant="ghost" className={`nav ${tab === item.id ? "active" : ""}`} title={sidebarCollapsed ? item.label : undefined} aria-current={tab === item.id ? "page" : undefined} onClick={() => { setTab(item.id); setDetail(null); setSelected(null); }}>
+              <svg className="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={item.icon} /></svg>
+              <span className="sidebar-label">{item.label}</span>
+            </Button>
+          ))}
         </nav>
-        <div className="sidebar-bottom">
-          <Button variant="ghost" className="nav" onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>Enroll host</Button>
-          <Button variant="ghost" className={`nav ${tab === "providers" ? "active" : ""}`} aria-current={tab === "providers" ? "page" : undefined} onClick={() => setTab("providers")}>Provider settings</Button>
-          <Link className="nav" href="/design-system">Design system</Link>
-          <div className="sidebar-session"><p>Single-admin · Read-only diagnostics</p><Button variant="ghost" size="sm" disabled={busy} onClick={() => { setBusy(true); void api("/auth/logout", "POST").then(() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }).catch(e => setError(e.message)).finally(() => setBusy(false)); }}>Sign out</Button></div>
+        <div className="sidebar-bottom" id="sidebar-utilities" data-open={utilitiesOpen}>
+          <Button variant="ghost" className="nav" title={sidebarCollapsed ? "Enroll host" : undefined} onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>
+            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="2" /><path d="M10 7v6M7 10h6" /></svg>
+            <span className="sidebar-label">Enroll host</span>
+          </Button>
+          <Button variant="ghost" className={`nav ${tab === "providers" ? "active" : ""}`} title={sidebarCollapsed ? "Provider settings" : undefined} aria-current={tab === "providers" ? "page" : undefined} onClick={() => setTab("providers")}>
+            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h3m4 0h7M3 14h7m4 0h3M8 4v4m4 4v4" /></svg>
+            <span className="sidebar-label">Provider settings</span>
+          </Button>
+          <Link className="nav sidebar-catalog" href="/design-system" title={sidebarCollapsed ? "Design system" : undefined}>
+            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="5" height="5" rx="1" /><rect x="12" y="3" width="5" height="5" rx="1" /><rect x="3" y="12" width="5" height="5" rx="1" /><rect x="12" y="12" width="5" height="5" rx="1" /></svg>
+            <span className="sidebar-label">Design system</span>
+          </Link>
+          <div className="sidebar-account">
+            <p className="sidebar-account-context">Single-admin · Read-only diagnostics</p>
+            <Button variant="ghost" className="nav" title={sidebarCollapsed ? "Sign out" : undefined} disabled={busy} onClick={() => { setBusy(true); void api("/auth/logout", "POST").then(() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }).catch(e => setError(e.message)).finally(() => setBusy(false)); }}>
+              <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4M8 10h9m-4-4 4 4-4 4" /></svg>
+              <span className="sidebar-label">Sign out</span>
+            </Button>
+          </div>
         </div>
       </aside>
 
       <main className="content" id="main-content" tabIndex={-1}>
         <div className="dashboard-context"><span>{refreshedAt ? <>Incident/provider refresh <time dateTime={refreshedAt}>{new Date(refreshedAt).toLocaleTimeString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}</time></> : "Waiting for observations"}</span></div>
         <header className="topbar">
-          <div>
-            <h1>{page?.title ?? "Provider settings"}</h1>
-            <p className="muted">{page?.description ?? "Server-side AI configuration. Keys never leave the Hub."}</p>
+          <div className="topbar-heading">
+            <Button variant="ghost" className="sidebar-toggle" aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!sidebarCollapsed} aria-controls="opspilot-sidebar" onClick={toggleSidebar}>
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="2" /><path d="M7.5 3v14" /><path d={sidebarCollapsed ? "m11 8 2 2-2 2" : "m13 8-2 2 2 2"} /></svg>
+            </Button>
+            <div>
+              <h1>{page?.title ?? "Provider settings"}</h1>
+              <p className="muted">{page?.description ?? "Server-side AI configuration. Keys never leave the Hub."}</p>
+            </div>
           </div>
           <div className="header-actions"><Button size="sm" variant="ghost" onClick={() => void refresh()}>Refresh</Button><Button ref={enrollmentTrigger} aria-expanded={enrollmentOpen} aria-controls="host-enrollment" onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>Enroll host</Button></div>
         </header>

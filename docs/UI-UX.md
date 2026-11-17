@@ -25,7 +25,7 @@ The canonical visual reference is [root DESIGN.md](../DESIGN.md), extracted from
 | Body | system UI sans, 14px at the 16px root; monospace for code and measurements |
 | Radius | 6px controls, 10px nested surfaces, 14px panels |
 | Spacing | quarter-rem steps: 1–8, 10, 12 |
-| Layout | host slice: 208px rail and table/inspector grid ≥1280px; inspector stacks below that; navigation moves above content at 700px |
+| Layout | host slice: sticky Precision Rail above 700px, 232px expanded / 72px icon-only; table/inspector grid ≥1280px; inspector stacks below that; mobile header retains both destinations and a Utilities disclosure |
 
 ### Public component catalog
 
@@ -111,6 +111,14 @@ flowchart TD
   B --> C
   C --> R[Tokens, primitives and synthetic states]
 ```
+
+### Precision Rail navigation
+
+The implemented sidebar uses the existing navy/mint tokens, a sticky desktop rail (232px expanded, 72px collapsed), 16px outline icons and targets at least 44px high. A labeled, keyboard-operable icon button beside the content heading toggles the rail with `aria-expanded` and `aria-controls`. The collapsed rail retains the mint OP abbreviation, accessible destination names and native hover titles. The boolean preference persists in browser storage under `opspilot-sidebar-collapsed`; toggling still works when storage is unavailable. Overview and Incident memory remain the only primary destinations. A 3px mint marker translates between them in 150ms; `aria-current="page"` and tonal selection identify the active destination independently of motion. Shared reduced-motion rules disable transitions; collapse does not animate layout dimensions.
+
+Design system is a lower-priority utility above Single-admin mode and Sign out. At 700px and below, the desktop collapse toggle disappears and both primary destinations retain visible labels above content, regardless of the saved desktop preference; a keyboard-operable Utilities button controls the utility area with `aria-expanded` and `aria-controls`. Collapsed utilities are not focusable. At narrow widths, labels wrap without hiding destinations. No planned route, provider-settings control, health indicator or aggregate badge is introduced.
+
+Browser verification used an isolated synthetic API fixture, not a live Hub/auth integration: desktop and mobile captures, 1440/1024/390/320px layout geometry, keyboard navigation/current state, Utilities disclosure and catalog navigation. Web TypeScript checks passed. Existing metric-width animation and root type-ramp detector findings are outside the sidebar change.
 
 ## Implemented screens / states
 
