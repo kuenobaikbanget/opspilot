@@ -2,6 +2,8 @@
 
 ## Unreleased — 2026-11-17
 
+- Added a desktop sidebar toggle: 232px expanded / 72px icon-only, mint OP abbreviation, accessible navigation names, native hover titles and a browser-persisted preference. Mobile keeps labeled navigation regardless of the desktop preference.
+- Replaced dashboard navigation with the Precision Rail: sticky 208px sidebar, outline icons, translating mint active marker, separated utility/account area and keyboard-operable mobile Utilities disclosure. Existing destinations and sign-out behavior are retained; shared reduced-motion rules apply.
 - Delivered the live host-only Fleet slice: typed host read models and full-fleet host totals, searchable/selectable table, contextual inspector, raw timestamped CPU history with gap breaks, historical/offline/stale states and explicit unavailable workload/endpoint capabilities.
 - Completed admin enrollment instructions, token copy/hide/expiry handling and stale-cache/removal feedback without changing the Go agent protocol or enabling diagnostics/probes from inspection.
 - Verified with isolated PostgreSQL + Hub + real Linux amd64 Go agent and browser at 1440/1024/390px, including enrollment, metric persistence, disconnect/reconnect, auth negatives and capped-list totals. Hub/Web typechecks passed; see `docs/TESTING.md` for evidence and limits.
