@@ -10,6 +10,8 @@ Native `Bun.serve`: built-in HTTP routing and WebSockets; `Bun.SQL`: PostgreSQL 
 
 **Telemetry:** agent sends `{cpuPercent,memoryPercent,diskPercent,networkRxBytes,networkTxBytes,uptimeSeconds,configHashes}`. Hub validates percentages, inserts samples, evaluates thresholds and config hashes. Agent timestamps currently informational; Hub stores its own receipt timestamp to reduce clock skew attacks.
 
+**Host read surface:** shared `HostList` carries up to 100 newest hosts with independent full-fleet enrolled/connected totals, response time and a 60-second display freshness policy. `sampled_at` and last contact remain separate. Existing history returns at most 120 descending raw samples; invalid/missing host IDs return 400/404. This changes no agent protocol. See [API](API.md#host-monitoring-read-model).
+
 **Threshold rule:** 2 consecutive high samples; only 1 incident per host/category in 15 minutes. In-memory streak counters reset when Hub restarts. Replace with persistent evaluator if multi-Hub support needed.
 
 **Config drift:** read from agent hash map, store first hash as baseline per `(agent,path)`, then compare latest. On change insert config snapshot and incident including previous/current SHA256, no contents. Future enhancement: rootless diff storage after explicit consent, file metadata, redaction and diff semantics.
@@ -60,6 +62,26 @@ Starter includes database audit events only for major admin actions, not all eve
 - Timer-driven refresh UI every 10 seconds rather than browser WebSocket for MVP.
 - Start with a few agents at 15-second samples; benchmark database size and load before raising scale.
 - Rotate/retain telemetry: implement e.g. 7-day raw + 90-day aggregate retention; **not implemented in starter**.
+
+<a id="fleet-services-data-boundary-planned"></a>
+
+## Fleet & services data boundary (planned)
+
+The approved dashboard direction lives in [UI/UX](UI-UX.md#fleet-services-dashboard-contract-target), with visual rules in [root DESIGN.md](../DESIGN.md). Typed host lists, full-fleet host totals and bounded raw host history are implemented. The remaining workload/endpoint models and metadata below specify future ownership, not implemented schema or agent messages.
+
+| Read model | Required facts | Owner / boundary |
+|---|---|---|
+| Host | Stable identity, agent connection/last-seen, timestamped host metrics, available OS/capacity and actual alert policy | Hub joins authenticated agent observations; missing metadata remains unavailable. |
+| Workload | Stable identity scoped to host, runtime/unit or image, process state, optional scoped CPU/memory, collection time and capability/error reason | Opt-in Go-agent collectors enforce local allowlists, time/output bounds and minimal permissions. On-demand `docker_status` text is not a continuous structured inventory. |
+| Endpoint configuration | Identity, host and optional workload association, validated HTTP(S) target, expected status range, probe identity/location, interval and timeout | Admin-authenticated Hub configuration; secrets stay server-side. No guessed endpoint from an open port or a running process. |
+| Endpoint result | Endpoint/probe identity, check time, observed status/latency or explicit failure, consecutive failures and freshness | Bounded scheduled checks in the existing Worker boundary; Hub serves stored results. First supported probe is the real executing location, not a fabricated external-probe label. |
+| Fleet summary/history | Scoped totals, distinct endpoint identities, timestamped samples, aggregation window and coverage | Hub computes totals independently of capped list pages. Unknown/stale endpoints are neither up nor failing; counter resets/gaps invalidate derived rates. |
+
+Host, process and endpoint state have independent collection clocks and stale policies. Never mark a workload or endpoint healthy from agent connectivity; never mark an endpoint down solely from agent disconnect. Store and expose absence/failure separately from a successful empty collection. Inventory or check-fetch failures retain prior observations only with explicit stale/error context.
+
+Endpoint checks are a dedicated opt-in monitoring feature, not an AI tool or arbitrary URL-fetch diagnostic. Implement authorization, egress/SSRF constraints, bounded execution/output, audit and result retention before enabling them; see [Security](SECURITY.md#planned-inventory-and-endpoint-monitoring). Multiple remote probe locations are not part of the current runtime topology.
+
+Do not add invented fields to the existing telemetry payload to satisfy the mockup. Protocol extensions require coordinated `packages/contracts`, Go agent, [API](API.md) and interoperability-test changes. The existing two-high-sample alert evaluator is unchanged; the reference's ≥80% for 10 minutes is illustrative.
 
 ## Configuration
 

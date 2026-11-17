@@ -35,6 +35,8 @@ If port 3000 is occupied: `bun run --cwd apps/web dev --port 3100`, then open `h
 
 Use shared primitives instead of introducing parallel button/field styles. Connect field hints and errors with `aria-describedby`, use explicit submit button types, and retain written status/provenance labels. Unknown metrics are not zero. Check keyboard focus, reduced motion, and desktop/mobile rendering after visual changes.
 
+For dashboard changes, follow the [Fleet & services target contract](UI-UX.md#fleet-services-dashboard-contract-target) and [staged data/security gates](ROADMAP.md#fleet-services-dashboard-delivery-planned). Root `DESIGN.md` separates implemented tokens/primitives from the target composition; do not treat the reference screenshot as proof of an API capability. Keep `.impeccable/design.json` narrative aligned when updating the shared design rules, and keep synthetic reference states separate from live data. Use the [planned acceptance scenarios](TESTING.md#fleet-services-dashboard-acceptance-planned) when implementing the target.
+
 GitHub Actions uses Bun 1.4.2 and frozen installation, then runs existing tests, all workspace typechecks, the Web production build, and Go tests on Linux. Browser checks using synthetic API responses verify UI behavior only, not live authentication, diagnostics, or AI integrations.
 
 The workflow is **CI-only**: pushes and pull requests run validation, with no deployment, release publishing, or production credentials. Actions are pinned to full commit SHAs; update the SHA and version comment together after reviewing upstream changes. Checkout does not persist credentials, and the workflow token has only `contents: read`.
@@ -60,6 +62,8 @@ Configure a GitHub branch rule for `main` requiring pull requests and successful
 5. Configure one model API key; investigate and validate evidence IDs.
 6. Resolve incident, query memory and reuse previous resolution in subsequent investigation.
 7. Change a deliberately monitored harmless file; verify baseline/change behavior.
+
+For the host-only dashboard slice, follow [the executed smoke coverage](TESTING.md#host-only-slice-verification--2026-11-17): verify first enrollment, selected CPU history, disconnect/historical values, stale samples and reconnect gaps. Host reads poll every 10 seconds; the list is capped at 100 and history at 120, while host totals cover the full fleet. This slice adds no telemetry stream, sampling frequency or metric writes; retention/backpressure remains unchanged and unbounded storage still requires the roadmap work.
 
 ## Do not overengineer initially
 

@@ -2,8 +2,12 @@
 
 ## Unreleased — 2026-11-17
 
+- Delivered the live host-only Fleet slice: typed host read models and full-fleet host totals, searchable/selectable table, contextual inspector, raw timestamped CPU history with gap breaks, historical/offline/stale states and explicit unavailable workload/endpoint capabilities.
+- Completed admin enrollment instructions, token copy/hide/expiry handling and stale-cache/removal feedback without changing the Go agent protocol or enabling diagnostics/probes from inspection.
+- Verified with isolated PostgreSQL + Hub + real Linux amd64 Go agent and browser at 1440/1024/390px, including enrollment, metric persistence, disconnect/reconnect, auth negatives and capped-list totals. Hub/Web typechecks passed; see `docs/TESTING.md` for evidence and limits.
 - Hardened the CI-only GitHub Actions workflow with full action commit SHA pins and disabled persisted checkout credentials; no CD or deployment added.
 - Documented the CI trust boundary and required branch-rule setup for enforcing TypeScript/Go checks before merge.
+- Captured the supplied Fleet & services dashboard reference and aligned the design/UX contract, PRD, roadmap, technical/API boundaries, security requirements and acceptance plan. Host connectivity, workload process state and endpoint reachability remain independent; runtime UI, protocol and monitoring capabilities are unchanged.
 
 ## Unreleased — 2026-11-16
 
