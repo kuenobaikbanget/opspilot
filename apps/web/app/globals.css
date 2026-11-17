@@ -397,6 +397,9 @@ small,
 }
 
 .logo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-size: var(--text-xl);
   font-weight: 600;
   letter-spacing: -0.035em;
@@ -462,7 +465,9 @@ small,
   }
 
   .shell[data-sidebar-collapsed="true"] .sidebar-monogram {
-    display: block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .shell[data-sidebar-collapsed="true"] :is(.sidebar-brand-name, .sidebar-context, .sidebar-account-context) {

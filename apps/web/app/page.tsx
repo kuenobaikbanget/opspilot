@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { BrandMark } from "../components/brand-mark";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../components/ui";
 import type { Host } from "@opspilot/contracts";
 import { HostWorkspace } from "./host-workspace";
@@ -156,7 +157,7 @@ export default function Home() {
   if (!logged) return (
     <main className="login-container">
       <Panel className="login-card">
-        <div className="logo">OpsPilot</div>
+        <div className="logo"><BrandMark size={24} /><span>OpsPilot</span></div>
         <h1>Welcome back.</h1>
         <p className="muted">Sign in with your single-admin password.</p>
         <form onSubmit={login}>
@@ -184,8 +185,8 @@ export default function Home() {
       <aside className="sidebar" id="opspilot-sidebar" aria-label="OpsPilot">
         <div className="sidebar-header">
           <div className="sidebar-brand">
-            <div className="logo sidebar-brand-name">OpsPilot</div>
-            <span className="sidebar-monogram" aria-hidden="true">OP</span>
+            <div className="logo sidebar-brand-name"><BrandMark size={22} /><span>OpsPilot</span></div>
+            <span className="sidebar-monogram" aria-hidden="true"><BrandMark size={26} /></span>
             <span className="sidebar-context">Self-hosted</span>
           </div>
           <Button variant="ghost" className="sidebar-utilities-toggle" aria-expanded={utilitiesOpen} aria-controls="sidebar-utilities" onClick={() => setUtilitiesOpen(value => !value)}>

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRef, useState, type FormEvent } from "react";
+import { BrandMark } from "@/components/brand-mark";
 import { Badge, Button, Field, Input, MetricMeter, Notice, Panel, Select, Textarea } from "@/components/ui";
 import styles from "./design-system.module.css";
 
@@ -71,7 +72,7 @@ export default function DesignCatalog() {
       <a className={styles.skipLink} href="#catalog-content">Skip to catalog</a>
       <header className={styles.header}>
         <div className={styles.headerTop}>
-          <Link href="/" className={styles.brand}>OpsPilot</Link>
+          <Link href="/" className={styles.brand}><BrandMark size={22} /><span>OpsPilot</span></Link>
           <Link href="/" className={styles.dashboardLink}>Back to live dashboard</Link>
         </div>
         <div className={styles.titleRow}>
