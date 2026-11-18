@@ -4,8 +4,9 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import Link from "next/link";
 import { BrandMark } from "../components/brand-mark";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../components/ui";
-import type { AiProvider, EndpointMonitor, HostList, HostService, ProviderProtocol, ServicesPayload } from "@opspilot/contracts";
+import type { AiProvider, EndpointMonitor, HostList, ProviderProtocol, ServicesPayload } from "@opspilot/contracts";
 import { HostWorkspace } from "../components/host-workspace";
+import { HostSystemd } from "../components/host-systemd";
 import { ProviderSettings } from "../components/provider-settings";
 import { WorkspaceIcon, WorkspaceShell, type WorkspacePage } from "../components/workspace-shell";
 import { ThresholdOverview } from "../components/threshold-overview";
@@ -49,11 +50,11 @@ export default function Home() {
   const [incidentsError, setIncidentsError] = useState("");
   const [fleet, setFleet] = useState<HostList | null>(null);
   const [fleetError, setFleetError] = useState("");
-  const [services, setServices] = useState<HostService[]>([]);
   const [endpoints, setEndpoints] = useState<EndpointMonitor[]>([]);
   const [servicesError, setServicesError] = useState("");
   const [checkingEndpointId, setCheckingEndpointId] = useState<string | null>(null);
   const [inspectHost, setInspectHost] = useState<{ id: string; resource?: Resource } | null>(null);
+  const [serviceHostId, setServiceHostId] = useState("");
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -87,7 +88,7 @@ export default function Home() {
     setDetail(null); setSelected(null); selectedIncident.current = null;
     setTab("overview");
     setIncidents([]); setIncidentsError(""); setRefreshedAt(null);
-    setServices([]); setEndpoints([]); setServicesError(""); setCheckingEndpointId(null);
+    setServiceHostId(""); setEndpoints([]); setServicesError(""); setCheckingEndpointId(null);
     setProviders([]); setEncryptionConfigured(false); setProviderId(""); setModel("");
     selectedProviderId.current = "";
   }, []);
@@ -172,12 +173,11 @@ export default function Home() {
     try {
       const data: ServicesPayload = await api("/services");
       if (generation !== sessionGeneration.current) return;
-      setServices(data.services);
       setEndpoints(data.endpoints);
       setServicesError("");
     } catch (cause) {
       if (generation === sessionGeneration.current && !(cause instanceof ApiError && cause.status === 401)) {
-        setServicesError(cause instanceof Error ? cause.message : "Service and endpoint records could not be loaded.");
+        setServicesError(cause instanceof Error ? cause.message : "Endpoint records could not be loaded.");
       }
     }
   }, []);
@@ -216,6 +216,11 @@ export default function Home() {
     const timer = setInterval(() => { void refreshIncidents(); void refreshProviders(); void refreshServices(); }, 10000);
     return () => clearInterval(timer);
   }, [logged, refreshIncidents, refreshProviders, refreshServices]);
+  const firstServiceHostId = fleet?.hosts[0]?.id;
+  useEffect(() => {
+    if (tab === "services" && firstServiceHostId) setServiceHostId(id => id || firstServiceHostId);
+  }, [tab, firstServiceHostId]);
+
   const activeProviderTest = providers.some(p => p.lastTest?.status === "queued" || p.lastTest?.status === "running");
   useEffect(() => {
     if (!logged || tab !== "providers" || !activeProviderTest) return;
@@ -312,6 +317,7 @@ export default function Home() {
   const open = refreshedAt ? incidents.filter(i => i.status === "open").length : null;
   const heading = tab === "connect" || tab === "new-monitor" ? null : headings[tab];
   const hosts = fleet?.hosts ?? [];
+  const serviceHost = serviceHostId ? hosts.find(host => host.id === serviceHostId) : hosts[0];
   const incidentView = tab === "incidents" || tab === "drift";
   const visibleIncidents = tab === "drift" ? incidents.filter(i => i.category === "config_drift") : incidents;
   const selectedProvider = providers.find(p => p.id === providerId && p.enabled);
@@ -384,7 +390,7 @@ export default function Home() {
         {error && <Notice tone="danger" role="alert" className="dashboard-alert"><span>{error}</span><Button variant="ghost" size="sm" onClick={() => setError("")}>Dismiss</Button></Notice>}
         {incidentsError && <Notice tone="warning" role="alert" className="dashboard-alert"><span>Incident refresh failed: {incidentsError}. {refreshedAt ? `Showing cached incident records from ${new Date(refreshedAt).toLocaleString()}.` : "Incident data is unavailable, not zero open incidents."}</span><Button size="sm" onClick={() => void refreshIncidents()}>Retry incidents</Button></Notice>}
 
-        <div hidden={tab !== "hosts"}><HostWorkspace refreshKey={hostRefresh} onFleet={setFleet} onFleetError={setFleetError} onUnauthorized={endSession} openIncidents={open} incidentsStale={!!incidentsError} incidents={incidents} onOpenIncident={openIncident} inspectHost={inspectHost} onConnect={() => navigate("connect")} /></div>
+        <div hidden={tab !== "hosts"}><HostWorkspace refreshKey={hostRefresh} showServices={tab === "hosts"} onFleet={setFleet} onFleetError={setFleetError} onUnauthorized={endSession} openIncidents={open} incidentsStale={!!incidentsError} incidents={incidents} onOpenIncident={openIncident} inspectHost={inspectHost} onConnect={() => navigate("connect")} /></div>
         {tab === "overview" && (
           <ThresholdOverview
             fleet={fleet}
@@ -392,7 +398,6 @@ export default function Home() {
             openIncidents={open}
             incidentsStale={!!incidentsError}
             incidents={incidents}
-            services={services}
             endpoints={endpoints}
             servicesError={servicesError}
             checkingEndpointId={checkingEndpointId}
@@ -404,35 +409,27 @@ export default function Home() {
         )}
         {tab === "connect" && <ServerOnboarding onBack={() => navigate("hosts")} onUnauthorized={endSession} fleet={fleet} fleetError={fleetError} onRefresh={() => setHostRefresh(value => value + 1)} />}
         {tab === "services" && (
-          services.length || endpoints.length ? (
-            <div className="services-workspace">
-              <Panel aria-labelledby="services-workloads-title">
-                <div className="panel-head">
-                  <div>
-                    <h2 id="services-workloads-title">Recorded host services</h2>
-                    <p className="muted">Process states are reported separately from host metrics and endpoint checks.</p>
-                  </div>
-                  <Badge>{services.filter(s => s.state === "running").length} / {services.length} running</Badge>
+          <div className="services-workspace">
+            <Panel aria-labelledby="services-workloads-title">
+              <div className="panel-head">
+                <div>
+                  <h2 id="services-workloads-title">Host workloads</h2>
+                  <p className="muted">Only the systemd unit configured on the selected agent is monitored.</p>
                 </div>
-                <ul className="overview-inventory-list" role="list">
-                  {services.map(service => {
-                    const host = hosts.find(h => h.id === service.agent_id);
-                    return (
-                      <li key={service.id} className="overview-inventory-row">
-                        <div className="overview-identity">
-                          <span className="overview-hostname">{service.name}</span>
-                          <span className="overview-meta">{host?.hostname ?? service.agent_id} · {service.runtime} · {service.source}</span>
-                        </div>
-                        <Badge tone={service.state === "running" ? "success" : service.state === "failed" ? "danger" : service.state === "stopped" ? "warning" : "neutral"} dot>
-                          {service.state}
-                        </Badge>
-                        <span className="overview-meta">{new Date(service.observed_at).toLocaleString()}</span>
-                        {host && <Button size="sm" onClick={() => inspect(host.id)}>Inspect host</Button>}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </Panel>
+              </div>
+              {hosts.length > 0 ? (
+                <>
+                  <Field id="service-host" label="Host">
+                    <Select id="service-host" value={serviceHost?.id ?? ""} onChange={event => setServiceHostId(event.target.value)}>
+                      {!serviceHost && <option value="" disabled>Select another host</option>}
+                      {hosts.map(host => <option value={host.id} key={host.id}>{host.hostname}</option>)}
+                    </Select>
+                  </Field>
+                  {serviceHost ? <HostSystemd key={serviceHost.id} hostId={serviceHost.id} refreshKey={hostRefresh} />
+                    : <p className="muted" role="status">The selected host is no longer in the loaded inventory.</p>}
+                </>
+              ) : <p className="muted" role="status">{fleetError ? "Host inventory is unavailable." : fleet ? "Connect a host to view its service observations." : "Loading host inventory…"}</p>}
+            </Panel>
               <Panel aria-labelledby="services-endpoints-title">
                 <div className="panel-head">
                   <div>
@@ -440,6 +437,7 @@ export default function Home() {
                     <p className="muted">Independent HTTP probes from {endpoints[0]?.probe_location ?? "hub-local"}.</p>
                   </div>
                 </div>
+                {servicesError ? <p className="muted" role="status">{servicesError}</p> : !endpoints.length && <p className="muted">No endpoint check results recorded.</p>}
                 <ul className="overview-endpoint-list" role="list">
                   {endpoints.map(endpoint => (
                     <li key={endpoint.id} className="overview-endpoint-item">
@@ -463,15 +461,7 @@ export default function Home() {
                   ))}
                 </ul>
               </Panel>
-            </div>
-          ) : (
-            <Panel className="services-unavailable" aria-labelledby="services-title">
-              <WorkspaceIcon name="services" />
-              <h2 id="services-title">Service inventory is unavailable</h2>
-              <p className="muted">This instance does not collect workload inventory or run endpoint checks. No service count or reachability result can be reported.</p>
-              <Button onClick={() => navigate("hosts")}>View host inventory <WorkspaceIcon name="arrow" /></Button>
-            </Panel>
-          )
+          </div>
         )}
         {tab === "new-monitor" && <section className="onboarding" aria-labelledby="add-service-title">
           <Button className="onboarding-back" onClick={() => navigate("services")}><WorkspaceIcon name="back" />Back to Services</Button>

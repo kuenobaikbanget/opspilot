@@ -47,11 +47,14 @@ const fixtureFetch = async (input: RequestInfo | URL) => {
     case `/api/hosts/${hostId}/metrics`:
       value = [];
       break;
+    case `/api/hosts/${hostId}/services`:
+      value = { agent_id: hostId, online: false, checked_at: timestamp, report: null, service: null };
+      break;
     case "/api/ai/providers":
       value = { providers: [], encryptionConfigured: false };
       break;
     case "/api/services":
-      value = { services: [], endpoints: [] };
+      value = { endpoints: [] };
       break;
     case "/api/auth/logout":
       status = 503;

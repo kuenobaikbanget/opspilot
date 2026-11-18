@@ -2,20 +2,16 @@ import { probeEndpointTarget } from "@opspilot/ai/endpoint-probe";
 import {
   validateEndpointTargetUrl,
   type EndpointMonitor,
-  type HostService,
   type ServicesPayload,
 } from "@opspilot/contracts";
+import { agentSession } from "./agents";
 import { audit, db } from "./db";
 import { aiOrigin, apiError, j, jsonBody, urlUUID } from "./http";
+import { readSystemdStatus } from "./systemd";
 
-type HostServiceRow = Omit<HostService, "observed_at"> & { observed_at: Date };
 type EndpointMonitorRow = Omit<EndpointMonitor, "last_checked_at"> & {
   last_checked_at: Date | null;
 };
-
-function serviceDto(row: HostServiceRow): HostService {
-  return { ...row, observed_at: row.observed_at.toISOString() };
-}
 
 function endpointDto(row: EndpointMonitorRow): EndpointMonitor {
   return {
@@ -30,18 +26,19 @@ export async function serviceRoutes(
   path: string,
   method: string,
 ): Promise<Response | null> {
+  const hostMatch = path.match(/^\/api\/hosts\/([^/]+)\/services$/);
+  if (hostMatch && method === "GET") {
+    const id = hostMatch[1];
+    if (!urlUUID(id)) return apiError("Invalid host id", "invalid_request");
+    const status = await readSystemdStatus(id, agentSession);
+    return status ? j(status) : apiError("Host not found", "not_found", 404);
+  }
+
   if (path === "/api/services" && method === "GET") {
-    const [services, endpoints] = await Promise.all([
-      db<HostServiceRow[]>`SELECT id,agent_id,name,runtime,state,source,observed_at
-        FROM host_services ORDER BY agent_id,name LIMIT 100`,
-      db<EndpointMonitorRow[]>`SELECT id,agent_id,service_name,name,target_url,expected_status,probe_location,
-        last_status,last_http_status,last_latency_ms,last_error,last_checked_at
-        FROM endpoint_monitors ORDER BY created_at DESC,id LIMIT 100`,
-    ]);
-    const payload: ServicesPayload = {
-      services: services.map(serviceDto),
-      endpoints: endpoints.map(endpointDto),
-    };
+    const endpoints = await db<EndpointMonitorRow[]>`SELECT id,agent_id,service_name,name,target_url,expected_status,probe_location,
+      last_status,last_http_status,last_latency_ms,last_error,last_checked_at
+      FROM endpoint_monitors ORDER BY created_at DESC,id LIMIT 100`;
+    const payload: ServicesPayload = { endpoints: endpoints.map(endpointDto) };
     return j(payload);
   }
 

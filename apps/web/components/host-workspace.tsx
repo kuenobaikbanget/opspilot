@@ -6,6 +6,7 @@ import type { Host, HostList, HostMetric } from "@opspilot/contracts";
 import { Badge, Button, Input, Notice, Panel } from "./ui";
 import { hasFreshSample, percent, pressure, resourcePressure, resources, type Resource } from "../lib/host-pressure";
 import { WorkspaceIcon } from "./workspace-shell";
+import { HostSystemd } from "./host-systemd";
 
 type FleetIncident = {
   id: string;
@@ -19,6 +20,7 @@ type FleetIncident = {
 
 type Props = {
   refreshKey: number;
+  showServices: boolean;
   onFleet: (fleet: HostList) => void;
   onFleetError: (message: string) => void;
   onUnauthorized: () => void;
@@ -180,6 +182,7 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
 
 export function HostWorkspace({
   refreshKey,
+  showServices,
   onFleet,
   onFleetError,
   onUnauthorized,
@@ -512,6 +515,8 @@ export function HostWorkspace({
                       ? "Stale / unavailable"
                       : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}
               </p>
+
+              {showServices && <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />}
 
               {historyError && (
                 <Notice tone="warning">

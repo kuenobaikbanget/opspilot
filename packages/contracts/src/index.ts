@@ -140,6 +140,56 @@ export type AgentTelemetry = {
   configHashes: Record<string, string>;
 };
 
+export const MAX_SYSTEMD_REPORT_BYTES = 512;
+export const SYSTEMD_STALE_AFTER_SECONDS = 60;
+
+export type SystemdState = "running" | "stopped" | "failed" | "unknown";
+type SystemdReportBody =
+  | { status: "observed"; unit: string; state: SystemdState }
+  | { status: "disabled" }
+  | { status: "unsupported"; unit: string }
+  | { status: "unavailable"; unit?: string };
+
+/** Agent-initiated snapshot of one locally configured systemd service (or collection status). */
+export type SystemdReport = {
+  type: "systemd_status";
+  version: 1;
+  observedAt: string;
+} & SystemdReportBody;
+
+/** Accept only the exact v1 shape and a recent canonical UTC millisecond timestamp. */
+export function parseSystemdReport(value: unknown, now = Date.now()): SystemdReport | null {
+  if (!requestObject(value) || value.type !== "systemd_status" || value.version !== 1 ||
+      typeof value.observedAt !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.observedAt)) return null;
+  const time = Date.parse(value.observedAt);
+  if (!Number.isFinite(time) || new Date(time).toISOString() !== value.observedAt ||
+      time < now - 120_000 || time > now + 5_000) return null;
+
+  const { unit, status, state } = value;
+  const hasUnit = Object.hasOwn(value, "unit");
+  if (hasUnit && (typeof unit !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.@-]{0,71}\.service(?![\s\S])/.test(unit))) return null;
+  const size = Object.keys(value).length;
+  switch (status) {
+    case "observed":
+      if (!hasUnit || size !== 6 ||
+          (state !== "running" && state !== "stopped" && state !== "failed" && state !== "unknown")) return null;
+      break;
+    case "unsupported":
+      if (!hasUnit || size !== 5) return null;
+      break;
+    case "disabled":
+      if (hasUnit || size !== 4) return null;
+      break;
+    case "unavailable":
+      if (size !== (hasUnit ? 5 : 4)) return null;
+      break;
+    default:
+      return null;
+  }
+  return value as SystemdReport;
+}
+
 /** Hub-to-agent request to run an allowlisted read-only diagnostic tool. */
 export type DiagnosticRequest = {
   type: "diagnostic_request";
@@ -225,6 +275,15 @@ export type HostService = {
   observed_at: string;
 };
 
+/** Systemd collection status and last measured state for the requested host only. */
+export type HostSystemdStatus = {
+  agent_id: string;
+  online: boolean;
+  checked_at: string;
+  report: { status: SystemdReport["status"]; observed_at: string; current: boolean } | null;
+  service: (HostService & { freshness: "fresh" | "stale" }) | null;
+};
+
 export type EndpointMonitor = {
   id: string;
   agent_id: string | null;
@@ -241,7 +300,6 @@ export type EndpointMonitor = {
 };
 
 export type ServicesPayload = {
-  services: HostService[];
   endpoints: EndpointMonitor[];
 };
 

@@ -1,17 +1,20 @@
 import type { ServerWebSocket } from "bun";
 import { randomBytes } from "node:crypto";
 import {
+  MAX_SYSTEMD_REPORT_BYTES,
   MAX_WS_MESSAGE_BYTES,
   finitePercent,
+  parseSystemdReport,
   type AgentTelemetry,
   type DiagnosticResult,
   type DiagnosticTool,
 } from "@opspilot/contracts";
 import { db, hashSecret, audit } from "./db";
 import { checkThresholds, checkConfigHashes, addEvidence } from "./incidents";
+import { storeSystemdReport } from "./systemd";
 
 /** Per-connection metadata attached to authenticated agent WebSockets. */
-export type SocketData = { agentId: string };
+export type SocketData = { agentId: string; sessionId: string };
 
 type PendingDiagnostic = {
   agentId: string;
@@ -22,6 +25,7 @@ type PendingDiagnostic = {
 };
 
 const connections = new Map<string, ServerWebSocket<SocketData>>();
+const writingSystemdReports = new Set<string>();
 const pending = new Map<string, PendingDiagnostic>();
 
 const secret = () => randomBytes(32).toString("base64url");
@@ -93,26 +97,37 @@ export function socketClosed(ws: ServerWebSocket<SocketData>) {
   }
 }
 
-/** Processes bounded telemetry and diagnostic result frames from an agent WebSocket. */
+/** Processes bounded telemetry, systemd status, and diagnostic results from an agent WebSocket. */
 export async function socketMessage(
   ws: ServerWebSocket<SocketData>,
   message: string | Buffer,
 ) {
-  const raw = typeof message === "string" ? message : message.toString();
-  if (Buffer.byteLength(raw) > MAX_WS_MESSAGE_BYTES) {
+  const bytes = typeof message === "string" ? Buffer.byteLength(message) : message.length;
+  if (bytes > MAX_WS_MESSAGE_BYTES) {
     ws.close(1009, "Message too large");
     return;
   }
 
-  let msg: any;
+  let msg: unknown;
   try {
-    msg = JSON.parse(raw);
+    msg = JSON.parse(typeof message === "string" ? message : message.toString());
   } catch {
     return;
   }
+  if (!msg || typeof msg !== "object" || !("type" in msg)) return;
 
   const agentId = ws.data.agentId;
-  if (msg.type === "telemetry") {
+  if (msg.type === "systemd_status") {
+    if (bytes > MAX_SYSTEMD_REPORT_BYTES || connections.get(agentId) !== ws || writingSystemdReports.has(agentId)) return;
+    const report = parseSystemdReport(msg);
+    if (!report) return;
+    writingSystemdReports.add(agentId);
+    try {
+      await storeSystemdReport(agentId, ws.data.sessionId, report);
+    } finally {
+      writingSystemdReports.delete(agentId);
+    }
+  } else if (msg.type === "telemetry") {
     const m = msg as AgentTelemetry;
     if (
       ![m.cpuPercent, m.memoryPercent, m.diskPercent].every(finitePercent) ||
@@ -154,6 +169,11 @@ export async function socketMessage(
 /** Returns true if an agent currently holds an active WebSocket connection on this hub. */
 export function agentOnline(id: string): boolean {
   return connections.has(id);
+}
+
+/** Returns the opaque current connection identity for the systemd read model. */
+export function agentSession(id: string): string | undefined {
+  return connections.get(id)?.data.sessionId;
 }
 
 /** Sends a bounded diagnostic request to a connected agent with a 6-second timeout. */
