@@ -21,6 +21,7 @@ import {
 import {
   checkPassword,
   createSession,
+  isAuthDisabled,
   isAuthed,
   logoutCookie,
   sessionCookie,
@@ -36,6 +37,9 @@ const agentInstallerUrl = new URL("../../../infra/install/agent.sh", import.meta
 const port = Number(process.env.PORT || 3001);
 if (process.env.NODE_ENV === "production" && !process.env.ADMIN_PASSWORD_HASH) {
   throw new Error("ADMIN_PASSWORD_HASH required in production");
+}
+if (isAuthDisabled()) {
+  console.warn("WARNING: Admin login is disabled (DISABLE_AUTH=true, non-production only)");
 }
 
 
@@ -74,6 +78,9 @@ async function router(req: Request): Promise<Response> {
   }
 
   if (path === "/api/auth/login" && method === "POST") {
+    if (isAuthDisabled()) {
+      return j({ ok: true, authDisabled: true });
+    }
     const data = await body(req);
     const password = String(data.password || "");
     if (password.length > 256) {
@@ -95,11 +102,11 @@ async function router(req: Request): Promise<Response> {
 
 
   if (path === "/api/auth/me" && method === "GET") {
-    return j({ authenticated: true, role: "admin" });
+    return j({ authenticated: true, role: "admin", authDisabled: isAuthDisabled() });
   }
 
   if (path === "/api/auth/logout" && method === "POST") {
-    return j({ ok: true }, 200, { "Set-Cookie": logoutCookie() });
+    return j({ ok: true }, 200, isAuthDisabled() ? {} : { "Set-Cookie": logoutCookie() });
   }
 
 

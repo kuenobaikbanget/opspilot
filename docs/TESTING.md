@@ -10,6 +10,20 @@ bun run typecheck
 
 `tests/contracts.test.ts` covers tool/metric bounds, provider input contracts and redaction. The BYOK suites below cover credential, transport, migration and real API/Worker boundaries. `tests/agent-install.test.ts` covers installation metadata and command quoting; `tests/agent-installer.test.ts` covers pre-mutation shell rejection with isolated fixtures, never successful privileged installation on the developer host. Go agent tests cover parsing/redaction/WS URL plus finite enrollment, response/redirect rejection and identity preservation. These tests are **not** a substitute for broader agent security, integration, and AI evaluation.
 
+## Home audit fixes — 2026-11-18
+
+- `bun --no-env-file test tests/home-ui.test.ts`: six regressions passed (33 assertions). Each mounts the actual Home component in its own Bun subprocess with Happy DOM and synthetic API responses; no DOM globals or fetch replacements enter the shared test runner. Cases cover a failed initial incident read with usable hosts/unavailable counts, recovery preserving a separate sign-out error, labeled cached records, rejected startup sessions, retriable session-check outages and expiry clearing the protected surface.
+- `bun run --cwd apps/web typecheck` passed after correcting the test fixture's fetch signature to avoid claiming Bun's additional `fetch.preconnect` API.
+- Chromium browser verification used the existing local Web/Hub/PostgreSQL with persisted labeled demo data and a short-lived locally signed admin cookie. A simulated incident-read 503 on reload left six real returned host records visible, rendered an unavailable count rather than zero, and avoided claiming no related incident. Retrying the real incident endpoint restored the count of three and removed the failure alert.
+- Captured desktop/mobile surfaces at 1440/390px, then confirmed 1024px touch-tablet and 320px narrow layouts. Document width matched each inspected viewport. Mobile controls had no targets below 44×44px among enabled dashboard buttons/inputs/disclosures; the 1024px coarse-pointer Refresh, host selection and metadata disclosure targets were each 44px tall.
+- Keyboard host selection preserved a 2px focus outline and pressed state. Enrollment open/close moved focus into the section and back to its trigger without creating a token. Synthesized Chromium touch moved the native host table's horizontal scroll position from 0 to 172px.
+- The scoped detector reported only the existing shared meter-width transition, which is not rendered by this host workspace. No new detector finding was introduced.
+
+This verifies component behavior and the rendered local dashboard, not password login, live session-expiry enforcement, physical touch hardware, Safari, production Core Web Vitals, agent collection or LLM/provider calls. Failure responses and auth negatives in the component suite are synthetic; server authorization is unchanged. Temporary browser cookies/tabs are removed after verification.
+
+Run these isolated UI regressions with `bun --no-env-file test tests/home-ui.test.ts`; they require only the installed development dependencies, not a running browser, Web server, Hub, database or credentials.
+
+
 ## BYOK provider management verification — 2026-11-18
 
 - Approved seven-file command passed: **62 tests, 0 failures, 2771 assertions** using Bun 1.4.2 and PostgreSQL 16 disposable child databases. Hub, Worker and Web typechecks passed. Compose full-profile configuration parsed successfully.

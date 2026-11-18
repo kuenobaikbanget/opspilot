@@ -28,7 +28,10 @@ const fixtureFetch = async (input: RequestInfo | URL) => {
   switch (path) {
     case "/api/auth/me":
       status = sessionStatus;
-      value = status === 200 ? { authenticated: true, role: "admin" } : { error: "Fixture session failure" };
+      value =
+        status === 200
+          ? { authenticated: true, role: "admin", ...(scenario === "auth-disabled" ? { authDisabled: true } : {}) }
+          : { error: "Fixture session failure" };
       break;
     case "/api/incidents":
       status = incidentStatus;
@@ -68,6 +71,7 @@ const snapshot = () => {
   return {
     protectedVisible: !!document.getElementById("main-content"),
     loginVisible: !!document.getElementById("admin-password"),
+    signOutVisible: [...document.querySelectorAll("button")].some(element => element.textContent?.trim() === "Sign out"),
     incidentCount: incidentReading?.nextElementSibling?.textContent,
     incidentContext: incidentReading?.textContent,
     relatedIncident: document.querySelector(".inspector-incident")?.textContent,
@@ -116,6 +120,9 @@ try {
       incidentStatus = 401;
       await click("Refresh");
       console.log(JSON.stringify({ initial, expired: snapshot() }));
+      break;
+    case "auth-disabled":
+      console.log(JSON.stringify({ initial, requests }));
       break;
     default:
       throw new Error(`Unknown scenario: ${scenario}`);

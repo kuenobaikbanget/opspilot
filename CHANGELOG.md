@@ -21,6 +21,9 @@
 - Simplified the sidebar to Hosts, Incidents, Configuration drift and Incident memory. Merged the duplicate Overview/Hosts views; removed sidebar enrollment (still in the header), the developer catalog link and repeated deployment/account captions. Provider settings and Sign out remain below; mobile exposes them through More.
 - Replaced the count-dependent moving navigation marker with a marker on the active item. Preserved icon-only mode, accessible names, keyboard focus and the stored collapse preference.
 - Web typecheck passed. Browser checks with synthetic API responses covered desktop/mobile navigation at 1440/1024/390/320px, collapse persistence, keyboard access, More, enrollment focus and sign-out UI. No live authentication or diagnostics integration was tested; the detector only reported existing meter-width/root-font findings.
+- Fixed the home audit findings: check the existing admin-session endpoint independently of incident loading, preserve host monitoring during incident-read failures, distinguish unavailable/cached incident counts and related records, and clear only the recovered source's error.
+- Increased shared controls and fleet action/disclosure targets to at least 44px on mobile/coarse-pointer devices while preserving compact fine-pointer desktop controls. Added isolated component regressions for initial/cached failures, recovery without hiding action errors, session-check failure/retry, unauthorized startup and expiry.
+- Six isolated Home regressions (33 assertions) and the Web typecheck passed. Chromium checks with local persisted demo data covered incident outage/recovery, keyboard/enrollment focus, 1440/1024/390/320px layouts, 44px mobile/coarse-pointer targets and synthesized horizontal touch scrolling. No password-login, physical-device, agent or paid-provider integration claim; see `docs/TESTING.md`.
 
 ## Unreleased — 2026-11-17
 

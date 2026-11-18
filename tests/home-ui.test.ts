@@ -71,3 +71,11 @@ test("session expiry removes protected observations instead of reporting an inci
   expect(expired.loginVisible).toBe(true);
   expect(expired.incidentCount).toBeUndefined();
 });
+
+test("when dev auth is disabled, the dashboard opens without login and omits sign out", async () => {
+  const { initial, requests } = await scenario("auth-disabled");
+  expect(initial.protectedVisible).toBe(true);
+  expect(initial.loginVisible).toBe(false);
+  expect(initial.signOutVisible).toBe(false);
+  expect(requests).toContain("/api/auth/me");
+});

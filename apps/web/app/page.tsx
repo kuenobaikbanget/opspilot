@@ -42,6 +42,7 @@ function categoryLabel(category: string) {
 
 export default function Home() {
   const [logged, setLogged] = useState<boolean | null>(null);
+  const [authDisabled, setAuthDisabled] = useState(false);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [sessionError, setSessionError] = useState("");
@@ -78,7 +79,7 @@ export default function Home() {
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   const endSession = useCallback(() => {
     sessionGeneration.current++;
-    setLogged(false); setFleet(null); setFleetError(""); setInspectHost(null);
+    setLogged(false); setAuthDisabled(false); setFleet(null); setFleetError(""); setInspectHost(null);
     setDetail(null); setSelected(null); selectedIncident.current = null;
     setTab("overview");
     setIncidents([]); setIncidentsError(""); setRefreshedAt(null);
@@ -95,8 +96,11 @@ export default function Home() {
     const generation = sessionGeneration.current;
     setSessionError("");
     try {
-      await api("/auth/me");
-      if (generation === sessionGeneration.current) setLogged(true);
+      const me = await api("/auth/me");
+      if (generation === sessionGeneration.current) {
+        setAuthDisabled(Boolean(me?.authDisabled));
+        setLogged(true);
+      }
     } catch (cause) {
       if (generation === sessionGeneration.current && !(cause instanceof ApiError && cause.status === 401)) {
         setSessionError(cause instanceof Error ? cause.message : "Unable to verify your session.");
@@ -319,7 +323,7 @@ export default function Home() {
   }
 
   return (
-    <WorkspaceShell page={tab} onNavigate={navigate} onInspectHost={inspect} hosts={hosts} incidents={open} incidentsStale={!!incidentsError} busy={busy} onSignOut={signOut}>
+    <WorkspaceShell page={tab} onNavigate={navigate} onInspectHost={inspect} hosts={hosts} incidents={open} incidentsStale={!!incidentsError} busy={busy} onSignOut={authDisabled ? undefined : signOut}>
       <main className="content" id="main-content" tabIndex={-1}>
         {heading && <header className="topbar">
           <div>

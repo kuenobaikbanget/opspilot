@@ -1,6 +1,6 @@
 # API & Agent Protocol (starter contract)
 
-Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` rewrite. JSON endpoints require **admin HttpOnly cookie**, except agent enrollment, WebSocket agent connect, and `/healthz`.
+Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` rewrite. JSON endpoints require **admin HttpOnly cookie** (unless `DISABLE_AUTH=true` in non-production; refused at startup in production, with `ALLOWED_ORIGIN` still enforced), except agent enrollment, WebSocket agent connect, and `/healthz`.
 
 ## Admin HTTP routes
 
@@ -8,7 +8,7 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 |---|---|---|---|
 | POST | `/api/auth/login` | `{"password":"..."}` | `200` sets signed cookie |
 | POST | `/api/auth/logout` | none | `200` clears cookie |
-| GET | `/api/auth/me` | none | role and auth status |
+| GET | `/api/auth/me` | none | role, auth status, and `authDisabled` flag |
 | POST | `/api/agents/enrollment-token` | `{}` | `{token, expiresInSeconds}`; show once |
 | GET | `/api/agents/install-config` | none | `{hubUrl,installerUrl,version,repository}` or `503 {"error":"Agent installation is not configured"}` |
 | GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}` |

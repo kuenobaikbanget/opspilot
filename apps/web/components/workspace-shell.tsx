@@ -49,7 +49,7 @@ type Props = {
   incidents: number | null;
   incidentsStale: boolean;
   busy: boolean;
-  onSignOut: () => void;
+  onSignOut?: () => void;
   children: ReactNode;
 };
 
@@ -99,7 +99,7 @@ export function WorkspaceShell({ page, onNavigate, onInspectHost, hosts, inciden
               <div className="workspace-account-menu">
                 <Button variant="ghost" onClick={() => navigate("drift")}>Configuration drift</Button>
                 <Button variant="ghost" onClick={() => navigate("memory")}>Incident memory</Button>
-                <Button variant="ghost" disabled={busy} onClick={() => { if (account.current) account.current.open = false; onSignOut(); }}>Sign out</Button>
+                {onSignOut && <Button variant="ghost" disabled={busy} onClick={() => { if (account.current) account.current.open = false; onSignOut(); }}>Sign out</Button>}
               </div>
             </details>
           </div>
