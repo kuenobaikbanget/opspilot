@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { BrandMark } from "../components/brand-mark";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../components/ui";
 import type { Host } from "@opspilot/contracts";
 import { HostWorkspace } from "./host-workspace";
@@ -12,8 +13,7 @@ type Detail = { incident: Incident; evidence: Evidence[]; investigations: Invest
 type Memory = { id: string; summary: string; resolution: string; created_at: string };
 
 const destinations = [
-  { id: "overview", label: "Overview", title: "Fleet & services", description: "Infrastructure signals and endpoint checks. Side by side, never conflated.", icon: "M3 3h18v18H3z M3 9h18 M9 9v12" },
-  { id: "hosts", label: "Hosts", title: "Linux hosts", description: "Agent connectivity, measured resources and selected-host observations.", icon: "M3 3h18v7H3z M3 14h18v7H3z M6 6h.01 M6 17h.01" },
+  { id: "hosts", label: "Hosts", title: "Fleet & services", description: "Infrastructure signals and endpoint checks. Side by side, never conflated.", icon: "M3 3h18v7H3z M3 14h18v7H3z M6 6h.01 M6 17h.01" },
   { id: "incidents", label: "Incidents", title: "Host incidents", description: "Measured evidence, advisory AI hypotheses and human-confirmed resolutions.", icon: "M12 8v5 M12 16h.01 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0" },
   { id: "drift", label: "Configuration drift", title: "Configuration drift", description: "Recorded configuration hash changes. Correlation is not causation.", icon: "M14 2H5v20h14V7z M14 2v5h5 M8 12h8 M8 16h5" },
   { id: "memory", label: "Incident memory", title: "Incident memory", description: "Human-confirmed resolutions from previous investigations.", icon: "M12 5v16 M3 3h5l4 2 4-2h5v16h-5l-4 2-4-2H3z" },
@@ -51,7 +51,7 @@ export default function Home() {
   const [hostId, setHostId] = useState("");
   const [resolution, setResolution] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<Destination>("overview");
+  const [tab, setTab] = useState<Destination>("hosts");
   const [utilitiesOpen, setUtilitiesOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -156,7 +156,7 @@ export default function Home() {
   if (!logged) return (
     <main className="login-container">
       <Panel className="login-card">
-        <div className="logo">OpsPilot</div>
+        <div className="logo"><BrandMark size={24} /><span>OpsPilot</span></div>
         <h1>Welcome back.</h1>
         <p className="muted">Sign in with your single-admin password.</p>
         <form onSubmit={login}>
@@ -174,7 +174,7 @@ export default function Home() {
 
   const open = incidents.filter(i => i.status === "open").length;
   const page = destinations.find(item => item.id === tab);
-  const fleetVisible = tab === "overview" || tab === "hosts";
+  const fleetVisible = tab === "hosts";
   const incidentView = tab === "incidents" || tab === "drift";
   const visibleIncidents = tab === "drift" ? incidents.filter(i => i.category === "config_drift") : incidents;
 
@@ -184,17 +184,15 @@ export default function Home() {
       <aside className="sidebar" id="opspilot-sidebar" aria-label="OpsPilot">
         <div className="sidebar-header">
           <div className="sidebar-brand">
-            <div className="logo sidebar-brand-name">OpsPilot</div>
-            <span className="sidebar-monogram" aria-hidden="true">OP</span>
-            <span className="sidebar-context">Self-hosted</span>
+            <div className="logo sidebar-brand-name"><BrandMark size={22} /><span>OpsPilot</span></div>
+            <span className="sidebar-monogram" aria-hidden="true"><BrandMark size={26} /></span>
           </div>
           <Button variant="ghost" className="sidebar-utilities-toggle" aria-expanded={utilitiesOpen} aria-controls="sidebar-utilities" onClick={() => setUtilitiesOpen(value => !value)}>
-            Utilities
+            More
             <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={utilitiesOpen ? "m6 12 4-4 4 4" : "m6 8 4 4 4-4"} /></svg>
           </Button>
         </div>
-        <nav className="sidebar-navigation" aria-label="Main navigation" data-active={tab}>
-          <span className="sidebar-indicator" aria-hidden="true" />
+        <nav className="sidebar-navigation" aria-label="Main navigation">
           {destinations.map(item => (
             <Button key={item.id} variant="ghost" className={`nav ${tab === item.id ? "active" : ""}`} title={sidebarCollapsed ? item.label : undefined} aria-current={tab === item.id ? "page" : undefined} onClick={() => { setTab(item.id); setDetail(null); setSelected(null); }}>
               <svg className="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={item.icon} /></svg>
@@ -203,25 +201,14 @@ export default function Home() {
           ))}
         </nav>
         <div className="sidebar-bottom" id="sidebar-utilities" data-open={utilitiesOpen}>
-          <Button variant="ghost" className="nav" title={sidebarCollapsed ? "Enroll host" : undefined} onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>
-            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="2" /><path d="M10 7v6M7 10h6" /></svg>
-            <span className="sidebar-label">Enroll host</span>
-          </Button>
           <Button variant="ghost" className={`nav ${tab === "providers" ? "active" : ""}`} title={sidebarCollapsed ? "Provider settings" : undefined} aria-current={tab === "providers" ? "page" : undefined} onClick={() => setTab("providers")}>
             <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h3m4 0h7M3 14h7m4 0h3M8 4v4m4 4v4" /></svg>
             <span className="sidebar-label">Provider settings</span>
           </Button>
-          <Link className="nav sidebar-catalog" href="/design-system" title={sidebarCollapsed ? "Design system" : undefined}>
-            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="5" height="5" rx="1" /><rect x="12" y="3" width="5" height="5" rx="1" /><rect x="3" y="12" width="5" height="5" rx="1" /><rect x="12" y="12" width="5" height="5" rx="1" /></svg>
-            <span className="sidebar-label">Design system</span>
-          </Link>
-          <div className="sidebar-account">
-            <p className="sidebar-account-context">Single-admin · Read-only diagnostics</p>
-            <Button variant="ghost" className="nav" title={sidebarCollapsed ? "Sign out" : undefined} disabled={busy} onClick={() => { setBusy(true); void api("/auth/logout", "POST").then(() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }).catch(e => setError(e.message)).finally(() => setBusy(false)); }}>
-              <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4M8 10h9m-4-4 4 4-4 4" /></svg>
-              <span className="sidebar-label">Sign out</span>
-            </Button>
-          </div>
+          <Button variant="ghost" className="nav" title={sidebarCollapsed ? "Sign out" : undefined} disabled={busy} onClick={() => { setBusy(true); void api("/auth/logout", "POST").then(() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }).catch(e => setError(e.message)).finally(() => setBusy(false)); }}>
+            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4M8 10h9m-4-4 4 4-4 4" /></svg>
+            <span className="sidebar-label">Sign out</span>
+          </Button>
         </div>
       </aside>
 

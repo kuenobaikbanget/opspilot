@@ -22,7 +22,7 @@
 .header, .layout { max-width: 1280px; margin-inline: auto; padding-inline: var(--space-8); }
 .header { padding-top: var(--space-8); padding-bottom: var(--space-8); }
 .headerTop { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); margin-bottom: var(--space-8); }
-.brand { color: var(--color-accent); font-size: var(--text-lg); font-weight: 750; text-decoration: none; }
+.brand { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--color-accent); font-size: var(--text-lg); font-weight: 750; text-decoration: none; }
 .dashboardLink { color: var(--color-text-muted); font-size: var(--text-sm); }
 .titleRow { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-4); }
 .intro { max-width: 72ch; color: var(--color-text-muted); padding-top: var(--space-3); padding-bottom: var(--space-5); }
