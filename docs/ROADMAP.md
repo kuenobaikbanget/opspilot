@@ -51,6 +51,7 @@ The [approved screen contract](UI-UX.md#fleet-services-dashboard-contract-target
 - [x] Async PostgreSQL queue + worker
 - [x] OpenAI/Anthropic/Gemini BYOK adapters
 - [x] Server-side JSON schema checks + evidence IDs
+- [x] Encrypted stored provider connections, manual protocol/model routing, revision snapshots and bounded asynchronous connection tests
 - [ ] Deterministic evidence-relevance scoring / citations UI
 - [ ] Worker lease recovery, retry budget, deduplication
 - [ ] Prompt-injection test fixtures and provider-cost tracking
@@ -75,7 +76,7 @@ The [approved screen contract](UI-UX.md#fleet-services-dashboard-contract-target
 - [ ] TLS reverse-proxy reference deployment / WSS test
 - [ ] Privacy consent & tested log redaction pipeline
 - [ ] Metrics retention, backup & restore validation
-- [ ] Tagged versioned DB migrations
+- [x] Checksummed transactional numbered DB migrations and explicit legacy-provider import
 - [ ] Signed binary releases amd64/arm64 + SBOM, pinned images
 - [ ] Load/chaos tests and public security documentation
 

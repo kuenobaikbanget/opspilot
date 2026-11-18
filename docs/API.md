@@ -12,14 +12,35 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | POST | `/api/agents/enrollment-token` | `{}` | `{token, expiresInSeconds}`; show once |
 | GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds}` |
 | GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; 400 invalid ID, 404 unknown host |
-| GET | `/api/ai/providers` | none | `{available:["openai",...]}` no secrets |
+| GET | `/api/ai/providers` | none | `{providers: AiProvider[], encryptionConfigured: boolean}` |
+| POST | `/api/ai/providers` | `{name,protocol,baseUrl,apiKey,defaultModel,enabled}` | `201 {provider}` |
+| PATCH | `/api/ai/providers/:id` | subset of create fields, at least one | `200 {provider}` |
+| DELETE | `/api/ai/providers/:id` | none | `200 {ok:true}`; reports preserved |
+| POST | `/api/ai/providers/:id/test` | `{}` | `202 {id,providerId,status:"queued"}` |
 | GET | `/api/incidents` | none | last 100 incidents |
 | POST | `/api/incidents` | `{"agentId":"uuid","title":"..."}` | `201 {id}` |
 | GET | `/api/incidents/:id` | none | `{incident,evidence,investigations}` |
-| POST | `/api/incidents/:id/investigate` | `{"provider":"openai"}` | `202 {id,status,liveAgent}` |
+| POST | `/api/incidents/:id/investigate` | `{"providerId":"uuid","providerRevision":1,"model":"explicit-model"}` | `202 {id,status,liveAgent}` |
 | POST | `/api/incidents/:id/resolve` | `{"resolution":"..."}` | `200 {ok:true}` |
 | GET | `/api/memory?q=text` | none | searchable resolved incidents |
 | GET | `/healthz` | none | `{ok,db}` |
+
+### Stored AI connections
+
+Protocols are `openai-compatible`, `anthropic`, and `gemini`; UUID identity is independent of protocol. Several connections may share a protocol. The old `{provider}` investigation payload is rejected.
+
+All provider mutations and investigate require an admin cookie and an Origin exactly equal to `ALLOWED_ORIGIN` (missing/cross-origin: `403 {error:"Forbidden origin",code:"forbidden_origin"}`). Body-bearing AI requests require JSON objects, no arrays, at most 16 KiB UTF-8; wrong content type is 415, excessive size 413, invalid/unknown fields 400. Responses retain no-store/nosniff. Unauthenticated requests retain `401 {error:"Unauthorized"}`.
+
+Names trim to 1–80 characters, models 1–200, URLs at most 2048, and API keys 1–4096 with no internal whitespace/control characters. Create requires all fields. PATCH omits `apiKey` to retain the credential; an empty key is invalid. Changing normalized base URL or protocol requires a replacement key. Actual changes increment revision; identical PATCH without a key does not. No DTO contains a key or encrypted envelope.
+
+`AiProvider` includes `id,name,protocol,baseUrl,defaultModel,enabled,revision,hasApiKey,createdAt,updatedAt,lastTest`. Dates are ISO strings; ordering is createdAt/id, with at most 100 connections. Base URL is the HTTPS API root, not an operation URL. Saving performs static public-target validation, not DNS/auth/model testing.
+
+`lastTest` is null or `{id,revision,model,status,errorCode,httpStatus,requestedAt,startedAt,completedAt,expiresAt}`. Status is queued/running/completed/failed. A single 90-second slot includes Worker queue time; expired active slots project as failed/provider_timeout on GET without mutation. Only an explicit test sends a synthetic generation prompt; no incident evidence is used. Completed means that model/configuration passed then, not perpetual health. A revision mismatch is not tested for the current configuration.
+
+AI errors use `{error,code}` with fixed messages and no input/upstream content. State codes: `invalid_request`, `provider_unavailable` (404), `provider_disabled`, `provider_changed`, `test_in_progress`, `provider_limit` (409), and `credential_unavailable` (503). Transport codes: `invalid_endpoint`, `endpoint_not_public`, `dns_failed`, `provider_timeout`, `provider_response_too_large`, `provider_invalid_response`, `provider_network`, `provider_redirect`, `provider_http`, `provider_configuration`. HTTP failures expose only status. Missing/malformed master disables AI mutations/execution but metadata, monitoring and health remain available.
+
+Investigations validate the browser revision before diagnostics and recheck under a row lock before queueing. Worker rejects changed/disabled/deleted connections rather than silently using another destination. Incident detail reports `provider:{id:string|null,name,protocol,baseUrl:string|null,model:string|null}` from an immutable non-secret snapshot, never current connection metadata. Legacy model/base URL remain null. Deleting a connection removes credentials, not historical reports; unstarted jobs fail safely.
+
 
 ### Host monitoring read model
 

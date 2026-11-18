@@ -3,8 +3,10 @@ import type {
   Host,
   HostList,
   HostMetric,
-  Provider,
+  ProviderProtocol,
 } from "@opspilot/contracts";
+import { parseInvestigateRequest } from "@opspilot/contracts";
+import { decryptProviderKey, ProviderCredentialError, readProviderMasterKey } from "@opspilot/ai/credentials";
 import {
   agentOnline,
   authenticateAgent,
@@ -25,57 +27,14 @@ import {
 } from "./auth";
 import { audit, db } from "./db";
 import { createIncident } from "./incidents";
+import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
+import { providerRoutes } from "./providers";
 
 const port = Number(process.env.PORT || 3001);
 if (process.env.NODE_ENV === "production" && !process.env.ADMIN_PASSWORD_HASH) {
   throw new Error("ADMIN_PASSWORD_HASH required in production");
 }
 
-const PROVIDER_ENV_KEYS: Record<string, string> = {
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-  gemini: "GEMINI_API_KEY",
-};
-
-const providers = () =>
-  ["openai", "anthropic", "gemini"].filter((p) =>
-    Boolean(process.env[PROVIDER_ENV_KEYS[p]]),
-  );
-
-function j(
-  data: unknown,
-  status = 200,
-  headers: Record<string, string> = {},
-): Response {
-  return Response.json(data, {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-      ...headers,
-    },
-  });
-}
-
-async function body(req: Request): Promise<any> {
-  const raw = await req.text();
-  if (raw.length > 16000) {
-    throw new Error("Body too large");
-  }
-  try {
-    return JSON.parse(raw || "{}");
-  } catch {
-    throw new SyntaxError("Invalid JSON body");
-  }
-}
-
-const invalid = (error: string, status = 400) => j({ error }, status);
-
-function urlUUID(s: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    s,
-  );
-}
 
 type HostRow = Omit<
   Host,
@@ -101,13 +60,13 @@ async function router(req: Request): Promise<Response> {
     }
   }
 
-  if (method === "POST") {
+  if (method === "POST" || method === "PATCH" || method === "DELETE") {
     const origin = req.headers.get("origin");
     if (
       origin &&
       origin !== (process.env.ALLOWED_ORIGIN || "http://localhost:3000")
     ) {
-      return invalid("Forbidden origin", 403);
+      return apiError("Forbidden origin", "forbidden_origin", 403);
     }
   }
 
@@ -128,6 +87,9 @@ async function router(req: Request): Promise<Response> {
   if (!isAuthed(req)) {
     return invalid("Unauthorized", 401);
   }
+  const providerResponse = await providerRoutes(req, path, method);
+  if (providerResponse) return providerResponse;
+
 
   if (path === "/api/auth/me" && method === "GET") {
     return j({ authenticated: true, role: "admin" });
@@ -137,12 +99,6 @@ async function router(req: Request): Promise<Response> {
     return j({ ok: true }, 200, { "Set-Cookie": logoutCookie() });
   }
 
-  if (path === "/api/ai/providers" && method === "GET") {
-    return j({
-      available: providers(),
-      configuration: "server-environment",
-    });
-  }
 
   if (path === "/api/agents/enrollment-token" && method === "POST") {
     return j(await createEnrollmentToken(), 201);
@@ -237,34 +193,72 @@ async function router(req: Request): Promise<Response> {
     }
     const evidence =
       await db`SELECT id,source,content,created_at FROM evidence WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 50`;
-    const investigations =
-      await db`SELECT id,provider,status,result_json,error,created_at,completed_at FROM investigations WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 10`;
+    const rows = await db<{
+      id: string;
+      provider_id: string | null;
+      provider_name: string;
+      provider_protocol: ProviderProtocol;
+      provider_base_url: string | null;
+      provider_model: string | null;
+      status: string;
+      result_json: unknown;
+      error: string | null;
+      created_at: Date;
+      completed_at: Date | null;
+    }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,created_at,completed_at
+      FROM investigations WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 10`;
+    const investigations = rows.map((row) => ({
+      id: row.id,
+      provider: {
+        id: row.provider_id,
+        name: row.provider_name,
+        protocol: row.provider_protocol,
+        baseUrl: row.provider_base_url,
+        model: row.provider_model,
+      },
+      status: row.status,
+      result_json: row.result_json,
+      error: row.error,
+      created_at: row.created_at,
+      completed_at: row.completed_at,
+    }));
     return j({ incident: incident[0], evidence, investigations });
   }
 
   match = path.match(/^\/api\/incidents\/([^/]+)\/investigate$/);
   if (match && method === "POST") {
-    if (!urlUUID(match[1])) {
-      return invalid("Invalid incident id");
-    }
-    const data = await body(req);
-    const provider = data.provider as Provider;
-    if (!["openai", "anthropic", "gemini"].includes(provider)) {
-      return invalid("Invalid provider");
-    }
-    if (!providers().includes(provider)) {
-      return invalid("Provider key is not configured on hub/worker", 503);
-    }
-    const rows =
-      await db`SELECT agent_id,category,status FROM incidents WHERE id=${match[1]}`;
-    if (!rows.length) {
-      return invalid("Not found", 404);
-    }
-    if (rows[0].status !== "open") {
-      return invalid("Incident is resolved", 409);
-    }
+    const forbidden = aiOrigin(req);
+    if (forbidden) return forbidden;
+    if (!urlUUID(match[1])) return apiError("Invalid incident id", "invalid_request");
+    const data = parseInvestigateRequest(await jsonBody(req));
+    if (!data) return apiError("Invalid investigation request", "invalid_request");
+    const masterKey = readProviderMasterKey(process.env);
+    if (!masterKey) return apiError("Provider credentials unavailable", "credential_unavailable", 503);
+    const providerCheck = await db.begin(async (tx) => {
+      const [provider] = await tx<{
+        id: string;
+        enabled: boolean;
+        revision: number;
+        api_key_ciphertext: string;
+      }[]>`SELECT id,enabled,revision,api_key_ciphertext FROM ai_providers WHERE id=${data.providerId} FOR UPDATE`;
+      if (!provider) return apiError("Provider unavailable", "provider_unavailable", 404);
+      if (!provider.enabled) return apiError("Provider is disabled", "provider_disabled", 409);
+      if (provider.revision !== data.providerRevision) return apiError("Provider configuration changed; review the latest configuration", "provider_changed", 409);
+      try {
+        decryptProviderKey(provider.id, provider.api_key_ciphertext, masterKey);
+      } catch (error) {
+        if (error instanceof ProviderCredentialError) return apiError("Provider credentials unavailable", "credential_unavailable", 503);
+        throw error;
+      }
+      return null;
+    });
+    if (providerCheck) return providerCheck;
+    const rows = await db<{ agent_id: string; category: string; status: string }[]>`
+      SELECT agent_id,category,status FROM incidents WHERE id=${match[1]}`;
+    if (!rows.length) return apiError("Incident not found", "invalid_request", 404);
+    if (rows[0].status !== "open") return apiError("Incident is resolved", "invalid_request", 409);
     const id = match[1];
-    const agentId = rows[0].agent_id as string;
+    const agentId = rows[0].agent_id;
     const tools: Array<[DiagnosticTool, string?]> =
       rows[0].category === "disk"
         ? [["disk_usage"]]
@@ -281,20 +275,33 @@ async function router(req: Request): Promise<Response> {
         ),
       );
     }
-    const queued =
-      await db`INSERT INTO investigations(incident_id,provider) VALUES(${id},${provider}) RETURNING id`;
-    await audit("investigation.queued", queued[0].id, {
-      incidentId: id,
-      provider,
+    return await db.begin(async (tx) => {
+      const [provider] = await tx<{
+        id: string;
+        enabled: boolean;
+        revision: number;
+        name: string;
+        protocol: ProviderProtocol;
+        base_url: string;
+      }[]>`SELECT id,enabled,revision,name,protocol,base_url FROM ai_providers WHERE id=${data.providerId} FOR UPDATE`;
+      if (!provider || provider.revision !== data.providerRevision) {
+        return apiError("Provider configuration changed; review the latest configuration", "provider_changed", 409);
+      }
+      if (!provider.enabled) return apiError("Provider is disabled", "provider_disabled", 409);
+      const [incident] = await tx<{ status: string }[]>`SELECT status FROM incidents WHERE id=${id} FOR UPDATE`;
+      if (!incident) return apiError("Incident not found", "invalid_request", 404);
+      if (incident.status !== "open") return apiError("Incident is resolved", "invalid_request", 409);
+      const [queued] = await tx<{ id: string }[]>`INSERT INTO investigations(
+        incident_id,provider_id,provider_revision,provider_name,provider_protocol,provider_base_url,provider_model
+      ) VALUES(${id},${provider.id},${provider.revision},${provider.name},${provider.protocol},${provider.base_url},${data.model}) RETURNING id`;
+      await audit("investigation.queued", queued.id, {
+        incidentId: id,
+        providerId: provider.id,
+        revision: provider.revision,
+        protocol: provider.protocol,
+      }, tx);
+      return j({ id: queued.id, status: "queued", liveAgent: agentOnline(agentId) }, 202);
     });
-    return j(
-      {
-        id: queued[0].id,
-        status: "queued",
-        liveAgent: agentOnline(agentId),
-      },
-      202,
-    );
   }
 
   match = path.match(/^\/api\/incidents\/([^/]+)\/resolve$/);
@@ -377,15 +384,17 @@ const server = Bun.serve<SocketData>({
       }
 
       return await router(req);
-    } catch (e: any) {
-      if (e instanceof SyntaxError) {
-        return invalid("Invalid JSON body", 400);
+    } catch (error: unknown) {
+      const aiRequest = url.pathname.startsWith("/api/ai/providers") || /^\/api\/incidents\/[^/]+\/investigate$/.test(url.pathname);
+      if (error instanceof HttpError) return apiError(error.message, "invalid_request", error.status);
+      if (error instanceof SyntaxError) {
+        return aiRequest ? apiError("Invalid JSON body", "invalid_request") : invalid("Invalid JSON body", 400);
       }
-      if (e?.message === "Body too large") {
-        return invalid("Body too large", 413);
+      if (error instanceof Error && error.message === "Body too large") {
+        return aiRequest ? apiError("Body too large", "invalid_request", 413) : invalid("Body too large", 413);
       }
-      console.error("Request failed", e?.message);
-      return invalid("Internal error", 500);
+      console.error("Request failed");
+      return aiRequest ? apiError("Internal error", "provider_unavailable", 500) : invalid("Internal error", 500);
     }
   },
   websocket: {

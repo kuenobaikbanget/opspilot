@@ -88,7 +88,7 @@ Nothing deploys automatically. A green release is build/publication evidence, no
 2. Enroll Go agent and get first metrics.
 3. Confirm threshold incident generated after 2 high samples.
 4. Run manual incident + diagnostic evidence.
-5. Configure one model API key; investigate and validate evidence IDs.
+5. Configure a stored connection in Provider settings with the Hub/Worker master key present; explicitly test, investigate and validate evidence IDs.
 6. Resolve incident, query memory and reuse previous resolution in subsequent investigation.
 7. Change a deliberately monitored harmless file; verify baseline/change behavior.
 
@@ -105,6 +105,22 @@ The script refuses `NODE_ENV=production` and non-loopback database connections. 
 No agent, diagnostic, HTTP probe or model request is started. Investigation examples have terminal states so the Worker does not execute them. Workload inventory and endpoint checks remain unavailable; this seed does not implement their APIs. Refresh the dashboard and use Incidents, Configuration drift and Incident memory to inspect the persisted examples.
 
 Run the isolated safety negatives with `bun test tests/seed-demo.test.ts`; these reject production and non-loopback targets before connecting to any database.
+
+## BYOK integration tests
+
+Run PostgreSQL 16 disposable, never Compose `pg_data` or a user's database. Set only the dedicated `AI_PROVIDER_TEST_DATABASE_URL` to a loopback PostgreSQL database whose basename starts `opspilot_byok_test`; the helper creates/drops randomized child databases. Without it, DB integration cases explicitly skip; CI provides it. Subprocess tests use `--no-env-file` and allowlisted environments. No paid provider credentials are needed.
+
+```bash
+AI_PROVIDER_TEST_DATABASE_URL=postgres://opspilot:opspilot_dev@127.0.0.1:55433/opspilot_byok_test \
+  bun --no-env-file test tests/contracts.test.ts tests/seed-demo.test.ts \
+  tests/ai-provider-credentials.test.ts tests/ai-provider-http.test.ts \
+  tests/ai-provider-adapters.test.ts tests/ai-providers.integration.test.ts \
+  tests/ai-provider-migrations.integration.test.ts
+bun run typecheck
+```
+
+HTTPS fixtures exercise native TLS, lookup pinning, response parsing and real Worker SQL using a dummy CA/credential. Fixture-only code maps an asserted public address to a local listener; this proves the transport contract, not connectivity to a public vendor. Native deadline tests use production 30-second limits with 45-second individual test timeouts.
+
 
 ## Do not overengineer initially
 

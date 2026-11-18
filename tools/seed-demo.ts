@@ -87,12 +87,12 @@ try {
           missing_evidence: ["Real process measurements", "Independent endpoint observations"],
           recommended_checks: ["Review measured process utilization before attributing host CPU to a service."],
         };
-        await tx`INSERT INTO investigations(id,incident_id,provider,status,result_json,created_at,started_at,completed_at)
-          VALUES(${demoId(4, index)},${id},'openai','completed',${report}::jsonb,${createdAt},${createdAt},${createdAt})`;
+        await tx`INSERT INTO investigations(id,incident_id,provider_id,provider_revision,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,created_at,started_at,completed_at)
+          VALUES(${demoId(4, index)},${id},NULL,NULL,'Demo data — authored example','openai-compatible',NULL,NULL,'completed',${report}::jsonb,${createdAt},${createdAt},${createdAt})`;
       }
       if (index === 1) {
-        await tx`INSERT INTO investigations(id,incident_id,provider,status,error,created_at,started_at,completed_at)
-          VALUES(${demoId(4, index)},${id},'openai','failed','Demo data — simulated provider timeout. No provider request was made.',${createdAt},${createdAt},${createdAt})`;
+        await tx`INSERT INTO investigations(id,incident_id,provider_id,provider_revision,provider_name,provider_protocol,provider_base_url,provider_model,status,error,created_at,started_at,completed_at)
+          VALUES(${demoId(4, index)},${id},NULL,NULL,'Demo data — authored example','openai-compatible',NULL,NULL,'failed','Demo data — simulated provider timeout. No provider request was made.',${createdAt},${createdAt},${createdAt})`;
       }
     }
     await tx`INSERT INTO audit_events(action,target_id,data) VALUES('demo.seed','local-demo-v1',${{ hosts: hosts.length, incidents: incidents.length, synthetic: true }}::jsonb)`;

@@ -2,6 +2,11 @@
 
 ## Unreleased — 2026-11-18
 
+- Added stored BYOK AI connections with encrypted credentials, manual protocol/model selection, revision-checked investigation snapshots, and explicit asynchronous synthetic connection tests.
+- Added public-only DNS-pinned HTTPS transport with verified TLS, bounded responses/deadlines and sanitized failures; no OAuth, automatic fallback, model discovery or 9Router dependency.
+- Added checksummed transactional migrations, explicit legacy credential importer and ordered Compose schema bootstrap. Existing deployments must stop old Hub/Worker before migration; see the cutover guide.
+- Fixed review findings in the BYOK importer, canonical UUID-bound credential replacement/audits, provider-first Worker claim locking, and Gemini 2.5 thinking budgets with reserved answer headroom.
+- Verified 62 Bun tests with disposable PostgreSQL/native HTTPS fixtures, all workspace typechecks and the real management UI at 1440/1024/390px. Fixed JSONB double encoding in audit/report persistence exposed by integration tests. No paid-provider calls or production deployment.
 - Split GitHub automation into clearly named CI, versioned Release and reusable GHCR Packages workflows. Version tags must be valid SemVer and belong to `main`; publication is gated by CI. Releases include Linux AMD64/ARM64 agent archives, systemd templates, SHA-256 checksums and generated notes.
 - Added multi-platform Hub/Worker/Web/Agent image publishing with version aliases restricted to stable releases. Pinned Bun container builds to 1.4.2 with frozen dependencies, verified Go modules, and excluded nested local build directories/environment secrets from Docker contexts. Documented required-check renaming, tag publication, package access, unsigned-artifact limitations and non-transactional image pushes.
 - Verified workflow syntax, version/ancestry guards, all four AMD64 image builds and the packaged Web server's HTTP response. No live GitHub release/package publication or production deployment was performed; see `docs/TESTING.md` for verification limits.

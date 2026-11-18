@@ -15,12 +15,28 @@ Use `bun run dev` from **repository root** so root `.env` is loaded as intended;
 
 ```bash
 cp .env.example .env
-# Fill ADMIN_PASSWORD_HASH, SESSION_SECRET, optionally provider API keys
+# Fill ADMIN_PASSWORD_HASH, SESSION_SECRET and AI_PROVIDER_ENCRYPTION_KEY
 # Ensure ADMIN_PASSWORD empty and COOKIE_SECURE=false for localhost only.
 docker compose --profile full up --build -d
 ```
 
-Services: `db`, `hub`, `worker`, `web`. DB and app ports bind to loopback. For remote exposure, publish **only** reverse-proxy HTTPS endpoint, use `COOKIE_SECURE=true`, and correct `ALLOWED_ORIGIN` (public origin). The Next.js `/api` rewrite points to `http://hub:3001` inside Compose and is built with that origin. Validate reverse proxy `Upgrade` for WSS and origin policy.
+Services: `db`, one-shot `migrate`, `hub`, `worker`, `web`. Hub/Worker wait for successful migrations; Web receives no env_file/master. DB and app ports bind to loopback. For remote exposure, publish **only** reverse-proxy HTTPS endpoint, use `COOKIE_SECURE=true`, and correct `ALLOWED_ORIGIN` (public origin). The Next.js `/api` rewrite points to `http://hub:3001` inside Compose and is built with that origin. Validate reverse proxy `Upgrade` for WSS and origin policy.
+
+
+## AI provider cutover
+
+For a new installation, generate `AI_PROVIDER_ENCRYPTION_KEY` with `openssl rand -base64 32`, share it with Hub/Worker, then add connections through Provider settings. Keep the master backup separate from DB backups. Saving is not a connection test. HTTPS public API roots only; private gateways and Responses-only OpenAI endpoints are unsupported.
+
+For an existing deployment:
+
+1. Back up PostgreSQL; securely generate/back up the new master.
+2. Stop old Hub/Worker binaries before changing schema.
+3. Run `bun run db:init` with the new runner (Compose full profile runs its one-shot `migrate` service).
+4. If importing old credentials, explicitly export legacy `OPENAI_API_KEY/OPENAI_MODEL`, `ANTHROPIC_API_KEY/ANTHROPIC_MODEL`, `GEMINI_API_KEY/GEMINI_MODEL` into the import process and run `bun --no-env-file run ai:import-env`. Both the package command and its nested importer disable automatic `.env` loading. The script neither reads nor edits `.env`, makes no network/model request, and does not run automatically at startup. Identical reruns are no-ops; collisions roll back the whole import.
+5. Start new Hub/Worker/Web and verify connection metadata, then explicitly test the chosen connection/model.
+6. Remove legacy provider variables from the deployment once import is verified.
+
+Do not run old binaries against the migrated schema. Legacy completed/failed reports retain results and unrecorded model/base URL; legacy pending jobs fail with a migration notice and must be started again. There is no master rotation/recovery automation: restore the original key or replace provider credentials manually under a replacement master.
 
 ## Published release assets and container images
 
@@ -81,11 +97,12 @@ This is intentionally a *limited capability* agent: `/proc` read-only mount may 
 - Backup DB with `pg_dump` (avoid copying mutable DB volume live).
 - Protect backup encryption and verify restore in a disposable environment.
 - Back up `agent` identity securely and document rotation; secret reuse after cloning hosts is dangerous.
+- Back up `AI_PROVIDER_ENCRYPTION_KEY` separately; a DB backup without its original master cannot decrypt provider credentials.
 - Config drift snapshot table only holds hashes, **not configuration backup**.
 
 ## Environment variables
 
-Hub: `DATABASE_URL`, `PORT`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, `ALLOWED_ORIGIN`, `COOKIE_SECURE`, `ALERT_*`. Worker: `DATABASE_URL`, `*_API_KEY`, `*_MODEL`, `INVESTIGATION_POLL_MS`. Web: `HUB_INTERNAL_URL` (server-side Next rewrite). Agent: `OPSPILOT_HUB_URL`, `OPSPILOT_ENROLL_TOKEN`, `OPSPILOT_AGENT_STATE_PATH`, `OPSPILOT_ALLOWED_SERVICES`, `OPSPILOT_CONFIG_FILES`, `OPSPILOT_ENABLE_DOCKER`, `OPSPILOT_PROC_ROOT`, `OPSPILOT_DISK_PATH`, `OPSPILOT_INTERVAL_SECONDS`.
+Hub: `DATABASE_URL`, `PORT`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, `ALLOWED_ORIGIN`, `COOKIE_SECURE`, `ALERT_*`, `AI_PROVIDER_ENCRYPTION_KEY`. Worker: `DATABASE_URL`, `AI_PROVIDER_ENCRYPTION_KEY`, `INVESTIGATION_POLL_MS`. Web: `HUB_INTERNAL_URL` (server-side Next rewrite), never master/provider keys. Agent: `OPSPILOT_HUB_URL`, `OPSPILOT_ENROLL_TOKEN`, `OPSPILOT_AGENT_STATE_PATH`, `OPSPILOT_ALLOWED_SERVICES`, `OPSPILOT_CONFIG_FILES`, `OPSPILOT_ENABLE_DOCKER`, `OPSPILOT_PROC_ROOT`, `OPSPILOT_DISK_PATH`, `OPSPILOT_INTERVAL_SECONDS`.
 
 ## Before external deployment
 

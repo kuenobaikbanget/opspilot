@@ -15,6 +15,7 @@
     "test": "bun test",
     "db:init": "bun run tools/migrate.ts",
     "db:seed:demo": "bun run tools/seed-demo.ts",
+    "ai:import-env": "bun --no-env-file run tools/import-ai-providers.ts",
     "password:hash": "bun run tools/hash-password.ts",
     "typecheck": "bun run --filter @opspilot/hub typecheck && bun run --filter @opspilot/worker typecheck && bun run --filter @opspilot/web typecheck"
   },

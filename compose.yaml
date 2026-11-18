@@ -16,6 +16,18 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  migrate:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.hub
+    command: ["bun", "--no-env-file", "tools/migrate.ts"]
+    environment:
+      DATABASE_URL: postgres://opspilot:opspilot_dev@db:5432/opspilot
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
   hub:
     profiles: ["full"]
     build:
@@ -31,6 +43,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
   worker:
     profiles: ["full"]
@@ -44,6 +58,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
   web:
     profiles: ["full"]

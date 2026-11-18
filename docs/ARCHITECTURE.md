@@ -56,12 +56,12 @@ sequenceDiagram
   participant DB as DB
   participant W as Worker
   participant L as LLM provider
-  UI->>H: POST incident/:id/investigate (provider)
+  UI->>H: POST investigate (providerId, revision, model)
   H->>A: fixed diagnostics enum (WSS)
   A-->>H: bounded, redacted results
-  H->>DB: store evidence, queue investigation
+  H->>DB: recheck revision, queue non-secret snapshot
   H-->>UI: 202 queued
-  W->>DB: lease investigation SKIP LOCKED
+  W->>DB: claim SKIP LOCKED, lock/check/decrypt provider
   W->>DB: load evidence + memory
   W->>L: evidence & context (BYOK)
   L-->>W: diagnosis JSON
@@ -86,7 +86,7 @@ sequenceDiagram
 | Agent offline | Dashboard shows offline; existing telemetry/incident data readable; no live diagnostics |
 | PostgreSQL unavailable | Hub health 503; API may error; agents reconnect, starter does not spool metrics |
 | LLM provider unavailable | Investigation failed with error; monitoring continues |
-| Missing provider API key | UI provider absent; no external calls |
+| Missing/invalid master or unreadable credential | Metadata/monitoring remain available; AI fails safely without external calls |
 | Agent credentials invalid | WSS denied; credentials never in URL query |
 | Diagnostic timeout | Worker can use partial evidence; no invented successful results |
 | File unreadable / symlink / >1MB | Skip hash; log absence must not be treated as drift |
@@ -213,10 +213,10 @@ opspilot/
 
 ### Boundaries and ownership
 
-- `web` never receives provider API keys, agent secrets or direct DB credentials. It requests `/api/*` from Hub via Next rewrite.
+- `web` accepts a new provider key only in the admin editor and sends it to Hub; it never receives saved keys/envelopes, master keys, agent secrets or direct DB credentials. It requests `/api/*` through Next rewrite and never calls providers directly.
 - The public `/design-system` route uses only synthetic examples and local state, without `/api` requests. Visual changes belong in shared tokens/primitives; root `DESIGN.md` records their contract, while `docs/BACKEND-DESIGN.md` records backend implementation.
 - `hub` performs authentication, rate/size admission, agent identity validation and state mutation; it **does not** directly call the external LLM.
-- `worker` only leases queued investigations and reads already-collected evidence. It never has direct reachability to agent WS sessions.
+- `worker` sequentially claims investigations and explicit synthetic provider tests, validates/decrypts their captured connection revision, and uses bounded public DNS-pinned HTTPS. It never has direct reachability to agent WS sessions.
 - `agent` uses fixed tools; no arbitrary command registry or plugin execution in starter.
 - `contracts` own wire types, public interfaces and validated enum values. Keep circular dependencies out.
 - `ai` own provider-specific request formats, evidence citations, redaction, schema checks; it must not import HTTP server internals.
