@@ -1,4 +1,4 @@
-# Technical Design — implementation specification
+# Backend Technical Design — OpsPilot
 
 ## Runtime & module contracts
 

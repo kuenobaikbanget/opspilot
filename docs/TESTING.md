@@ -112,6 +112,8 @@ Capture browser evidence for the real surface and separate backend/security/inte
 
 ## Incident benchmark fixture list (future)
 
+`tests/incident-fixtures/` contains **synthetic, annotated JSON research fixtures** (currently `config-drift-unrelated.json`, `nginx-bad-upstream.json`, and `prompt-injection-log.json`), not tests that automatically deploy an outage. None includes real credentials or confidential logs. Run a real local test environment and collect actual evidence IDs before comparing a model response to the labels; do not fabricate an LLM success score from these fixtures.
+
 1. `nginx_bad_upstream`: wrong localhost upstream port; expect listening port evidence.
 2. `backend_stopped`: app process missing; avoid blaming Nginx config without evidence.
 3. `docker_crashloop`: container restarting; Docker tooling only if explicitly enabled.
@@ -125,6 +127,21 @@ Capture browser evidence for the real surface and separate backend/security/inte
 
 Capture per fixture: expected cause, required evidence, allowed checks, unallowed actions, model output, latency, cost, judged usefulness.
 
-## Environment limitation of generated archive
+## Earlier verification history (2026-11-15 – 2026-11-16)
 
-The ZIP was generated in an environment without Bun/Docker and with no outbound package registry access. **Bun install, Next build, full Compose boot, Go module download and live LLM calls could not be executed here.** Syntax and structure were reviewed with locally available static tools only. Treat this as a developer scaffold requiring a first-machine smoke test, not a verified release binary.
+### Development-host verification — 2026-11-16
+
+- Installed workspace dependencies with Bun 1.4.2 (`bun.lock`) and downloaded the Go WebSocket dependency via `go mod tidy` (`agent/go.sum`).
+- `bun test`: 3 passed, 0 failed; `bun run typecheck`: Hub, Worker, and Web all passed; `bun run --cwd apps/web build`: Next.js 16.4.6 production build passed (`/` and `/design-system` prerendered).
+- Impeccable mechanical detector over the changed Web sources returned no findings.
+- Ran the Next.js development server and exercised `/design-system` in Chromium at 1440px and 390px: form errors and focus recovery, valid local preview, loading/finish/reset, slider keyboard bounds, unknown metrics, and evidence disclosure; observed no catalog API requests or horizontal overflow, verified visible keyboard focus and reduced-motion handling, and measured sampled default text contrast ratios of at least 8.22:1.
+- Exercised the migrated login/dashboard UI using temporary synthetic browser API responses (failed login, queued-investigation display, resolution, memory search); UI-only checks, not live integration evidence.
+- Still unverified in that pass: PostgreSQL initialization, live Hub/authentication, Linux agent enrollment and WSS, Docker image builds, Linux AMD64/ARM64 binaries, and external AI providers.
+
+### GitHub CI verification — 2026-11-16
+
+The [Checks run for commit `5d6b178`](https://github.com/kuenobaikbanget/opspilot/actions/runs/43803885453) completed successfully on Ubuntu runners: frozen Bun installation, Bun tests, all workspace typechecks, the Web production build, and `go test -mod=readonly ./...` in the Linux Go job. Linux Go unit-test success is not live agent enrollment, WSS interoperability, or an AMD64/ARM64 release-binary validation.
+
+## Environment limitation of generated archive (2026-11-15)
+
+The initial ZIP archive (2026-11-15) was generated in an environment without Bun/Docker and with no outbound package registry access. Static checks verified folder/file consistency, parseable JSON configs/fixtures, TypeScript/TSX syntax transpilation, Go `gofmt`, Compose YAML parsing, and ZIP integrity, while **Bun install, Next build, full Compose boot, Go module download, and live LLM calls could not be executed there.** Treat those original archive checks as historical static validation, replaced by the subsequent development-host, CI, and host-slice runs above.

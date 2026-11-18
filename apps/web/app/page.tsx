@@ -5,7 +5,7 @@ import Link from "next/link";
 import { BrandMark } from "../components/brand-mark";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../components/ui";
 import type { Host } from "@opspilot/contracts";
-import { HostWorkspace } from "./host-workspace";
+import { HostWorkspace } from "../components/host-workspace";
 type Incident = { id: string; title: string; category: string; status: string; hostname: string; agent_id: string; created_at: string; resolution: string | null };
 type Evidence = { id: string; source: string; content: string; created_at: string };
 type Investigation = { id: string; provider: string; status: string; result_json: { probable_cause?: string; confidence?: number | string; evidence_ids?: string[]; recommended_checks?: string[] } | null; error: string | null };

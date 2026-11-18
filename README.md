@@ -46,7 +46,7 @@ Open **http://localhost:3100/design-system**. The catalog uses synthetic example
 
 If port 3100 is occupied, run `bun run --cwd apps/web dev --port 3200` and open **http://localhost:3200/design-system**.
 
-Visual authority: [Design system](DESIGN.md). Implementation: `apps/web/app/tokens.css` and `apps/web/components/ui.tsx`. The live dashboard consumes the same primitives. Backend technical design remains in [docs/DESIGN.md](docs/DESIGN.md).
+Visual authority: [Design system](DESIGN.md). Implementation: `apps/web/app/tokens.css` and `apps/web/components/ui.tsx`. The live dashboard consumes the same primitives. Backend technical design remains in [docs/BACKEND-DESIGN.md](docs/BACKEND-DESIGN.md).
 
 Dashboard direction: [Fleet & services contract](docs/UI-UX.md#fleet-services-dashboard-contract-target), based on the supplied reference. Host/service tables and a contextual inspector keep agent connectivity, process state and endpoint reachability distinct. Service inventory and HTTP monitoring are planned, not shipped; see the [delivery gates](docs/ROADMAP.md#fleet-services-dashboard-delivery-planned).
 
@@ -126,21 +126,19 @@ See [publishing and package-access setup](docs/DEVELOPMENT.md#github-actions-rel
 ## Repository documents
 
 - [PRD](docs/PRD.md) — problem, audience, scope, acceptance criteria.
-- [Folder structure](docs/FOLDER_STRUCTURE.md) — module ownership and directory tree.
-- [Architecture](docs/ARCHITECTURE.md) — deployment, data/agent/AI diagrams.
-- [Technical design](docs/DESIGN.md) — module design and responsibilities.
+- [Architecture](docs/ARCHITECTURE.md) — deployment, data/agent/AI diagrams, ADRs, directory tree, and module ownership.
+- [Backend technical design](docs/BACKEND-DESIGN.md) — module design and responsibilities.
 - [Database](docs/DATABASE.md) — schema and retention strategy.
 - [API & agent protocol](docs/API.md) — endpoints, payloads and message contract.
 - [AI design](docs/AI-DESIGN.md) — providers, prompts, safety, evaluation, memory.
 - [Security](docs/SECURITY.md) — trust boundaries and shipping blockers.
-- [UI/UX](docs/UI-UX.md) — implemented screens plus the approved Fleet & services target, reference image and behavior contract.
+- [UI/UX](docs/UI-UX.md) — implemented screens, brand/logo guidelines, plus the approved Fleet & services target, reference image and behavior contract.
 - [Design system](DESIGN.md) — implemented UI tokens/component APIs and target dashboard composition; interactive primitive catalog at `/design-system`.
 - [Deployment](docs/DEPLOYMENT.md) — binary, Compose, reverse proxy.
-- [Development](docs/DEVELOPMENT.md) — day-to-day workflows.
-- [Testing](docs/TESTING.md) — tests, incident fixtures, validation checklist.
-- [Validation](docs/VALIDATION.md) — what was / was not verified when generating the ZIP.
+- [Development](docs/DEVELOPMENT.md) — day-to-day workflows and technology references.
+- [Testing](docs/TESTING.md) — tests, incident fixtures, verification history, validation checklist.
 - [Roadmap](docs/ROADMAP.md) — milestone plan and definition of done.
-- [ADRs](docs/adr/) — architectural trade-offs.
+- [Changelog](CHANGELOG.md) — release and unreleased change history.
 
 ## Design priorities
 

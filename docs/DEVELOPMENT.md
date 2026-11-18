@@ -31,7 +31,7 @@ If port 3100 is occupied: `bun run --cwd apps/web dev --port 3200`, then open `h
 - Shared native React components: `apps/web/components/ui.tsx`.
 - Interactive reference: `apps/web/app/design-system/`.
 - Visual specification: root `DESIGN.md`; Impeccable extensions: `.impeccable/design.json`.
-- Backend implementation design: `docs/DESIGN.md` (not the visual specification).
+- Backend implementation design: `docs/BACKEND-DESIGN.md` (not the visual specification).
 
 Use shared primitives instead of introducing parallel button/field styles. Connect field hints and errors with `aria-describedby`, use explicit submit button types, and retain written status/provenance labels. Unknown metrics are not zero. Check keyboard focus, reduced motion, and desktop/mobile rendering after visual changes.
 
@@ -113,3 +113,21 @@ No Redis, NATS, OpenTelemetry backend, Kubernetes Helm chart, advanced agent plu
 ## Dependencies
 
 Bun workspaces install TS frontend dependencies; backend uses built-in Bun HTTP/WebSocket/Postgres for small footprint. `bun.lock` and `agent/go.sum` are committed. Use `bun install --frozen-lockfile` for reproducible installation; update locks intentionally when dependencies change. `go mod tidy` updates Go dependency metadata. The agent targets Linux; use Linux, WSL2, or a Linux container for agent builds and tests rather than native Windows. Keep dependency versions up to date and pin for production.
+
+## Technology References
+
+Primary documentation considered when choosing this starter stack (reviewed as design references, not end-to-end benchmark results):
+
+- Bun workspaces: https://bun.com/docs/pm/workspaces
+- Bun workspace scripts / filters: https://bun.com/docs/pm/filter
+- Bun HTTP/WebSocket: https://bun.com/docs/runtime/http/websockets
+- Bun native SQL: https://bun.com/docs/runtime/sql
+- Next.js installation and App Router: https://nextjs.org/docs/app/getting-started/installation
+- PostgreSQL indexes: https://www.postgresql.org/docs/current/indexes.html
+- Go exec.CommandContext: https://pkg.go.dev/os/exec#CommandContext
+- Gorilla WebSocket: https://github.com/gorilla/websocket
+- OpenAI API documentation: https://platform.openai.com/docs
+- Anthropic Messages API: https://docs.anthropic.com/en/api/messages
+- Gemini API: https://ai.google.dev/gemini-api/docs
+
+Versions and model availability change. Verify against upstream documentation when implementing each integration.
