@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { isAuthDisabled } from "../apps/hub/src/auth";
 
 const root = new URL("../", import.meta.url).pathname;
 const origin = "http://localhost:3100";
@@ -58,13 +57,30 @@ async function waitHubReady(baseUrl: string, child: Bun.Subprocess) {
   throw new Error("Timed out waiting for Hub listener");
 }
 
-test("isAuthDisabled only enables bypass in non-production with explicit 'true'", () => {
-  expect(isAuthDisabled({ NODE_ENV: "development" })).toBe(false);
-  expect(isAuthDisabled({ NODE_ENV: "development", DISABLE_AUTH: "false" })).toBe(false);
-  expect(isAuthDisabled({ NODE_ENV: "development", DISABLE_AUTH: "1" })).toBe(false);
-  expect(isAuthDisabled({ NODE_ENV: "development", DISABLE_AUTH: "true" })).toBe(true);
-  expect(isAuthDisabled({ DISABLE_AUTH: "true" })).toBe(true);
-  expect(() => isAuthDisabled({ NODE_ENV: "production", DISABLE_AUTH: "true" })).toThrow(
+async function authDisabled(env: Record<string, string>) {
+  const child = Bun.spawn([process.execPath, "--no-env-file", "--eval", `
+    import { isAuthDisabled } from "./apps/hub/src/auth";
+    console.log(JSON.stringify(isAuthDisabled(JSON.parse(process.argv[1]))));
+  `, JSON.stringify(env)], {
+    cwd: root,
+    env: { PATH: process.env.PATH || "", NODE_ENV: "test", SESSION_SECRET: sessionSecret },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+  ]);
+  if (code !== 0) throw new Error(stderr);
+  return JSON.parse(stdout) as boolean;
+}
+
+test("isAuthDisabled only enables bypass in non-production with explicit 'true'", async () => {
+  expect(await authDisabled({ NODE_ENV: "development" })).toBe(false);
+  expect(await authDisabled({ NODE_ENV: "development", DISABLE_AUTH: "false" })).toBe(false);
+  expect(await authDisabled({ NODE_ENV: "development", DISABLE_AUTH: "1" })).toBe(false);
+  expect(await authDisabled({ NODE_ENV: "development", DISABLE_AUTH: "true" })).toBe(true);
+  expect(await authDisabled({ DISABLE_AUTH: "true" })).toBe(true);
+  await expect(authDisabled({ NODE_ENV: "production", DISABLE_AUTH: "true" })).rejects.toThrow(
     "DISABLE_AUTH cannot be enabled in production",
   );
 });

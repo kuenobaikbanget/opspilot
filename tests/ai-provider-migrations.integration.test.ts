@@ -9,6 +9,7 @@ import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/pro
 
 const root = new URL("../", import.meta.url).pathname;
 const master = Buffer.alloc(32).toString("base64");
+const migrationNames = ["001_init.sql", "002_ai_providers.sql", "003_services_endpoints.sql"];
 const ids = [1, 2, 3].map((n) => `d0000000-0000-4000-8000-${String(n).padStart(12, "0")}`);
 const presets = [AI_PROVIDER_PRESETS.openai, AI_PROVIDER_PRESETS.anthropic, AI_PROVIDER_PRESETS.gemini];
 const keys = ["dummy-openai-secret", "dummy-anthropic-secret", "dummy-gemini-secret"];
@@ -51,7 +52,7 @@ integration("fresh migrations create ledger and reruns preserve data", async () 
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
     const ledger = await db`SELECT * FROM schema_migrations ORDER BY name`;
-    expect(ledger.map((row) => row.name)).toEqual(["001_init.sql", "002_ai_providers.sql"]);
+    expect(ledger.map((row) => row.name)).toEqual(migrationNames);
     expect(ledger.every((row) => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
     await db`INSERT INTO ai_providers (id,name,protocol,base_url,default_model,enabled,api_key_ciphertext)
       VALUES (${randomUUID()},'sentinel','openai-compatible','https://example.com/v1','model',true,'ciphertext-sentinel')`;
@@ -104,15 +105,15 @@ integration("checksum mismatch stops runner and failed files roll back without a
       await appendFile(join(directory, "infra/db/002_ai_providers.sql"), "\n-- changed checksum\n");
       const mismatch = await run(runner, { DATABASE_URL: url });
       expect(mismatch.code).not.toBe(0); expect(mismatch.output).toContain("checksum mismatch");
-      expect((await db`SELECT count(*)::int AS count FROM schema_migrations`)[0].count).toBe(2);
+      expect((await db`SELECT count(*)::int AS count FROM schema_migrations`)[0].count).toBe(migrationNames.length);
     });
     await copiedRunner(async (directory, runner) => {
-      await Bun.write(join(directory, "infra/db/003_failure.sql"), "CREATE TABLE rollback_sentinel(id integer);\n-- statement-breakpoint\nSELECT * FROM deliberately_missing_relation;");
-      await Bun.write(join(directory, "infra/db/004_never.sql"), "CREATE TABLE successor_sentinel(id integer);");
+      await Bun.write(join(directory, "infra/db/004_failure.sql"), "CREATE TABLE rollback_sentinel(id integer);\n-- statement-breakpoint\nSELECT * FROM deliberately_missing_relation;");
+      await Bun.write(join(directory, "infra/db/005_never.sql"), "CREATE TABLE successor_sentinel(id integer);");
       expect((await run(runner, { DATABASE_URL: url })).code).not.toBe(0);
       const [tables] = await db`SELECT to_regclass('rollback_sentinel') AS rollback, to_regclass('successor_sentinel') AS successor`;
       expect(tables.rollback).toBeNull(); expect(tables.successor).toBeNull();
-      expect((await db`SELECT count(*)::int AS count FROM schema_migrations`)[0].count).toBe(2);
+      expect((await db`SELECT count(*)::int AS count FROM schema_migrations`)[0].count).toBe(migrationNames.length);
     });
   });
 }, 30000);
