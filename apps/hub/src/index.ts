@@ -412,7 +412,7 @@ const server = Bun.serve<SocketData>({
         if (!agentId) {
           return invalid("Invalid agent identity", 401);
         }
-        if (server.upgrade(req, { data: { agentId } })) {
+        if (server.upgrade(req, { data: { agentId, sessionId: crypto.randomUUID() } })) {
           return;
         }
         return invalid("Upgrade failed", 400);

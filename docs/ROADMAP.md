@@ -32,7 +32,7 @@ No promise of elapsed time is made here; phases are sequenced by dependencies. T
 
 ### Fleet & services dashboard delivery (planned)
 
-The [Monochrome workspace](UI-UX.md#fleet-services-dashboard-contract-target) implements the threshold-first Overview, host inventory, incident inspector and agent setup against existing data. Workload and endpoint capabilities still depend on the gates below:
+The [Monochrome workspace](UI-UX.md#fleet-services-dashboard-contract-target) implements the threshold-first Overview, host inventory, incident inspector and agent setup against existing data. Selected-host systemd status now reports one explicitly configured unit, observation time and collection availability. Broader workload and endpoint capabilities still depend on the gates below:
 
 - [ ] Define typed host/workload/endpoint read models, source timestamps, capability/unavailable reasons, stale policy and correctly scoped aggregate counts. Keep collection within the existing Hub/Worker/Go-agent module boundaries.
 - [ ] Implement opt-in, locally validated, bounded read-only Docker/systemd inventory and resource collection. Update `packages/contracts`, Go agent, API documentation and interoperability/negative tests together for any wire change; do not infer continuous inventory from `docker_status`.

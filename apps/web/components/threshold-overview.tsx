@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { finitePercent, type EndpointMonitor, type Host, type HostList, type HostService } from "@opspilot/contracts";
+import { finitePercent, type EndpointMonitor, type Host, type HostList } from "@opspilot/contracts";
 import { api } from "../lib/api";
 import { hasFreshSample, percent, pressure, resources, type Pressure, type Resource } from "../lib/host-pressure";
 import { Badge, Button } from "./ui";
@@ -31,7 +31,6 @@ type Props = {
   openIncidents: number | null;
   incidentsStale: boolean;
   incidents: OverviewIncidentSummary[];
-  services: HostService[];
   endpoints: EndpointMonitor[];
   servicesError: string;
   checkingEndpointId: string | null;
@@ -101,16 +100,8 @@ function RiskBadge({ reading }: { reading: Pressure }) {
   return <Badge tone="warning">Near limit</Badge>;
 }
 
-function serviceTone(state: HostService["state"]) {
-  if (state === "running") return "success";
-  if (state === "failed") return "danger";
-  if (state === "stopped") return "warning";
-  return "neutral";
-}
-
-function RiskCard({ risk, hostServices, selected, inspectorId, onSelect }: {
+function RiskCard({ risk, selected, inspectorId, onSelect }: {
   risk: Risk;
-  hostServices: HostService[];
   selected: boolean;
   inspectorId: string;
   onSelect: () => void;
@@ -122,9 +113,7 @@ function RiskCard({ risk, hostServices, selected, inspectorId, onSelect }: {
         <OverviewIcon name="server" />
         <span className="overview-identity">
           <span className="overview-hostname">{host.hostname}</span>
-          <span className="overview-meta">
-            Device · Agent online · {hostServices.length ? `${hostServices.filter(s => s.state === "running").length}/${hostServices.length} services running` : "No services recorded"}
-          </span>
+          <span className="overview-meta">Device · Agent online</span>
         </span>
         <RiskBadge reading={reading} />
       </Button>
@@ -135,22 +124,6 @@ function RiskCard({ risk, hostServices, selected, inspectorId, onSelect }: {
           <div><dt>Margin</dt><dd>{marginLabel(reading.headroom)}</dd></div>
         </dl>
         <ThresholdBar share={limitShare(reading)} />
-        <div className="overview-risk-services" aria-label={`Services on ${host.hostname}`}>
-          <span className="overview-meta">Services on server</span>
-          {hostServices.length ? (
-            <ul className="overview-service-tags" role="list">
-              {hostServices.map(service => (
-                <li key={service.id}>
-                  <Badge tone={serviceTone(service.state)} dot>
-                    {service.name} · {service.state}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <span className="overview-meta">No workload inventory recorded for this host.</span>
-          )}
-        </div>
       </div>
     </li>
   );
@@ -158,7 +131,6 @@ function RiskCard({ risk, hostServices, selected, inspectorId, onSelect }: {
 
 function PressureInspector({
   risk,
-  hostServices,
   incident,
   investigation,
   investigationLoading,
@@ -166,7 +138,6 @@ function PressureInspector({
   onOpenIncident,
 }: {
   risk: Risk;
-  hostServices: HostService[];
   incident: OverviewIncidentSummary | null;
   investigation: InvestigationSummary | null;
   investigationLoading: boolean;
@@ -197,10 +168,6 @@ function PressureInspector({
         <dl className="overview-evidence">
           <div><dt>Measured sample</dt><dd><SampleTime value={host.sampled_at} /></dd></div>
           <div><dt>Agent connection</dt><dd>Online</dd></div>
-          <div>
-            <dt>Running services</dt>
-            <dd>{hostServices.length ? hostServices.map(s => `${s.name} (${s.state})`).join(", ") : "None recorded"}</dd>
-          </div>
         </dl>
         <section className="overview-ai-card" aria-label="Advisory AI analysis">
           <div className="overview-ai-head">
@@ -266,9 +233,8 @@ function SummaryReading({ label, value, state }: { label: string; value: number 
   );
 }
 
-function InventoryRow({ host, hostServices, fresh, cached, thresholds, onInspectHost }: {
+function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
   host: Host;
-  hostServices: HostService[];
   fresh: boolean;
   cached: boolean;
   thresholds: HostList["thresholds"] | undefined;
@@ -282,7 +248,6 @@ function InventoryRow({ host, hostServices, fresh, cached, thresholds, onInspect
           <span className="overview-hostname">{host.hostname}</span>
           <span className="overview-meta">
             {host.version ? `Agent ${host.version}` : "Device"}
-            {hostServices.length ? ` · ${hostServices.map(s => `${s.name} (${s.state})`).join(", ")}` : ""}
           </span>
         </span>
       </div>
@@ -320,7 +285,6 @@ export function ThresholdOverview({
   openIncidents,
   incidentsStale,
   incidents,
-  services,
   endpoints,
   servicesError,
   checkingEndpointId,
@@ -435,7 +399,7 @@ export function ThresholdOverview({
       <div className="overview-pressure-workspace">
         <section className="overview-watchlist" aria-labelledby="overview-watchlist-heading">
           <div className="overview-section-head">
-            <h2 id="overview-watchlist-heading">Device &amp; services</h2>
+            <h2 id="overview-watchlist-heading">Devices at risk</h2>
             <span className="overview-meta overview-sort"><OverviewIcon name="sort" /> Risk first</span>
           </div>
           {risks.length ? (
@@ -444,7 +408,6 @@ export function ThresholdOverview({
                 <RiskCard
                   key={risk.host.id}
                   risk={risk}
-                  hostServices={services.filter(s => s.agent_id === risk.host.id)}
                   selected={selected?.host.id === risk.host.id}
                   inspectorId={inspectorId}
                   onSelect={() => {
@@ -516,7 +479,6 @@ export function ThresholdOverview({
           {selected ? (
             <PressureInspector
               risk={selected}
-              hostServices={services.filter(s => s.agent_id === selected.host.id)}
               incident={selectedIncident}
               investigation={selectedIncident ? (incidentDetails[selectedIncident.id] ?? null) : null}
               investigationLoading={Boolean(selectedIncident && loadingIncidentId === selectedIncident.id && !(selectedIncident.id in incidentDetails))}
@@ -543,7 +505,6 @@ export function ThresholdOverview({
               <InventoryRow
                 key={host.id}
                 host={host}
-                hostServices={services.filter(s => s.agent_id === host.id)}
                 fresh={fresh}
                 cached={cached}
                 thresholds={thresholds}
@@ -552,13 +513,6 @@ export function ThresholdOverview({
             ))}
           </ul>
         ) : <p className="overview-inventory-empty">{fleetError ? "Device inventory unavailable." : fleet ? "No devices to show." : "Loading device inventory…"}</p>}
-        <div className="overview-services-scope">
-          <h3>Service availability</h3>
-          <Badge tone="neutral">
-            {services.length ? `${services.filter(s => s.state === "running").length} / ${services.length} recorded running` : "Not collected"}
-          </Badge>
-          <p>Service status is tracked independently of agent connectivity.</p>
-        </div>
       </section>
     </div>
   );

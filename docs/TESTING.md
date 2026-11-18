@@ -140,6 +140,21 @@ Browser verification used a locally signed admin session, not a password-login t
 - Password brute force mitigated before release (currently NOT implemented).
 - All external ports except proxy unexposed in production.
 
+## Selected-host systemd verification
+
+Run the focused Bun checks with Go from `agent/go.mod` on `PATH` and `AI_PROVIDER_TEST_DATABASE_URL` pointing at a disposable loopback PostgreSQL 16 `opspilot_byok_test` base (the integration test creates and drops a randomized child database). The integration case skips without that explicit fixture URL. Never use the application DB.
+
+```bash
+bun --no-env-file test tests/systemd-report.test.ts tests/systemd.integration.test.ts tests/home-ui.test.ts tests/services.test.ts
+(cd agent && go test -mod=readonly ./internal/agent)
+bun --no-env-file run --filter @opspilot/hub --filter @opspilot/web typecheck
+```
+
+- The four Bun files passed **13 tests / 138 assertions** with disposable PostgreSQL 16 and the actual Go binary; Go agent tests and Hub/Web typechecks passed. Coverage includes default-off/invalid config over the Go wire, wrong credential and missing admin session, host spoofing, bad size/count/name/enum/time, legacy telemetry before/after invalid frames, fixture exclusion, socket replacement, out-of-order reports, age expiry, and removal of the measurement on opt-out.
+- A disposable Debian 12 amd64/KVM guest ran the packaged service unit as the unprivileged `opspilot` user. The same fixed `systemctl show` operation returned `LoadState=loaded` and `ActiveState=active`, `inactive`, and `failed` for `opspilot-verify.service`; the Hub returned `Running`, `Stopped`, then `Failed` from actual reports. Stopping the agent left the last `Stopped` observation and its timestamp unchanged but stale; restarting the agent produced a newer fresh `Stopped` observation. Denying access to the guest's system bus returned `Permission denied`; the Hub reported `unavailable` with the prior `Failed` sample still stale. Clearing the opt-in produced `disabled` with no measurement. No host units or access policy were changed.
+- A real updated Go agent running without a systemd manager reported `unsupported` and no measurement. A real Go agent built from the pre-feature revision sent ordinary telemetry without a service report; `/api/hosts/:id/metrics` returned samples and the service read stayed `report:null, service:null`. VM/container transport was isolated local HTTP/WS, not a production TLS deployment test.
+- A new Orca Chromium tab against isolated Next.js, Hub and PostgreSQL showed live unit state, original timestamps and fresh/offline transitions on Services. Switching hosts showed unsupported and not reported without leaking the VM's unit; denied access and explicit opt-out were shown separately. Keyboard selection on the mobile Hosts inspector showed the same opt-out. At 1440, 1024 and 390 CSS px, page scroll width matched the viewport. Desktop and mobile screenshots were inspected; the design detector returned `[]`. No endpoint scheduler, remediation, or real probe was exercised by the VM/browser scenario.
+
 <a id="fleet-services-dashboard-acceptance-planned"></a>
 
 ## Fleet & services dashboard acceptance (planned)

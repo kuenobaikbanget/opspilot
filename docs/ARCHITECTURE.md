@@ -44,6 +44,10 @@ sequenceDiagram
     A->>H: telemetry + config SHA256
     H->>DB: metrics + drift / alerts
   end
+  opt agent reports systemd status v1
+    A->>H: status for one locally opted-in unit
+    H->>DB: latest report and unit observation
+  end
 ```
 
 ## Investigation
@@ -100,7 +104,7 @@ sequenceDiagram
 5. Add pgvector semantic memory when measured FTS recall is insufficient; embeddings provider can differ from reasoning provider.
 6. Scale Hub gateway nodes only after introducing shared ephemeral connection routing and distributed alert state (current in-memory maps are one-Hub only).
 
-The [Fleet & services dashboard plan](ROADMAP.md#fleet-services-dashboard-delivery-planned) stays within these module boundaries: Go agent for opt-in workload inventory, Hub for authenticated configuration/read models and Worker for bounded scheduled HTTP checks. This is a planned extension, not a shipped probe service or a reason to add another independently deployed app. See the [data boundary](BACKEND-DESIGN.md#fleet-services-data-boundary-planned) and [security prerequisites](SECURITY.md#planned-inventory-and-endpoint-monitoring).
+The [Fleet & services dashboard plan](ROADMAP.md#fleet-services-dashboard-delivery-planned) stays within these module boundaries. The Go agent now reports one locally opted-in systemd unit over its existing socket; the Hub owns its selected-host read model. Broader inventory and bounded scheduled HTTP checks remain planned in the existing Go agent, Hub and Worker boundaries. See the [data boundary](BACKEND-DESIGN.md#fleet-services-data-boundary-planned) and [security prerequisites](SECURITY.md#planned-inventory-and-endpoint-monitoring).
 
 ## Architectural Decisions (ADR)
 

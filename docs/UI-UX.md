@@ -67,7 +67,7 @@ The reference case must remain representable: `web-01` has high host CPU; `store
 
 ### Delivery boundary
 
-The current starter has host telemetry and on-demand diagnostics, not continuous workload inventory, persisted endpoint configuration/results, scheduled HTTP probes or a probe-location registry. These require the staged work in [Roadmap](ROADMAP.md#fleet-services-dashboard-delivery-planned), the [technical data contract](BACKEND-DESIGN.md#fleet-services-data-boundary-planned), [API boundary](API.md#fleet-services-contract-boundary-planned), [security controls](SECURITY.md#planned-inventory-and-endpoint-monitoring) and [acceptance scenarios](TESTING.md#fleet-services-dashboard-acceptance-planned). Never fill missing production APIs with demo records.
+Hosts and Services show one explicitly configured systemd unit on the selected host. The original observation time and freshness are visible; disabled, not reported, unsupported and failed collection are not process states. Broader workload inventory, scheduled HTTP probes and a probe-location registry remain in the [Roadmap](ROADMAP.md#fleet-services-dashboard-delivery-planned). Existing manual endpoint checks remain separate. Never fill missing production APIs with demo records.
 
 ## Implemented navigation map
 

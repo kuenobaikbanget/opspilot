@@ -60,6 +60,7 @@ type config struct {
 	AllowedServices                       map[string]bool
 	ConfigFiles                           []string
 	Docker                                bool
+	SystemdUnit                           string
 }
 type safeConn struct {
 	mu sync.Mutex
@@ -106,7 +107,7 @@ func readConfig() config {
 			allowed[s] = true
 		}
 	}
-	return config{HubURL: strings.TrimRight(env("OPSPILOT_HUB_URL", "http://localhost:3001"), "/"), StatePath: env("OPSPILOT_AGENT_STATE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "identity.json")), ProcRoot: env("OPSPILOT_PROC_ROOT", "/proc"), DiskPath: env("OPSPILOT_DISK_PATH", "/"), Interval: time.Duration(seconds) * time.Second, AllowedServices: allowed, ConfigFiles: splitCSV(env("OPSPILOT_CONFIG_FILES", "")), Docker: env("OPSPILOT_ENABLE_DOCKER", "false") == "true"}
+	return config{HubURL: strings.TrimRight(env("OPSPILOT_HUB_URL", "http://localhost:3001"), "/"), StatePath: env("OPSPILOT_AGENT_STATE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "identity.json")), ProcRoot: env("OPSPILOT_PROC_ROOT", "/proc"), DiskPath: env("OPSPILOT_DISK_PATH", "/"), Interval: time.Duration(seconds) * time.Second, AllowedServices: allowed, ConfigFiles: splitCSV(env("OPSPILOT_CONFIG_FILES", "")), Docker: env("OPSPILOT_ENABLE_DOCKER", "false") == "true", SystemdUnit: os.Getenv("OPSPILOT_SYSTEMD_UNIT")}
 }
 func readIdentity(path string) (identity, error) {
 	var id identity
@@ -267,6 +268,25 @@ func runConnection(ws *websocket.Conn, cfg config) {
 		}
 	}
 	sendTelemetry()
+	go func() {
+		tick := time.NewTicker(systemdInterval)
+		defer tick.Stop()
+		for {
+			report := collectSystemd(ctx, cfg.SystemdUnit, querySystemd)
+			if ctx.Err() != nil {
+				return
+			}
+			if err := conn.send(report); err != nil {
+				log.Printf("systemd status send failed: %v", err)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
 	go func() {
 		tick := time.NewTicker(cfg.Interval)
 		defer tick.Stop()

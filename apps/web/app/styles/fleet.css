@@ -73,6 +73,12 @@
 .resource-history > p { line-height: 1.7; }
 .inspector-network { padding-block: var(--space-4); border-block: 1px solid var(--color-border); font-family: var(--font-mono); font-size: var(--text-sm); }
 .inspector-network p { display: flex; flex-wrap: wrap; gap: var(--space-3); margin: var(--space-2) 0; }
+.host-systemd { display: grid; gap: var(--space-2); padding-block: var(--space-4); }
+.host-systemd h3, .host-systemd p { margin: 0; }
+.host-systemd h3 { font-size: var(--text-base); }
+.host-systemd-observation { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-3); }
+.host-systemd-observation strong { min-width: 0; overflow-wrap: anywhere; font-size: var(--text-sm); }
+.host-systemd-observation .tiny { flex-basis: 100%; }
 .inspector-incident { padding-block: var(--space-6); }
 .inspector-incident h3 { margin: 0; color: var(--color-text-muted); font-size: var(--text-base); }
 .inspector-incident > p:first-of-type { margin-block: var(--space-5); font-size: var(--text-lg); overflow-wrap: anywhere; }

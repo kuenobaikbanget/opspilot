@@ -72,9 +72,15 @@ Tools are fixed in source code:
 
 No arbitrary URL fetch, filesystem read, or shell script tool is permitted. Add filesystem restrictions before broad deployment.
 
+### Periodic systemd status
+
+The local operator opts in to one literal `.service` name. This collector does not share the diagnostic allowlist or accept Hub-supplied names, operations, arguments, environment or paths. The agent invokes `/usr/bin/systemctl --system --no-pager --no-ask-password show --property=LoadState,ActiveState -- <unit>` without a shell and with a minimal environment. One query per 15 seconds, bounded by a 3-second deadline plus pipe cleanup and 1 KiB stdout; stderr is discarded. No sudo, root privileges, extra groups, host socket mounts or service control is needed or added. Access denial, missing units, unrecognized output and timeouts are not mapped to stopped.
+
+The Hub validates the version, complete object shape, single name, enum, size and clock window on the authenticated outbound socket. No client-supplied host ID is accepted. A superseded socket cannot submit new status, and older/equal observations cannot replace a newer one. The existing admin session gate protects selected-host reads. Only bounded unit/status metadata is persisted; raw command output and errors are never sent, stored or logged. The Hub retains the latest report and at most one last observed unit per host, not a history or per-sample audit stream. The periodic report is not a diagnostic action, liveness probe, remediation trigger or evidence about endpoint availability.
+
 ## Planned inventory and endpoint monitoring
 
-The [Fleet & services dashboard](UI-UX.md#fleet-services-dashboard-contract-target) introduces future collection requirements, not currently enabled tools or network access. The prohibition on arbitrary URL-fetch/shell diagnostics above remains unchanged.
+The [Fleet & services dashboard](UI-UX.md#fleet-services-dashboard-contract-target) defines broader collection requirements. The single-unit systemd slice above does not enable the planned tools or network access. The prohibition on arbitrary URL-fetch/shell diagnostics remains unchanged.
 
 - **Workload inventory:** opt-in, enumerated read-only collectors; agent-local runtime/service allowlists; fixed executable/API operations, deadlines and output bounds. Missing capability or denied permission is explicit unavailable data. Do not mount `docker.sock`, enable Docker access or grant journal/root privileges merely to populate a dashboard.
 - **HTTP checks:** dedicated operator-configured monitors, never model-selected targets or a generic agent fetch tool. Require admin authorization and same-origin mutation protection; persist and audit target, association and schedule changes. Do not add a new unauthenticated probe endpoint.

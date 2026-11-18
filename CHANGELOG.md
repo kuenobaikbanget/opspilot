@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — 2026-11-19
+
+- Added opt-in, read-only status for one locally configured systemd service. Hosts and Services show the selected agent's measured state and observation time, including stale/offline, explicitly disabled and unavailable/unsupported states. Existing host telemetry and endpoint check behavior are unchanged. Apply migration 004 before deploying the new Hub.
+
 ## Unreleased — 2026-11-18
 
 - Rebuilt the OpsPilot workspace from the Pencil Monochrome design: bottom dock, keyboard command search, threshold-first Overview, filterable Hosts, incident timeline, and three-step agent setup. The Hub exposes effective resource limits through the existing authenticated host read. Service and endpoint setup clearly report unavailable capabilities without sample data in live views.
