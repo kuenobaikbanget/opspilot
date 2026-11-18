@@ -105,6 +105,12 @@ Provider settings and Sign out remain in the lower utility area. Enroll host is 
 
 Browser verification used isolated synthetic API responses, not a live Hub/auth integration: desktop/mobile captures, 1440/1024/390/320px layout checks, navigation/current state, persisted collapse, keyboard focus, More disclosure, enrollment open/close focus and sign-out UI. Web TypeScript checks passed. Existing metric-width animation and root type-ramp detector findings are outside the sidebar change.
 
+### Command palette
+
+Open **Jump to…** or press `Ctrl+K` / `Cmd+K` from any signed-in dashboard view. The palette filters loaded hosts by name or ID, the latest loaded incidents by title, and quick actions by keyword. Suggestions come from loaded records; after an item is opened through the palette, up to three recent items replace suggestions for the current dashboard session.
+
+Use `↑` / `↓` to select, `Enter` to open, and `Esc` to dismiss and return focus. Host and incident results focus their existing inspector or detail. Quick actions open enrollment, provider settings, and incident memory without submitting a form. The **Services** filter explains that inventory and endpoint checks are not collected; it never shows sample services in the dashboard.
+
 ## Implemented screens / states
 
 ### Login

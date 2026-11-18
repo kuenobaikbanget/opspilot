@@ -19,6 +19,8 @@ type FleetIncident = {
 type Props = {
   refreshKey: number;
   onHosts: (hosts: Host[]) => void;
+  selected: string | null;
+  onSelectHost: (id: string | null) => void;
   onUnauthorized: () => void;
   openIncidents: number;
   incidents: FleetIncident[];
@@ -194,6 +196,8 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
 export function HostWorkspace({
   refreshKey,
   onHosts,
+  selected,
+  onSelectHost,
   onUnauthorized,
   openIncidents,
   incidents,
@@ -204,7 +208,6 @@ export function HostWorkspace({
   const [fleet, setFleet] = useState<HostList | null>(null);
   const [failure, setFailure] = useState("");
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
   const [selectionNotice, setSelectionNotice] = useState("");
   const selectedRef = useRef(selected);
   const loadedOnce = useRef(false);
@@ -227,8 +230,8 @@ export function HostWorkspace({
   const [installConfig, setInstallConfig] = useState<AgentInstallConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [configError, setConfigError] = useState("");
-  const callbacks = useRef({ onHosts, onUnauthorized });
-  callbacks.current = { onHosts, onUnauthorized };
+  const callbacks = useRef({ onHosts, onSelectHost, onUnauthorized });
+  callbacks.current = { onHosts, onSelectHost, onUnauthorized };
 
   const clearSecret = useCallback(() => {
     generation.current++;
@@ -289,10 +292,10 @@ export function HostWorkspace({
         callbacks.current.onHosts(next.hosts);
         if (!loadedOnce.current) {
           loadedOnce.current = true;
-          setSelected(next.hosts[0]?.id ?? null);
+          callbacks.current.onSelectHost(next.hosts[0]?.id ?? null);
         }
         if (selectedRef.current && !next.hosts.some(h => h.id === selectedRef.current)) {
-          setSelected(null);
+          callbacks.current.onSelectHost(null);
           setSelectionNotice("The selected host is no longer in the loaded host list. Select another host.");
         }
       } catch (e) {
@@ -373,7 +376,7 @@ export function HostWorkspace({
   function selectHost(id: string) {
     if (id === selected) return;
     selectWithTransition(() => {
-      setSelected(id);
+      onSelectHost(id);
       setSelectionNotice("");
     });
   }

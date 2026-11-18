@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { BrandMark } from "../components/brand-mark";
+import { CommandPalette } from "../components/command-palette";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../components/ui";
 import type { AiProvider, Host, ProviderProtocol } from "@opspilot/contracts";
 import { HostWorkspace } from "../components/host-workspace";
@@ -28,9 +29,13 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [hosts, setHosts] = useState<Host[]>([]);
+  const [selectedHost, setSelectedHost] = useState<string | null>(null);
+  const [hostFocusRequest, setHostFocusRequest] = useState(0);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const selectedIncident = useRef(selected);
+  selectedIncident.current = selected;
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
@@ -54,12 +59,14 @@ export default function Home() {
   const [hostRefresh, setHostRefresh] = useState(0);
   const [enrollmentOpen, setEnrollmentOpen] = useState(false);
   const enrollmentTrigger = useRef<HTMLButtonElement>(null);
-  const focusIncident = useRef(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const focusHeading = useRef(false);
+  const focusIncident = useRef<string | null>(null);
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   useEffect(() => {
     const unauthorized = () => {
       sessionGeneration.current++;
-      setLogged(false); setHosts([]); setDetail(null); setSelected(null);
+      setLogged(false); setHosts([]); setSelectedHost(null); setIncidents([]); setDetail(null); setSelected(null);
       setProviders([]); setEncryptionConfigured(false); setProviderId(""); setModel("");
       selectedProviderId.current = "";
     };
@@ -135,8 +142,13 @@ export default function Home() {
   }, [refreshProviders]);
 
   const loadDetail = useCallback(async (id: string) => {
-    try { setDetail(await api(`/incidents/${id}`)); }
-    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+    const generation = sessionGeneration.current;
+    try {
+      const next: Detail = await api(`/incidents/${id}`);
+      if (generation === sessionGeneration.current && selectedIncident.current === id) setDetail(next);
+    } catch (e: unknown) {
+      if (generation === sessionGeneration.current && selectedIncident.current === id) setError(e instanceof Error ? e.message : String(e));
+    }
   }, []);
 
   useEffect(() => {
@@ -157,11 +169,20 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [selected, logged, loadDetail]);
   useEffect(() => {
-    if (detail && focusIncident.current) {
-      focusIncident.current = false;
+    if (tab === "incidents" && detail && detail.incident.id === selected && detail.incident.id === focusIncident.current) {
+      focusIncident.current = null;
       document.getElementById("incident-detail-title")?.focus();
     }
-  }, [detail]);
+  }, [detail, selected, tab]);
+  useEffect(() => {
+    if (focusHeading.current) {
+      focusHeading.current = false;
+      heading.current?.focus();
+    }
+  }, [tab]);
+  useEffect(() => {
+    if (hostFocusRequest) document.getElementById("host-inspector")?.focus();
+  }, [hostFocusRequest]);
   useEffect(() => {
     if (tab === "memory") void api(`/memory?q=${encodeURIComponent(search)}`).then(setMemories).catch(e => setError(e.message));
   }, [tab, search]);
@@ -202,6 +223,32 @@ export default function Home() {
         await refreshProviders();
       } else setInvestigationError(cause instanceof Error ? cause.message : "Unable to start the investigation.");
     } finally { setBusy(false); }
+  }
+
+  function navigate(destination: Destination) {
+    focusIncident.current = null;
+    setTab(destination);
+    setDetail(null);
+    setSelected(null);
+  }
+
+  function openIncident(id: string) {
+    focusIncident.current = id;
+    if (id !== selected) {
+      setDetail(null);
+      setSelected(id);
+    } else if (tab === "incidents" && detail?.incident.id === id) {
+      focusIncident.current = null;
+      document.getElementById("incident-detail-title")?.focus();
+    }
+    setTab("incidents");
+    setResolution("");
+  }
+
+  function openEnrollment() {
+    setTab("hosts");
+    setEnrollmentOpen(true);
+    if (tab === "hosts" && enrollmentOpen) document.getElementById("host-enrollment")?.focus();
   }
 
   if (logged === null) return (
@@ -256,7 +303,7 @@ export default function Home() {
         </div>
         <nav className="sidebar-navigation" aria-label="Main navigation">
           {destinations.map(item => (
-            <Button key={item.id} variant="ghost" className={`nav ${tab === item.id ? "active" : ""}`} title={sidebarCollapsed ? item.label : undefined} aria-current={tab === item.id ? "page" : undefined} onClick={() => { setTab(item.id); setDetail(null); setSelected(null); }}>
+            <Button key={item.id} variant="ghost" className={`nav ${tab === item.id ? "active" : ""}`} title={sidebarCollapsed ? item.label : undefined} aria-current={tab === item.id ? "page" : undefined} onClick={() => navigate(item.id)}>
               <svg className="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={item.icon} /></svg>
               <span className="sidebar-label">{item.label}</span>
             </Button>
@@ -267,7 +314,7 @@ export default function Home() {
             <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h3m4 0h7M3 14h7m4 0h3M8 4v4m4 4v4" /></svg>
             <span className="sidebar-label">Provider settings</span>
           </Button>
-          <Button variant="ghost" className="nav" title={sidebarCollapsed ? "Sign out" : undefined} disabled={busy} onClick={() => { window.dispatchEvent(new Event("opspilot-clear-provider-draft")); setBusy(true); void api("/auth/logout", "POST").then(() => { sessionGeneration.current++; setLogged(false); setHosts([]); setDetail(null); setSelected(null); setProviders([]); setEncryptionConfigured(false); setProviderId(""); setModel(""); selectedProviderId.current = ""; }).catch(e => setError(e.message)).finally(() => setBusy(false)); }}>
+          <Button variant="ghost" className="nav" title={sidebarCollapsed ? "Sign out" : undefined} disabled={busy} onClick={() => { window.dispatchEvent(new Event("opspilot-clear-provider-draft")); setBusy(true); void api("/auth/logout", "POST").then(() => { sessionGeneration.current++; setLogged(false); setHosts([]); setSelectedHost(null); setIncidents([]); setDetail(null); setSelected(null); setProviders([]); setEncryptionConfigured(false); setProviderId(""); setModel(""); selectedProviderId.current = ""; }).catch(e => setError(e.message)).finally(() => setBusy(false)); }}>
             <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4M8 10h9m-4-4 4 4-4 4" /></svg>
             <span className="sidebar-label">Sign out</span>
           </Button>
@@ -275,14 +322,36 @@ export default function Home() {
       </aside>
 
       <main className="content" id="main-content" tabIndex={-1}>
-        <div className="dashboard-context"><span>{refreshedAt ? <>Incident refresh <time dateTime={refreshedAt}>{new Date(refreshedAt).toLocaleTimeString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}</time></> : "Waiting for observations"}</span></div>
+        <div className="dashboard-context">
+          <span>{refreshedAt ? <>Incident refresh <time dateTime={refreshedAt}>{new Date(refreshedAt).toLocaleTimeString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}</time></> : "Waiting for observations"}</span>
+          <CommandPalette hosts={hosts} incidents={incidents} onSelect={target => {
+            switch (target.category) {
+              case "hosts":
+                navigate("hosts");
+                setSelectedHost(target.id);
+                setHostFocusRequest(value => value + 1);
+                break;
+              case "incidents":
+                openIncident(target.id);
+                break;
+              case "actions":
+                if (target.id === "enroll") openEnrollment();
+                else {
+                  if (target.id === tab) heading.current?.focus();
+                  else focusHeading.current = true;
+                  navigate(target.id);
+                }
+                break;
+            }
+          }} />
+        </div>
         <header className="topbar">
           <div className="topbar-heading">
             <Button variant="ghost" className="sidebar-toggle" aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!sidebarCollapsed} aria-controls="opspilot-sidebar" onClick={toggleSidebar}>
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="2" /><path d="M7.5 3v14" /><path d={sidebarCollapsed ? "m11 8 2 2-2 2" : "m13 8-2 2 2 2"} /></svg>
             </Button>
             <div>
-              <h1>{page?.title ?? "Provider settings"}</h1>
+              <h1 ref={heading} tabIndex={-1}>{page?.title ?? "Provider settings"}</h1>
               <p className="muted">{page?.description ?? "Encrypted AI connections. Choose the endpoint and model explicitly; no automatic fallback."}</p>
             </div>
           </div>
@@ -291,7 +360,7 @@ export default function Home() {
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M16 7a6 6 0 1 0 .1 6M16 3v4h-4" /></svg>
               Refresh
             </Button>
-            <Button ref={enrollmentTrigger} aria-expanded={enrollmentOpen} aria-controls="host-enrollment" onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>
+            <Button ref={enrollmentTrigger} aria-expanded={enrollmentOpen} aria-controls="host-enrollment" onClick={openEnrollment}>
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
               Enroll host
             </Button>
@@ -300,14 +369,19 @@ export default function Home() {
 
         {error && <Notice tone="danger" role="alert" className="dashboard-alert"><span>{error}</span><Button variant="ghost" size="sm" onClick={() => setError("")}>Dismiss</Button></Notice>}
 
-        <div hidden={!fleetVisible}><HostWorkspace refreshKey={hostRefresh} onHosts={setHosts} onUnauthorized={() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }} openIncidents={open} incidents={incidents} onOpenIncident={id => { focusIncident.current = true; setTab("incidents"); setDetail(null); setSelected(id); setResolution(""); }} enrollmentOpen={enrollmentOpen && fleetVisible} onCloseEnrollment={() => { setEnrollmentOpen(false); enrollmentTrigger.current?.focus(); }} /></div>
+        <div hidden={!fleetVisible}>
+          <HostWorkspace refreshKey={hostRefresh} onHosts={setHosts} selected={selectedHost} onSelectHost={setSelectedHost}
+            onUnauthorized={() => { setLogged(false); setHosts([]); setSelectedHost(null); setIncidents([]); setDetail(null); setSelected(null); }}
+            openIncidents={open} incidents={incidents} onOpenIncident={openIncident}
+            enrollmentOpen={enrollmentOpen && fleetVisible} onCloseEnrollment={() => { setEnrollmentOpen(false); enrollmentTrigger.current?.focus(); }} />
+        </div>
         {incidentView && (
           <>
             <Panel role="region" aria-labelledby="incidents-title">
               <div className="panel-head"><div><h2 id="incidents-title">{tab === "drift" ? "Recorded hash changes" : "Incidents"}</h2><p>{tab === "drift" ? "Configuration drift incidents from the latest 100 records. This is not a complete file inventory." : "Diagnostics, evidence and AI analysis · Latest 100 records"}</p></div><Badge tone={visibleIncidents.some(i => i.status === "open") ? "warning" : "neutral"}>{visibleIncidents.filter(i => i.status === "open").length} open</Badge></div>
               <div className="list">
                 {visibleIncidents.length === 0 ? <div className="empty">{tab === "drift" ? "No configuration drift in the latest 100 incident records. This does not establish that all configurations are unchanged." : "No incidents recorded. Create one manually to test the investigation flow."}</div> : visibleIncidents.map(i => (
-                  <Button key={i.id} className={`incident ${selected === i.id ? "selected" : ""}`} aria-pressed={selected === i.id} onClick={() => { setSelected(i.id); setResolution(""); }}>
+                  <Button key={i.id} className={`incident ${selected === i.id ? "selected" : ""}`} aria-pressed={selected === i.id} onClick={() => { focusIncident.current = null; setSelected(i.id); setResolution(""); }}>
                     <span className="incident-main"><strong>{i.title}</strong><small>{i.hostname} · {i.category} · {new Date(i.created_at).toLocaleString()}</small></span>
                     <Badge tone={i.status === "resolved" ? "success" : "warning"}>{i.status}</Badge>
                   </Button>
@@ -321,9 +395,9 @@ export default function Home() {
                 </form>}
               </Panel>
 
-            {detail && (
+            {detail && detail.incident.id === selected && (
               <Panel className="detail" role="region" aria-labelledby="incident-detail-title">
-                <div className="panel-head"><div><h2 id="incident-detail-title" tabIndex={-1}>{detail.incident.title}</h2><p>{detail.incident.hostname} · {detail.incident.status}</p></div><Button variant="ghost" size="sm" onClick={() => { setDetail(null); setSelected(null); }}>Close detail</Button></div>
+                <div className="panel-head"><div><h2 id="incident-detail-title" tabIndex={-1}>{detail.incident.title}</h2><p>{detail.incident.hostname} · {detail.incident.status}</p></div><Button variant="ghost" size="sm" onClick={() => { focusIncident.current = null; setDetail(null); setSelected(null); }}>Close detail</Button></div>
                 <div className="detail-grid">
                   <div>
                     <h3>Measured evidence</h3>
