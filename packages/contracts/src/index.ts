@@ -198,6 +198,11 @@ export type HostList = {
   limit: number;
   observed_at: string;
   stale_after_seconds: number;
+  thresholds: {
+    cpu_percent: number | null;
+    memory_percent: number | null;
+    disk_percent: number | null;
+  };
 };
 
 /** Single time-series host metric sample returned by `GET /api/hosts/:id/metrics`. */

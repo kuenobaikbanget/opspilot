@@ -4,27 +4,29 @@
   "title": "Design System: OpsPilot",
   "extensions": {
     "colorMeta": {
-      "canvas": { "role": "neutral", "displayName": "Canvas navy" },
-      "surface": { "role": "neutral", "displayName": "Panel navy" },
-      "surface-raised": { "role": "neutral", "displayName": "Raised navy" },
-      "input": { "role": "neutral", "displayName": "Input navy" },
+      "canvas": { "role": "neutral", "displayName": "Canvas" },
+      "surface": { "role": "neutral", "displayName": "Surface" },
+      "surface-raised": { "role": "neutral", "displayName": "Raised surface" },
+      "input": { "role": "neutral", "displayName": "Input" },
       "border": { "role": "neutral", "displayName": "Structural border" },
       "border-strong": { "role": "neutral", "displayName": "Control border" },
       "text": { "role": "neutral", "displayName": "Primary text" },
       "text-muted": { "role": "neutral", "displayName": "Secondary text" },
-      "accent": { "role": "primary", "displayName": "Action mint" },
-      "accent-hover": { "role": "primary", "displayName": "Hover mint" },
-      "on-accent": { "role": "neutral", "displayName": "On mint" },
-      "success": { "role": "semantic", "displayName": "Success mint" },
-      "warning": { "role": "semantic", "displayName": "Warning amber" },
-      "danger": { "role": "semantic", "displayName": "Danger coral" },
-      "info": { "role": "semantic", "displayName": "Information blue" },
+      "accent": { "role": "primary", "displayName": "Action" },
+      "accent-hover": { "role": "primary", "displayName": "Action hover" },
+      "on-accent": { "role": "neutral", "displayName": "On action" },
+      "success": { "role": "semantic", "displayName": "Within limit" },
+      "warning": { "role": "semantic", "displayName": "Near limit" },
+      "danger": { "role": "semantic", "displayName": "Limit reached" },
+      "info": { "role": "semantic", "displayName": "Information" },
       "success-subtle": { "role": "semantic", "displayName": "Success surface" },
       "warning-subtle": { "role": "semantic", "displayName": "Warning surface" },
       "danger-subtle": { "role": "semantic", "displayName": "Danger surface" },
       "info-subtle": { "role": "semantic", "displayName": "Information surface" }
     },
-    "shadows": [],
+    "shadows": [
+      { "name": "command-dock", "value": "0 8px 28px #0005", "purpose": "Separate the floating dock from content beneath it." }
+    ],
     "motion": [
       { "name": "duration-fast", "value": "150ms", "purpose": "Button background/border and input border transitions; --duration-fast." },
       { "name": "duration-normal", "value": "220ms", "purpose": "Meter width and scoped host-inspector View Transitions; --duration-normal. Snapshot overlays pass pointer events through; mobile, unsupported browsers and reduced motion update immediately." },
@@ -32,8 +34,7 @@
       { "name": "reduced-motion", "value": "prefers-reduced-motion: reduce", "purpose": "Remove transitions and animations; restore automatic scrolling." }
     ],
     "breakpoints": [
-      { "name": "dashboard-columns-max", "value": "1100px" },
-      { "name": "dashboard-inspector-stacked-max", "value": "1279px" },
+      { "name": "incident-workspace-stacked-max", "value": "800px" },
       { "name": "catalog-compact-max", "value": "1000px" },
       { "name": "catalog-stacked-max", "value": "720px" },
       { "name": "dashboard-stacked-max", "value": "700px" },
@@ -45,25 +46,25 @@
       "name": "Primary button", "kind": "button", "refersTo": "button-primary",
       "description": "Button variant primary; native focus, hover, active, disabled and busy states.",
       "html": "<button class=\"ds-primary\" type=\"button\">Investigate</button>",
-      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);min-height:42px;max-width:100%;padding:var(--space-2) var(--space-4);border:1px solid var(--color-accent);border-radius:var(--radius-sm);background:var(--color-accent);color:var(--color-on-accent);font:650 var(--text-base)/1.4 var(--font-sans);cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-primary:hover:not(:disabled){background:var(--color-accent-hover);border-color:var(--color-accent-hover)}.ds-primary:active:not(:disabled){border-color:var(--color-accent)}.ds-primary:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-primary:disabled{opacity:.55;cursor:not-allowed}.ds-primary[aria-busy=true]{cursor:wait;border-style:dashed}@media(prefers-reduced-motion:reduce){.ds-primary{transition:none}}"
+      "css": ".ds-primary{min-height:38px;padding:8px 16px;border:1px solid var(--color-accent);border-radius:var(--radius-sm);background:var(--color-accent);color:var(--color-on-accent);font:500 12px var(--font-sans);cursor:pointer}.ds-primary:hover:not(:disabled){background:var(--color-accent-hover)}.ds-primary:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-primary:disabled{opacity:.45;cursor:not-allowed}.ds-primary[aria-busy=true]{cursor:wait;border-style:dashed}"
     },
     {
       "name": "Secondary button", "kind": "button", "refersTo": "button-secondary",
       "description": "Default Button variant for supporting actions.",
       "html": "<button class=\"ds-secondary\" type=\"button\">Refresh</button>",
-      "css": ".ds-secondary{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:var(--space-2) var(--space-4);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);background:var(--color-surface-raised);color:var(--color-text);font:650 var(--text-base)/1.4 var(--font-sans);cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-secondary:hover:not(:disabled){background:var(--color-border)}.ds-secondary:active:not(:disabled){border-color:var(--color-accent)}.ds-secondary:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-secondary:disabled{opacity:.55;cursor:not-allowed}.ds-secondary[aria-busy=true]{cursor:wait;border-style:dashed}@media(prefers-reduced-motion:reduce){.ds-secondary{transition:none}}"
+      "css": ".ds-secondary{min-height:38px;padding:8px 16px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-surface);color:var(--color-text);font:500 12px var(--font-sans);cursor:pointer}.ds-secondary:hover:not(:disabled){background:var(--color-border)}.ds-secondary:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-secondary:disabled{opacity:.45;cursor:not-allowed}"
     },
     {
       "name": "Ghost button", "kind": "button", "refersTo": "button-ghost",
       "description": "Low-emphasis Button variant, including dismissal actions.",
       "html": "<button class=\"ds-ghost\" type=\"button\">Dismiss</button>",
-      "css": ".ds-ghost{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:var(--space-2) var(--space-4);border:1px solid transparent;border-radius:var(--radius-sm);background:transparent;color:var(--color-accent);font:650 var(--text-base)/1.4 var(--font-sans);cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-ghost:hover:not(:disabled){background:var(--color-border)}.ds-ghost:active:not(:disabled){border-color:var(--color-accent)}.ds-ghost:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-ghost:disabled{opacity:.55;cursor:not-allowed}.ds-ghost[aria-busy=true]{cursor:wait;border-style:dashed}@media(prefers-reduced-motion:reduce){.ds-ghost{transition:none}}"
+      "css": ".ds-ghost{min-height:38px;padding:8px 16px;border:1px solid transparent;border-radius:var(--radius-sm);background:transparent;color:var(--color-accent);font:500 12px var(--font-sans);cursor:pointer}.ds-ghost:hover:not(:disabled){background:var(--color-border)}.ds-ghost:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-ghost:disabled{opacity:.45;cursor:not-allowed}"
     },
     {
       "name": "Danger button", "kind": "button", "refersTo": "button-danger",
       "description": "Explicit danger action variant; not an automatic remediation control.",
       "html": "<button class=\"ds-danger\" type=\"button\">Danger action</button>",
-      "css": ".ds-danger{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:var(--space-2) var(--space-4);border:1px solid var(--color-danger);border-radius:var(--radius-sm);background:var(--color-danger-subtle);color:var(--color-danger);font:650 var(--text-base)/1.4 var(--font-sans);cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-danger:hover:not(:disabled){background:var(--color-danger);color:var(--color-danger-subtle)}.ds-danger:active:not(:disabled){border-color:var(--color-accent)}.ds-danger:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-danger:disabled{opacity:.55;cursor:not-allowed}.ds-danger[aria-busy=true]{cursor:wait;border-style:dashed}@media(prefers-reduced-motion:reduce){.ds-danger{transition:none}}"
+      "css": ".ds-danger{min-height:38px;padding:8px 16px;border:1px solid var(--color-danger);border-radius:var(--radius-sm);background:var(--color-danger-subtle);color:var(--color-danger);font:500 12px var(--font-sans);cursor:pointer}.ds-danger:hover:not(:disabled){background:var(--color-danger);color:var(--color-danger-subtle)}.ds-danger:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}.ds-danger:disabled{opacity:.45;cursor:not-allowed}"
     },
     {
       "name": "Labeled input", "kind": "input", "refersTo": "input",
@@ -85,9 +86,9 @@
     },
     {
       "name": "Dashboard navigation", "kind": "nav", "refersTo": "navigation",
-      "description": "Dashboard in-page navigation: Hosts (the consolidated Fleet & services view), Incidents, Configuration drift and Incident memory; read-only provider availability and Sign out below. Enrollment remains in the content header. Not an exported Nav primitive. Current state uses aria-current and a static marker.",
-      "html": "<nav class=\"ds-nav\" aria-label=\"Example navigation\"><button class=\"ds-nav-item\" type=\"button\" aria-current=\"page\">Hosts</button><a class=\"ds-nav-item\" href=\"/design-system\">Design system</a></nav>",
-      "css": ".ds-nav{display:flex;flex-direction:column;gap:var(--space-2)}.ds-nav-item{display:inline-flex;align-items:center;justify-content:flex-start;min-height:44px;padding:var(--space-3);border:1px solid transparent;border-radius:var(--radius-sm);background:transparent;color:var(--color-text-muted);font:400 var(--text-sm)/1.4 var(--font-sans);text-align:left;text-decoration:none;cursor:pointer;transition:background-color var(--duration-fast) var(--ease-out),border-color var(--duration-fast) var(--ease-out)}.ds-nav-item:hover,.ds-nav-item[aria-current=page]{border-color:transparent;background:var(--color-surface-raised);color:var(--color-text)}.ds-nav-item[aria-current=page]{color:var(--color-accent)}.ds-nav-item:active{border-color:var(--color-accent)}.ds-nav-item:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}@media(max-width:700px){.ds-nav{flex-direction:row;flex-wrap:wrap}.ds-nav-item{flex:1 1 auto;justify-content:center;padding:var(--space-2);font-size:var(--text-xs);text-align:center}}@media(prefers-reduced-motion:reduce){.ds-nav-item{transition:none}}"
+      "description": "Bottom command dock. A neutral action surface indicates the current destination along with aria-current; a labeled count marks open incidents.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Example navigation\"><button class=\"ds-nav-item\" type=\"button\" aria-current=\"page\">Overview</button><button class=\"ds-nav-item\" type=\"button\">Services</button><button class=\"ds-nav-item\" type=\"button\">Hosts</button><button class=\"ds-nav-item\" type=\"button\">Incidents</button></nav>",
+      "css": ".ds-nav{display:inline-flex;gap:5px;padding:7px;border:1px solid var(--color-border);border-radius:14px;background:var(--color-surface)}.ds-nav-item{min-height:44px;padding:4px 10px;border:0;border-radius:9px;background:transparent;color:var(--color-text-muted);font:500 11px var(--font-sans)}.ds-nav-item[aria-current=page]{background:var(--color-accent);color:var(--color-on-accent)}.ds-nav-item:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px}"
     },
     {
       "name": "Information notice", "kind": "custom", "refersTo": "notice-info",
@@ -98,11 +99,13 @@
   ],
   "narrative": {
     "northStar": "Evidence before inference",
-    "overview": "OpsPilot is a compact operational interface for monitoring hosts and investigating incidents. Preserve its dark navy surfaces, mint actions, explicit status labels and restrained native controls. Measured observations, AI hypotheses and human-confirmed resolutions must remain visibly distinct. Host connectivity, workload process state and endpoint reachability are separate measured signals, never a single inferred health state.\n\nThis contract covers the implemented design system and the approved **Fleet & services** dashboard direction. `apps/web/app/tokens.css` is the executable token source; the frontmatter is its portable visual reference. Shared primitives live in `apps/web/components/ui.tsx`, their styles in `apps/web/app/globals.css`, and the public interactive reference at `/design-system`. The sidecar `.impeccable/design.json` extends this reference with states and preview snippets; it is not another runtime theme. `docs/DESIGN.md` remains the backend architecture document.\n\nThe [supplied dashboard reference](docs/assets/fleet-services-reference.png) establishes the target composition, not shipped functionality. [UI/UX](docs/UI-UX.md#fleet-services-dashboard-contract-target) owns its detailed behavior and acceptance criteria. Existing tokens and component APIs below remain implemented facts; sections marked **target** are implementation requirements, not claims that service inventory or endpoint monitoring already exists.",
-    "keyCharacteristics": ["Dark navy tonal surfaces with mint actions.", "Native controls, visible keyboard focus and explicit status text.", "Separate measured evidence, AI hypotheses and human-confirmed resolution.", "Compact responsive layouts without decorative elevation.", "Signal Focus: scoped fleet counts use the 2.5rem measurement role; a horizontally scrolling strip of named host selectors shares selection with the flat table. A 1.6:1 desktop workspace has a 360px minimum inspector; below 1280px the inspector follows the table before secondary drift/service disclosures. Pointer and native keyboard scrubbing expose actual timestamped CPU/memory/disk samples, preserve gaps and retain the observation across resource changes. Related incident navigation and recorded drift remain measured context; unavailable service inventory is disclosed on demand and workload/endpoint inspection remains planned.", "Precision Rail: sticky 232px desktop navigation collapses to a 72px icon-only rail with the brand mark, accessible names, native hover titles and a browser-persisted boolean preference. Four primary destinations consolidate Overview into Hosts; a static mint current marker, provider/sign-out utilities and labeled mobile navigation with a keyboard-operable More disclosure remain. Enrollment stays in the header; developer navigation and repeated context captions are omitted."],
+    "overview": "Threshold-first operations in the Pencil Monochrome workspace. Graphite surfaces, Geist and neutral actions emphasize real measurements and configured limits. Amber and rose identify only semantic risk. Production views never substitute illustrative host or endpoint data.",
+    "keyCharacteristics": ["Graphite surfaces and neutral actions.", "Geist for interface text, Geist Mono for values and identifiers.", "Labeled risk, measured headroom and independently scoped endpoint status.", "Workspace header, bottom command dock and keyboard search.", "Incident evidence, AI hypotheses and confirmed resolutions are visually distinct."],
     "rules": [
       { "name": "The Evidence Rule", "body": "Keep observations, AI hypotheses and human-confirmed resolution explicitly labeled; color alone is not provenance.", "section": "colors" },
-      { "name": "The Independent Signals Rule", "body": "An online agent or running process does not establish endpoint reachability; a failed endpoint does not establish host failure or root cause.", "section": "colors" }
+      { "name": "The Independent Signals Rule", "body": "An online agent or running process does not establish endpoint reachability; a failed endpoint does not establish host failure or root cause.", "section": "colors" },
+      { "name": "Independent Data States", "body": "The admin session is checked through /api/auth/me independently of incident reads. Incident failures leave host monitoring available, never present unavailable counts as zero, and label retained records as cached. Successful recovery clears only that source's error.", "section": "components" },
+      { "name": "Touch Targets", "body": "Shared controls use 44px minimum targets at widths of 700px and below or with a coarse pointer; the dock keeps text labels and does not widen the page.", "section": "components" }
     ],
     "dos": ["Do use shared native primitives and live CSS custom properties.", "Do label measured evidence, AI hypotheses and human-confirmed resolution separately.", "Do preserve visible focus, descriptive field errors and reduced-motion behavior.", "Do show missing measurements as unavailable rather than zero.", "Do keep host connectivity, process state and endpoint reachability independently labeled."],
     "donts": ["Don't use color alone to communicate status or provenance.", "Don't add decorative shadows, gradients or a competing token palette.", "Don't present catalog examples as live telemetry or persisted configuration.", "Don't assume Field or Notice supplies accessibility attributes that callers must set.", "Don't infer reachability or root cause from a running process, high CPU or overlapping timestamps.", "Don't pass screenshot data, example thresholds or planned controls off as live behavior."]

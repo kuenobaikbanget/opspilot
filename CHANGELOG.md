@@ -2,6 +2,7 @@
 
 ## Unreleased — 2026-11-18
 
+- Rebuilt the OpsPilot workspace from the Pencil Monochrome design: bottom dock, keyboard command search, threshold-first Overview, filterable Hosts, incident timeline, and three-step agent setup. The Hub exposes effective resource limits through the existing authenticated host read. Service and endpoint setup clearly report unavailable capabilities without sample data in live views.
 - Added stored BYOK AI connections with encrypted credentials, manual protocol/model selection, revision-checked investigation snapshots, and explicit asynchronous synthetic connection tests.
 - Added public-only DNS-pinned HTTPS transport with verified TLS, bounded responses/deadlines and sanitized failures; no OAuth, automatic fallback, model discovery or 9Router dependency.
 - Added checksummed transactional migrations, explicit legacy credential importer and ordered Compose schema bootstrap. Existing deployments must stop old Hub/Worker before migration; see the cutover guide.

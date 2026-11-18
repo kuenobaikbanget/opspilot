@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
+    "happy-dom": "^21.0.4",
     "typescript": "^5.9.0"
   }
 }

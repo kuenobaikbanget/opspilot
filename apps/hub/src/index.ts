@@ -26,7 +26,7 @@ import {
   sessionCookie,
 } from "./auth";
 import { audit, db } from "./db";
-import { createIncident } from "./incidents";
+import { createIncident, hostThresholds } from "./incidents";
 import { readAgentInstallConfig } from "./agent-install";
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
@@ -136,6 +136,7 @@ async function router(req: Request): Promise<Response> {
       limit,
       observed_at: new Date().toISOString(),
       stale_after_seconds: 60,
+      thresholds: hostThresholds(),
     };
     return j(result);
   }
