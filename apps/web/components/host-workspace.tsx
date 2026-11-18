@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { Host, HostList, HostMetric } from "@opspilot/contracts";
-import { Badge, Button, Field, Input, Notice, Panel } from "./ui";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import type { AgentInstallConfig, Host, HostList, HostMetric } from "@opspilot/contracts";
+import { Badge, Button, Input, Notice, Panel } from "./ui";
+import { buildAgentInstallCommand } from "../lib/agent-install";
 
 type FleetIncident = {
   id: string;
@@ -59,6 +61,14 @@ const measurementClass = (n: number | null) =>
         ? "measurement--warning"
         : "";
 
+function selectWithTransition(update: () => void) {
+  if (!document.startViewTransition || window.matchMedia("(prefers-reduced-motion: reduce), (max-width: 700px)").matches) {
+    update();
+    return;
+  }
+  document.startViewTransition(() => flushSync(update));
+}
+
 async function request(path: string, signal?: AbortSignal, method = "GET") {
   const r = await fetch(`/api${path}`, {
     credentials: "same-origin",
@@ -73,6 +83,8 @@ async function request(path: string, signal?: AbortSignal, method = "GET") {
 }
 
 function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resource: Resource }) {
+  const sliderId = useId();
+  const [cursorTime, setCursorTime] = useState<string | null>(null);
   const label = resources.find(r => r.key === resource)!.label;
   const rows = [...samples].sort((a, b) => Date.parse(a.sampled_at) - Date.parse(b.sampled_at));
   const valid = rows.filter(r => r[resource] != null && Number.isFinite(r[resource]));
@@ -87,6 +99,11 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
   const height = 180;
   const x = (t: number) => 48 + ((t - start) / (duration || 1)) * width;
   const y = (n: number) => 16 + height * (1 - n / 100);
+  const cursorIndex = rows.findIndex(r => r.sampled_at === cursorTime);
+  const index = cursorIndex < 0 ? rows.length - 1 : cursorIndex;
+  const observation = rows[index];
+  const cursorX = x(Date.parse(observation.sampled_at));
+  const measured = observation[resource] != null && Number.isFinite(observation[resource]);
 
   let interval = 15000;
   for (let i = 1; i < rows.length; i++) {
@@ -102,32 +119,67 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
         <h3>{label} utilization</h3>
         <span>{duration ? `${Math.round(duration / 60000)} min` : "Single sample"} · Raw samples</span>
       </figcaption>
+      <div className="history-observation">
+        <strong className={measurementClass(observation[resource])}>{percent(observation[resource])}</strong>
+        <time dateTime={observation.sampled_at}>{stamp(observation.sampled_at)}</time>
+      </div>
       <svg
         viewBox="0 0 548 232"
         role="img"
         aria-label={`${label} usage, 0 to 100 percent. ${valid.length} measured samples from ${stamp(rows[0].sampled_at)} to ${stamp(rows[rows.length - 1].sampled_at)}. Each bar is one observation; missing intervals remain empty.`}
+        onPointerMove={event => {
+          if (event.pointerType !== "mouse") return;
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const position = (event.clientX - bounds.left) / bounds.width * 548;
+          const timestamp = start + Math.max(0, Math.min(1, (position - 48) / width)) * duration;
+          let nearest = 0;
+          for (let i = 1; i < rows.length; i++) {
+            if (Math.abs(Date.parse(rows[i].sampled_at) - timestamp) < Math.abs(Date.parse(rows[nearest].sampled_at) - timestamp)) nearest = i;
+          }
+          setCursorTime(rows[nearest].sampled_at);
+        }}
       >
-        <text x="0" y="20">100%</text>
-        <text x="0" y="196">0%</text>
-        <line x1="36" x2="544" y1="196" y2="196" className="chart-grid" />
-        {valid.map((r, i) => (
+        {[0, 50, 100].map(value => (
+          <g key={value}>
+            <text x="0" y={y(value) + 4}>{value}%</text>
+            <line x1="48" x2="544" y1={y(value)} y2={y(value)} className="chart-grid" />
+          </g>
+        ))}
+        {valid.map(r => (
           <rect
-            key={i}
+            key={r.sampled_at}
             x={x(Date.parse(r.sampled_at)) - barWidth / 2}
             y={y(r[resource])}
             width={barWidth}
             height={(height * r[resource]) / 100}
             rx="1.5"
             className={`chart-bar ${measurementClass(r[resource])}`}
+            data-active={r.sampled_at === observation.sampled_at}
           >
             <title>{stamp(r.sampled_at)} · {percent(r[resource])}</title>
           </rect>
         ))}
+        <line x1={cursorX} x2={cursorX} y1="16" y2="196" className="chart-cursor" />
+        {measured && <circle cx={cursorX} cy={y(observation[resource])} r="4" className="chart-cursor-point" />}
         <text x="48" y="224">{time(rows[0].sampled_at)}</text>
         {duration > 0 && (
           <text x="528" y="224" textAnchor="end">{time(rows[rows.length - 1].sampled_at)}</text>
         )}
       </svg>
+      <div className="history-scrubber">
+        <label htmlFor={sliderId}>Inspect observation</label>
+        <span>{index + 1} / {rows.length}</span>
+        <input
+          id={sliderId}
+          type="range"
+          min={0}
+          max={rows.length - 1}
+          value={index}
+          disabled={rows.length === 1}
+          onChange={event => setCursorTime(rows[Number(event.target.value)].sampled_at)}
+          aria-valuetext={`${stamp(observation.sampled_at)}: ${measured ? percent(observation[resource]) : "No measurement"}`}
+        />
+      </div>
       <p className="tiny">
         {valid.length} measurements · No aggregation · {Intl.DateTimeFormat().resolvedOptions().timeZone}
         <br />
@@ -161,14 +213,65 @@ export function HostWorkspace({
   const [historyError, setHistoryError] = useState("");
   const [resource, setResource] = useState<Resource>("disk_percent");
   const [now, setNow] = useState(Date.now());
-  const [token, setToken] = useState<{ value: string; expires: number } | null>(null);
+  const [token, setToken] = useState<{ command: string; expires: number } | null>(null);
+  const tokenRef = useRef(token);
+  const generation = useRef(0);
+  const tokenController = useRef<AbortController | null>(null);
+  const enrollmentVisible = useRef(enrollmentOpen);
+  enrollmentVisible.current = enrollmentOpen;
   const [enrolling, setEnrolling] = useState(false);
   const enrollmentPanel = useRef<HTMLElement>(null);
   const [enrollError, setEnrollError] = useState("");
   const [copied, setCopied] = useState(false);
-  const [hubUrl, setHubUrl] = useState("");
+  const [copyError, setCopyError] = useState("");
+  const [installConfig, setInstallConfig] = useState<AgentInstallConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configError, setConfigError] = useState("");
   const callbacks = useRef({ onHosts, onUnauthorized });
   callbacks.current = { onHosts, onUnauthorized };
+
+  const clearSecret = useCallback(() => {
+    generation.current++;
+    tokenController.current?.abort();
+    tokenController.current = null;
+    tokenRef.current = null;
+    setToken(null);
+    setCopied(false);
+    setCopyError("");
+    setEnrollError("");
+    setEnrolling(false);
+  }, []);
+
+  const unauthorized = useCallback(() => {
+    enrollmentVisible.current = false;
+    clearSecret();
+    callbacks.current.onUnauthorized();
+  }, [clearSecret]);
+
+  useEffect(() => {
+    clearSecret();
+    setInstallConfig(null);
+    setConfigError("");
+    setConfigLoading(enrollmentOpen);
+    if (!enrollmentOpen) return;
+    let active = true;
+    const controller = new AbortController();
+    void request("/agents/install-config", controller.signal).then((config: AgentInstallConfig) => {
+      if (active && enrollmentVisible.current) setInstallConfig(config);
+    }).catch((e: unknown) => {
+      if (!active || !enrollmentVisible.current) return;
+      const message = e instanceof Error ? e.message : String(e);
+      if (message === "Unauthorized") unauthorized();
+      else setConfigError(message);
+    }).finally(() => {
+      if (active) setConfigLoading(false);
+    });
+    return () => {
+      active = false;
+      controller.abort();
+      clearSecret();
+    };
+  }, [enrollmentOpen, clearSecret, unauthorized]);
 
   useEffect(() => {
     let active = true;
@@ -195,7 +298,7 @@ export function HostWorkspace({
       } catch (e) {
         if (!active) return;
         const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") callbacks.current.onUnauthorized();
+        if (message === "Unauthorized") unauthorized();
         else setFailure(message);
       } finally {
         pending = false;
@@ -211,7 +314,7 @@ export function HostWorkspace({
       clearInterval(poll);
       clearInterval(clock);
     };
-  }, [refreshKey]);
+  }, [refreshKey, unauthorized]);
 
   useEffect(() => {
     setHistory(null);
@@ -233,7 +336,7 @@ export function HostWorkspace({
       } catch (e) {
         if (!active) return;
         const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") callbacks.current.onUnauthorized();
+        if (message === "Unauthorized") unauthorized();
         else setHistoryError(message);
       } finally {
         pending = false;
@@ -247,11 +350,11 @@ export function HostWorkspace({
       controller.abort();
       clearInterval(poll);
     };
-  }, [selected]);
+  }, [selected, unauthorized]);
 
   useEffect(() => {
-    if (token && now >= token.expires) setToken(null);
-  }, [now, token]);
+    if (token && now >= token.expires) clearSecret();
+  }, [now, token, clearSecret]);
 
   useEffect(() => {
     if (enrollmentOpen) {
@@ -267,42 +370,92 @@ export function HostWorkspace({
   const relatedIncident = host ? incidents.find(i => i.agent_id === host.id && i.status === "open") : undefined;
   const drift = incidents.find(i => i.category === "config_drift");
 
+  function selectHost(id: string) {
+    if (id === selected) return;
+    selectWithTransition(() => {
+      setSelected(id);
+      setSelectionNotice("");
+    });
+  }
+
   async function enroll() {
+    if (!enrollmentVisible.current || !installConfig) return;
+    clearSecret();
+    const current = generation.current;
+    const controller = new AbortController();
+    tokenController.current = controller;
     setEnrolling(true);
-    setEnrollError("");
-    setCopied(false);
-    setToken(null);
     try {
-      const result = await request("/agents/enrollment-token", undefined, "POST");
-      setToken({ value: result.token, expires: Date.now() + result.expiresInSeconds * 1000 });
+      const result = await request("/agents/enrollment-token", controller.signal, "POST");
+      if (current !== generation.current || !enrollmentVisible.current) return;
+      const next = {
+        command: buildAgentInstallCommand(installConfig, result.token),
+        expires: Date.now() + result.expiresInSeconds * 1000,
+      };
+      tokenRef.current = next;
+      setToken(next);
     } catch (e) {
+      if (current !== generation.current || !enrollmentVisible.current) return;
       const message = e instanceof Error ? e.message : String(e);
-      if (message === "Unauthorized") onUnauthorized();
+      if (message === "Unauthorized") unauthorized();
       else setEnrollError(message);
     } finally {
-      setEnrolling(false);
+      if (current === generation.current) setEnrolling(false);
     }
+  }
+
+  async function copyCommand() {
+    const secret = tokenRef.current;
+    if (!secret || !enrollmentVisible.current) return;
+    if (Date.now() >= secret.expires) {
+      clearSecret();
+      return;
+    }
+    const current = generation.current;
+    setCopied(false);
+    setCopyError("");
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(secret.command);
+      if (current === generation.current && enrollmentVisible.current && Date.now() < secret.expires) setCopied(true);
+    } catch {
+      if (current === generation.current && enrollmentVisible.current && Date.now() < secret.expires) {
+        setCopyError("Clipboard unavailable. Select and copy the install command manually.");
+      }
+    }
+  }
+
+  function closeEnrollment() {
+    enrollmentVisible.current = false;
+    clearSecret();
+    onCloseEnrollment();
   }
 
   return (
     <section aria-labelledby="fleet-title" className="fleet-section">
       <div className="fleet-summary" aria-label="Fleet summary">
-        <span>
+        <div className="fleet-summary-primary">
+          <span className="summary-label">Hosts online</span>
           <strong className={failure ? undefined : "measurement--success"}>
-            {fleet ? `${fleet.online} / ${fleet.total}` : "—"}
-          </strong>{" "}
-          hosts online <small>fleet{failure ? " · cached" : ""}</small>
-        </span>
-        <span>
-          <strong className={openIncidents ? "measurement--warning" : undefined}>{openIncidents}</strong>{" "}
-          open host incidents <small>latest 100</small>
-        </span>
-        <span>
-          <strong>—</strong> endpoints up <small>Monitoring unavailable</small>
-        </span>
-        <span>
-          <strong>—</strong> endpoints failing <small>Monitoring unavailable</small>
-        </span>
+            {fleet ? <>{fleet.online}<span className="summary-denominator"> / {fleet.total}</span></> : "—"}
+          </strong>
+          <small>fleet{failure ? " · cached" : ""}</small>
+        </div>
+        <div>
+          <span className="summary-label">Open host incidents</span>
+          <strong className={openIncidents ? "measurement--warning" : undefined}>{openIncidents}</strong>
+          <small>latest 100</small>
+        </div>
+        <div>
+          <span className="summary-label">Endpoints up</span>
+          <strong className="measurement--unknown">—</strong>
+          <small>Monitoring unavailable</small>
+        </div>
+        <div>
+          <span className="summary-label">Endpoints failing</span>
+          <strong className="measurement--unknown">—</strong>
+          <small>Monitoring unavailable</small>
+        </div>
       </div>
 
       {failure && (
@@ -312,6 +465,29 @@ export function HostWorkspace({
             ? `Showing stale cached values from ${stamp(fleet.observed_at)}; connectivity may have changed.`
             : "Fleet data is unavailable, not an empty fleet."}
         </Notice>
+      )}
+
+      {hosts.length > 0 && (
+        <div className="fleet-signals" role="group" aria-label="Select a loaded host">
+          {hosts.map(h => (
+            <Button
+              key={h.id}
+              variant="ghost"
+              className="fleet-signal"
+              aria-pressed={selected === h.id}
+              aria-controls="host-inspector"
+              aria-label={`${h.hostname}, ${h.status}${failure ? ", cached" : ""}, inspect host`}
+              title={`${h.hostname} · ${h.status}${failure ? " (cached)" : ""} · Last contact ${stamp(h.last_seen_at)}`}
+              onClick={() => selectHost(h.id)}
+            >
+              <span className="signal-track" aria-hidden="true">
+                <span className={failure ? "measurement--unknown" : h.status === "online" ? "measurement--success" : "measurement--warning"} />
+              </span>
+              <span className="signal-hostname">{h.hostname}</span>
+              <span className="signal-status">{h.status === "online" ? "Online" : "Offline"}{failure ? " · cached" : ""}</span>
+            </Button>
+          ))}
+        </div>
       )}
 
       <div className="fleet-workspace">
@@ -373,12 +549,11 @@ export function HostWorkspace({
                       <Button
                         variant="ghost"
                         aria-pressed={selected === h.id}
-                        onClick={() => {
-                          setSelected(h.id);
-                          setSelectionNotice("");
-                        }}
+                        aria-controls="host-inspector"
+                        onClick={() => selectHost(h.id)}
                       >
                         {h.hostname}
+                        <svg className="host-selection-arrow" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M4 10h12m-5-5 5 5-5 5" /></svg>
                         <span className="sr-only">
                           {selected === h.id ? ", selected" : ", inspect host"}
                         </span>
@@ -452,7 +627,123 @@ export function HostWorkspace({
             )}
             Samples older than {fleet?.stale_after_seconds ?? 60}s are stale. Offline agents retain historical observations; connectivity is not endpoint reachability.
           </p>
+          {host && (
+            <a className="inspector-jump" href="#host-inspector">
+              View {host.hostname} observations
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M10 3v14m-5-5 5 5 5-5" /></svg>
+            </a>
+          )}
 
+        </div>
+
+        <Panel className="host-inspector" id="host-inspector" role="region" aria-labelledby="host-inspector-title" tabIndex={-1}>
+          <div className="panel-head">
+            <h2 id="host-inspector-title">{host ? host.hostname : "Host inspector"}</h2>
+            {host && (
+              <Badge tone={host.status === "online" && !failure ? "success" : "warning"}>
+                {host.status === "online" ? "Online" : "Offline"}
+                {failure ? " (cached)" : ""}
+              </Badge>
+            )}
+          </div>
+
+          {!host ? (
+            <p className="muted" role="status">
+              {selectionNotice || "Select a host to inspect its observations and resource history."}
+            </p>
+          ) : (
+            <>
+              <div className="inspector-resources" role="group" aria-label="Resource history">
+                <span className="sr-only">Choose a resource to view its history</span>
+                {resources.map(({ key, label }) => (
+                  <Button
+                    key={key}
+                    variant="ghost"
+                    aria-pressed={resource === key}
+                    onClick={() => {
+                      if (resource !== key) selectWithTransition(() => setResource(key));
+                    }}
+                  >
+                    <span
+                      className={`resource-value ${measurementClass(host[key])}`}
+                      aria-label={host[key] == null ? "No measurement" : undefined}
+                    >
+                      {percent(host[key])}
+                    </span>
+                    <span className="resource-label">{label}</span>
+                  </Button>
+                ))}
+              </div>
+
+              <p className="tiny inspector-sample">
+                Sample <time dateTime={host.sampled_at ?? undefined}>{stamp(host.sampled_at)}</time> ·{" "}
+                {failure
+                  ? "Cached, not live"
+                  : host.status === "offline"
+                    ? "Historical, not live"
+                    : stale(host)
+                      ? "Stale / unavailable"
+                      : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}
+              </p>
+
+              {historyError && (
+                <Notice tone="warning">
+                  Resource history refresh failed: {historyError}.{" "}
+                  {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}
+                </Notice>
+              )}
+              <div className="history-stage">
+                {history && history.id === host.id ? (
+                  <ResourceHistory key={host.id} samples={history.samples} resource={resource} />
+                ) : (
+                  !historyError && <p className="empty" role="status">Loading resource history…</p>
+                )}
+              </div>
+
+              <div className="inspector-network">
+                <p>
+                  RX / TX <span className="muted">Rates unavailable</span>
+                </p>
+                <p>
+                  Uptime <span className="muted">Not collected</span>
+                </p>
+              </div>
+
+              <section className="inspector-incident" aria-labelledby="related-incident-title">
+                <h3 id="related-incident-title">Related incident</h3>
+                {relatedIncident ? (
+                  <>
+                    <p>{relatedIncident.title}</p>
+                    <Button variant="primary" onClick={() => onOpenIncident(relatedIncident.id)}>
+                      Open investigation{" "}
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M5 12h14 M13 6l6 6-6 6" />
+                      </svg>
+                    </Button>
+                  </>
+                ) : (
+                  <p className="muted small">No open incident for this host in the latest 100 records.</p>
+                )}
+                <p className="tiny">Measured signals only. No root cause inferred.</p>
+              </section>
+
+              <details className="host-metadata">
+                <summary>Host identity &amp; last contact</summary>
+                <p className="tiny">OS and capacity unavailable · Not collected</p>
+                <dl className="host-facts">
+                  <dt>Host ID</dt>
+                  <dd>{host.id}</dd>
+                  <dt>Agent version</dt>
+                  <dd>{host.version || "Unavailable"}</dd>
+                  <dt>Last agent contact</dt>
+                  <dd>
+                    {stamp(host.last_seen_at)} · {age(host.last_seen_at, now)}
+                  </dd>
+                </dl>
+              </details>
+            </>
+          )}
+        </Panel>
           {drift && (
             <section className="fleet-drift" aria-labelledby="fleet-drift-title">
               <h2 id="fleet-drift-title">Monitored file changed</h2>
@@ -525,112 +816,6 @@ export function HostWorkspace({
               </div>
             </section>
           </details>
-        </div>
-
-        <Panel className="host-inspector" role="region" aria-labelledby="host-inspector-title">
-          <div className="panel-head">
-            <h2 id="host-inspector-title">{host ? host.hostname : "Host inspector"}</h2>
-            {host && (
-              <Badge tone={host.status === "online" && !failure ? "success" : "warning"}>
-                {host.status === "online" ? "Online" : "Offline"}
-                {failure ? " (cached)" : ""}
-              </Badge>
-            )}
-          </div>
-
-          {!host ? (
-            <p className="muted" role="status">
-              {selectionNotice || "Select a host to inspect its observations and resource history."}
-            </p>
-          ) : (
-            <>
-              <p className="tiny host-platform">OS and capacity unavailable · Not collected</p>
-              <div className="inspector-resources" role="group" aria-label="Resource history">
-                <span className="sr-only">Choose a resource to view its history</span>
-                {resources.map(({ key, label }) => (
-                  <Button
-                    key={key}
-                    variant="ghost"
-                    aria-pressed={resource === key}
-                    onClick={() => setResource(key)}
-                  >
-                    <span
-                      className={`resource-value ${measurementClass(host[key])}`}
-                      aria-label={host[key] == null ? "No measurement" : undefined}
-                    >
-                      {percent(host[key])}
-                    </span>
-                    <span className="resource-label">{label}</span>
-                  </Button>
-                ))}
-              </div>
-
-              <p className="tiny inspector-sample">
-                Sample <time dateTime={host.sampled_at ?? undefined}>{stamp(host.sampled_at)}</time> ·{" "}
-                {failure
-                  ? "Cached, not live"
-                  : host.status === "offline"
-                    ? "Historical, not live"
-                    : stale(host)
-                      ? "Stale / unavailable"
-                      : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}
-              </p>
-
-              {historyError && (
-                <Notice tone="warning">
-                  Resource history refresh failed: {historyError}.{" "}
-                  {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}
-                </Notice>
-              )}
-              {history && history.id === host.id ? (
-                <ResourceHistory samples={history.samples} resource={resource} />
-              ) : (
-                !historyError && <p role="status">Loading resource history…</p>
-              )}
-
-              <div className="inspector-network">
-                <p>
-                  RX / TX <span className="muted">Rates unavailable</span>
-                </p>
-                <p>
-                  Uptime <span className="muted">Not collected</span>
-                </p>
-              </div>
-
-              <section className="inspector-incident" aria-labelledby="related-incident-title">
-                <h3 id="related-incident-title">Related incident</h3>
-                {relatedIncident ? (
-                  <>
-                    <p>{relatedIncident.title}</p>
-                    <Button variant="primary" onClick={() => onOpenIncident(relatedIncident.id)}>
-                      Open investigation{" "}
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M5 12h14 M13 6l6 6-6 6" />
-                      </svg>
-                    </Button>
-                  </>
-                ) : (
-                  <p className="muted small">No open incident for this host in the latest 100 records.</p>
-                )}
-                <p className="tiny">Measured signals only. No root cause inferred.</p>
-              </section>
-
-              <details className="host-metadata">
-                <summary>Host identity &amp; last contact</summary>
-                <dl className="host-facts">
-                  <dt>Host ID</dt>
-                  <dd>{host.id}</dd>
-                  <dt>Agent version</dt>
-                  <dd>{host.version || "Unavailable"}</dd>
-                  <dt>Last agent contact</dt>
-                  <dd>
-                    {stamp(host.last_seen_at)} · {age(host.last_seen_at, now)}
-                  </dd>
-                </dl>
-              </details>
-            </>
-          )}
-        </Panel>
       </div>
 
       <section
@@ -644,15 +829,27 @@ export function HostWorkspace({
         <div className="panel-head">
           <div>
             <h2 id="enroll-host-title">Enroll a Linux host</h2>
-            <p>Admin-only, one-time secret. Expires in 10 minutes; never stored in this browser.</p>
+            <p>Copy one command, SSH to the intended host, and paste it there.</p>
           </div>
-          <Button size="sm" variant="ghost" onClick={onCloseEnrollment}>
+          <Button size="sm" variant="ghost" onClick={closeEnrollment}>
             Close enrollment
           </Button>
         </div>
 
-        <Button loading={enrolling} onClick={() => void enroll()}>
-          Generate enrollment token
+        <p className="small">
+          Requires Linux with running systemd, amd64 or arm64, curl and CA certificates.
+          {" "}Run as root or with sudo (which may prompt for your password). No Go toolchain or repository checkout needed.
+        </p>
+        {configLoading && <p role="status">Loading installation configuration…</p>}
+        {configError && <Notice tone="warning" role="alert">{configError}. Monitoring and manual enrollment remain available.</Notice>}
+        {installConfig && (
+          <p className="small">
+            Hub: <code>{installConfig.hubUrl}</code><br />
+            Pinned release: <code>{installConfig.version}</code> from <code>{installConfig.repository}</code>
+          </p>
+        )}
+        <Button loading={enrolling} disabled={!installConfig || configLoading} onClick={() => void enroll()}>
+          Generate install command
         </Button>
 
         {enrollError && (
@@ -661,53 +858,30 @@ export function HostWorkspace({
           </Notice>
         )}
 
-        {token && (
+        {token && now < token.expires && (
           <div className="enrollment-secret">
+            <Notice tone="warning">
+              This command contains a one-time token and may remain in shell history and the clipboard. It expires after 10 minutes; use it only on the intended host.
+            </Notice>
             <p>
               Expires {new Date(token.expires).toLocaleTimeString()} ·{" "}
-              {Math.max(0, Math.ceil((token.expires - now) / 1000))}s remaining. Usable once; creating another does not revoke earlier tokens.
+              {Math.max(0, Math.ceil((token.expires - now) / 1000))}s remaining.
+              {" "}Usable once; creating another does not revoke earlier tokens.
             </p>
+            <pre className="agent-command" tabIndex={0} aria-label="Install command"><code>{token.command}</code></pre>
             <div className="token">
-              <code>{token.value}</code>
-              <Button
-                size="sm"
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(token.value)
-                    .then(() => setCopied(true))
-                    .catch(() => setEnrollError("Clipboard unavailable. Select and copy the token manually."))
-                }
-              >
-                {copied ? "Copied" : "Copy token"}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setToken(null)}>
-                Hide secret
-              </Button>
+              <Button size="sm" onClick={() => void copyCommand()}>Copy install command</Button>
+              <Button size="sm" variant="ghost" onClick={clearSecret}>Hide command</Button>
+              {copied && <span role="status">Install command copied.</span>}
             </div>
+            {copyError && <Notice tone="warning" role="alert">{copyError}</Notice>}
           </div>
         )}
 
-        <Field
-          id="agent-hub-url"
-          label="Hub URL reachable from the Linux host"
-          hint="Use HTTPS for remote hosts. The hub must accept agent HTTP/WebSocket connections."
-        >
-          <Input
-            id="agent-hub-url"
-            type="url"
-            value={hubUrl}
-            onChange={e => setHubUrl(e.target.value)}
-            placeholder="https://your-hub.example.com"
-            aria-describedby="agent-hub-url-hint"
-          />
-        </Field>
-
-        <p className="small">On the Linux host, install Go and obtain this OpsPilot repository. From its root, run:</p>
-        <pre className="agent-command">
-          <code>{`cd agent\ngo mod download\nOPSPILOT_HUB_URL='${(hubUrl || "https://YOUR-HUB-HOST").replaceAll("'", "'\\''")}' \\\nOPSPILOT_ENROLL_TOKEN='<paste the one-time token>' \\\ngo run ./cmd/opspilot-agent`}</code>
-        </pre>
         <p className="tiny">
-          Identity is saved at ~/.local/share/opspilot-agent/identity.json (0600). Later starts reuse it without an enrollment token. Keep the agent running; this table refreshes every 10 seconds.
+          The installer verifies the pinned binary and enables a nonroot systemd service.
+          {" "}Hiding a command does not clear clipboard/history or revoke its token.
+          {" "}Verify the host’s Online status and fresh measurements in the fleet table; it refreshes every 10 seconds.
         </p>
       </section>
     </section>

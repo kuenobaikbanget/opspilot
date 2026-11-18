@@ -119,6 +119,14 @@ export function parseInvestigateRequest(value: unknown): InvestigateRequest | nu
   return model === null ? null : { providerId: value.providerId, providerRevision: value.providerRevision, model };
 }
 
+/** Explicit server-configured metadata for pinned Linux agent installation. */
+export type AgentInstallConfig = {
+  hubUrl: string;
+  installerUrl: string;
+  version: string;
+  repository: string;
+};
+
 /** Periodic host telemetry message emitted by an enrolled agent. */
 export type AgentTelemetry = {
   type: "telemetry";

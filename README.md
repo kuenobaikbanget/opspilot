@@ -52,20 +52,25 @@ Dashboard direction: [Fleet & services contract](docs/UI-UX.md#fleet-services-da
 
 ### Enroll a host
 
-1. Sign in → **Generate enrollment token**. Token expires in 10 minutes, usable once.
-2. Install the Go agent locally:
+Dashboard **Enroll host** offers one copyable command for a headless Linux host with running systemd (amd64/arm64), root or sudo, and the required download/system utilities. The Hub must have explicit HTTPS installation metadata and a pinned compatible published release; see [deployment setup](docs/DEPLOYMENT.md#curl-based-headless-linux-installation).
+
+**Deployment prerequisite:** GitHub currently has no published releases. After merge, publish a reviewed release containing the new `opspilot-agent enroll` command before configuring dashboard onboarding. An example or older tag is not a working installer release.
+
+The command contains a one-use token, expires after 10 minutes, and may remain in shell history, clipboard and process arguments. Hiding it or generating another does not revoke earlier tokens. Verify **Online** and fresh measurements in the fleet table; an active local service alone is not connectivity proof.
+
+For local development or manual enrollment when dashboard installation is unconfigured, obtain a token through the authenticated [manual API](docs/API.md), then run from source:
 
 ```bash
 cd agent
 go mod download
 OPSPILOT_HUB_URL=http://localhost:3001 \
-OPSPILOT_ENROLL_TOKEN='<one-time-token-from-dashboard>' \
+OPSPILOT_ENROLL_TOKEN='<one-time-token-from-manual-api>' \
 OPSPILOT_ALLOWED_SERVICES='nginx,docker,sshd' \
 OPSPILOT_CONFIG_FILES='/etc/nginx/nginx.conf' \
 go run ./cmd/opspilot-agent
 ```
 
-Go agent stores a credential file at `~/.local/share/opspilot-agent/identity.json` with mode 0600. After enrollment it ignores the enrollment token on subsequent runs. See `infra/systemd` and `infra/docker` for deployment templates. Use **HTTPS/WSS** for remote agents; `http://localhost` is for local-only development.
+The agent atomically saves credentials with mode 0600 at `~/.local/share/opspilot-agent/identity.json` and reuses a valid identity without consuming another token. `opspilot-agent enroll` performs finite enrollment and requires an HTTPS Hub origin; no-argument operation continues monitoring and retains HTTP compatibility for local development. Corrupt identities fail without replacement. See [manual systemd installation](docs/DEPLOYMENT.md#manual-binary-agent-installation-on-ubuntu) and `infra/docker` for alternatives.
 
 ### Run first investigation
 
@@ -88,7 +93,7 @@ docker compose --profile full up --build -d
 # dashboard on http://localhost:3000; Hub API on localhost:3001
 ```
 
-For the optional containerized agent, generate an enrollment token first, then:
+For the optional containerized agent, obtain a token through the authenticated manual API first, then:
 
 ```bash
 OPSPILOT_ENROLL_TOKEN='<one-time-token>' docker compose --profile full --profile agent up --build -d

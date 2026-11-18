@@ -8,7 +8,7 @@ bun run typecheck
 (cd agent && go test ./...)
 ```
 
-`tests/contracts.test.ts` covers tool/metric bounds, provider input contracts and redaction. The BYOK suites below cover credential, transport, migration and real API/Worker boundaries. `agent/internal/agent/agent_test.go` checks basic parsing/redaction/WS URL; broader agent security/evaluation remains separate work.
+`tests/contracts.test.ts` covers tool/metric bounds, provider input contracts and redaction. The BYOK suites below cover credential, transport, migration and real API/Worker boundaries. `tests/agent-install.test.ts` covers installation metadata and command quoting; `tests/agent-installer.test.ts` covers pre-mutation shell rejection with isolated fixtures, never successful privileged installation on the developer host. Go agent tests cover parsing/redaction/WS URL plus finite enrollment, response/redirect rejection and identity preservation. These tests are **not** a substitute for broader agent security, integration, and AI evaluation.
 
 ## BYOK provider management verification — 2026-11-18
 
@@ -29,6 +29,26 @@ No live OpenAI/Anthropic/Gemini request, full Compose boot/image build, producti
 - Ran the focused adapter, migration/import and Hub/Worker suites against PostgreSQL 16 in an isolated loopback-only Docker namespace: 43 cases, initially 42 passed and one exposed uppercase audit IDs. After normalizing route IDs, the targeted CRUD regression passed (1 passed, 12 filtered out).
 - Regressions cover the actual package-script importer ignoring a retained dummy `.env`, replacement-key decryption through an uppercase UUID, a forced concurrent DELETE/Worker claim, and Gemini 2.5 thinking consumption with parsed diagnosis output while legacy/image models receive no unsupported thinking configuration.
 - Hub, Worker and Web TypeScript checks passed. Source/toolchain mounts were read-only, environments allowlisted, and containers used bounded memory/CPU/process/tmpfs limits. No user database, provider credentials, paid API request or browser session was used.
+
+## Curl onboarding verification — 2026-11-18
+
+- Focused `bun test tests/agent-install.test.ts tests/agent-installer.test.ts`: 14 tests passed.
+- Go tests passed using Docker Go 1.24.2 (the host has no Go toolchain).
+- Workspace typechecks passed.
+- Real API acceptance used a disposable PostgreSQL 17 Alpine container and new `curl_acceptance` database initialized with `bun run db:init`, Hub on 3318 and Web on 3319. Unauthenticated config returned 401; authenticated valid metadata returned 200; wrong-Origin token issuance returned 403. Both absent and invalid metadata returned 503 without changing token count, while hosts remained 200.
+- Public installer GET returned 200 with exact static bytes and expected content type, `no-store` and `nosniff`; POST returned 405 with `Allow: GET`, including with a wrong Origin. Token issuance returned 201 with the unchanged response keys and `expiresInSeconds:600` plus its audit event. Accepted enrollment returned 201 with its audit event; empty, expired and reused tokens returned 401, and browser-Origin enrollment returned 403.
+- Real Hub/Web browser checks at 1440px and 390px observed no document overflow, including a generated command on mobile; screenshots were taken before issuance. Clipboard success appeared only after actual copy resolution. Hide cleared the command and copy success; navigation away/back cleared the command; close returned focus to its trigger.
+- Denied browser clipboard permission preserved selectable text/manual-copy recovery. Delayed real Hub metadata/token responses after close did not restore the panel/command; deferred completion of an actual clipboard write after Hide did not restore stale success. A +601-second browser virtual-clock scenario cleared expired command/copy state. Actual sign-out and a 401 token response removed the protected secret.
+- Actual unconfigured-Hub 503 metadata, routed into the real dashboard, disabled generation with no command. A temporary trigger in the disposable DB induced real token-issuance 500: distinct error, no command, retry still enabled; the trigger was removed. Impeccable's scoped detector returned no findings.
+- Built workflow-exact static Linux amd64 and arm64 archives with Docker Go 1.24.2. Each contained exactly the binary, unit and env template; checksums matched. Version `v0.1.0-curl.acceptance` existed only in the local HTTPS fixture, never as a public release.
+- Installed actual generated commands over nonroot SSH on real Debian 12 systemd guests: amd64/KVM and ARM64/QEMU TCG. A guest-only trusted CA/hosts mapping served GitHub-download fixtures and an HTTPS/WSS reverse proxy to a real Hub and separate disposable DB; no insecure TLS or production download-host override. Services were active/enabled as `opspilot`; executable/unit/env were root-owned 0755/0644/0600, env directory 0750, state 0700 and identity 0600 owned `opspilot`. Tokens were absent from env/unit.
+- Initial KVM acceptance exposed systemd resetting the state directory to 0755. The user approved adding `StateDirectoryMode=0700`; both archives were rebuilt and both guests reinstalled. Mode 0700 then persisted across service restart and reboot. Same IDs resumed and actual post-reboot samples increased amd64 3→4 and ARM64 6→7; disconnected SSH did not stop the service. Both agents were Online with fresh measurements through the real API.
+- Same-version reruns on both architectures left newly issued tokens unused. Differing existing env files were refused without changing binary/unit/env/identity hashes.
+- Twelve VM failure scenarios passed: archive 404, unreachable download, checksum mismatch, missing/empty checksum, duplicate checksum, malformed checksum, unsafe/traversal member, invalid gzip with matching checksum, unreachable Hub, expired token, unwritable identity state and unavailable WSS. Download/checksum/archive failures left installation paths/accounts absent; enrollment failures did not start the service. A read-only state failure consumed the accepted token but wrote no identity, correctly requiring a fresh token rather than fabricated recovery. With WSS 503 the service remained active while the real host stayed Offline and samples stayed 8→8.
+- All owned guests, fixture container, dedicated Hub/database, disposable keys and token-bearing temporary files were removed. The workstation was never used for privileged installation.
+- GitHub's releases API returned an empty list. No release was published; deployment requires a reviewed post-merge release containing finite `enroll`. An example version is not a working public installer.
+
+**Verification boundary:** public GitHub release publication/download and production DNS/TLS remain unverified. The VM acceptance used generated commands and locally built real release archives under trusted HTTPS fixtures, not a published release. ARM64 ran under QEMU, not physical ARM64 hardware. Browser issuance/copy and VM command execution were exercised separately, not as a single browser-clipboard-to-SSH session.
 
 ## GitHub publication verification — 2026-11-18
 

@@ -286,7 +286,16 @@ export default function Home() {
               <p className="muted">{page?.description ?? "Encrypted AI connections. Choose the endpoint and model explicitly; no automatic fallback."}</p>
             </div>
           </div>
-          <div className="header-actions"><Button size="sm" variant="ghost" onClick={() => void refresh()}>Refresh</Button><Button ref={enrollmentTrigger} aria-expanded={enrollmentOpen} aria-controls="host-enrollment" onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>Enroll host</Button></div>
+          <div className="header-actions">
+            <Button size="sm" variant="ghost" onClick={() => void refresh()}>
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M16 7a6 6 0 1 0 .1 6M16 3v4h-4" /></svg>
+              Refresh
+            </Button>
+            <Button ref={enrollmentTrigger} aria-expanded={enrollmentOpen} aria-controls="host-enrollment" onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+              Enroll host
+            </Button>
+          </div>
         </header>
 
         {error && <Notice tone="danger" role="alert" className="dashboard-alert"><span>{error}</span><Button variant="ghost" size="sm" onClick={() => setError("")}>Dismiss</Button></Notice>}

@@ -10,6 +10,7 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | POST | `/api/auth/logout` | none | `200` clears cookie |
 | GET | `/api/auth/me` | none | role and auth status |
 | POST | `/api/agents/enrollment-token` | `{}` | `{token, expiresInSeconds}`; show once |
+| GET | `/api/agents/install-config` | none | `{hubUrl,installerUrl,version,repository}` or `503 {"error":"Agent installation is not configured"}` |
 | GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds}` |
 | GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; 400 invalid ID, 404 unknown host |
 | GET | `/api/ai/providers` | none | `{providers: AiProvider[], encryptionConfigured: boolean}` |
@@ -41,6 +42,13 @@ AI errors use `{error,code}` with fixed messages and no input/upstream content. 
 
 Investigations validate the browser revision before diagnostics and recheck under a row lock before queueing. Worker rejects changed/disabled/deleted connections rather than silently using another destination. Incident detail reports `provider:{id:string|null,name,protocol,baseUrl:string|null,model:string|null}` from an immutable non-secret snapshot, never current connection metadata. Legacy model/base URL remain null. Deleting a connection removes credentials, not historical reports; unstarted jobs fail safely.
 
+### Installation metadata and public script
+
+`AgentInstallConfig` contains the canonical HTTPS `hubUrl`, `${hubUrl}/api/agents/install.sh` as `installerUrl`, exact pinned release `version` and GitHub `repository`. The Hub reads `OPSPILOT_PUBLIC_HUB_URL`, `OPSPILOT_AGENT_VERSION` and optional `OPSPILOT_AGENT_REPOSITORY` (default `kuenobaikbanget/opspilot`); see [validation and deployment prerequisites](DEPLOYMENT.md#curl-based-headless-linux-installation). No browser, Host/Forwarded header, `ALLOWED_ORIGIN` or `HUB_INTERNAL_URL` inference is used. Missing/invalid configuration disables dashboard generation with 503, not monitoring or the manual token API. Reading metadata issues no token.
+
+Public `GET /api/agents/install.sh` needs no admin session and returns static Bash bytes with `Content-Type: text/x-shellscript; charset=utf-8`, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Other methods return 405 with `Allow: GET`; a missing asset is a server error. It contains no token, request interpolation, network fetch or DB mutation.
+
+Token issuance remains an authenticated, Origin-protected POST with `{token,expiresInSeconds:600}` and existing audit behavior. Tokens are usable once; hiding a command or generating another does not revoke them. The dashboard downloads the complete script into a private temporary file before invoking Bash as root (sudo when needed), not `curl | sudo bash`.
 
 ### Host monitoring read model
 
@@ -56,7 +64,7 @@ Example agent install / Hub interaction:
 
 ```bash
 # Sign in via dashboard to receive HttpOnly cookie
-# Dashboard > Generate enrollment token
+# Manual clients: POST /api/agents/enrollment-token with the admin cookie to obtain a token.
 curl -X POST http://localhost:3001/api/agents/enroll \
   -H 'content-type: application/json' \
   -d '{"token":"ONE_TIME_TOKEN","hostname":"my-linux","version":"0.1.0"}'
@@ -66,6 +74,8 @@ curl -X POST http://localhost:3001/api/agents/enroll \
 ## Agent HTTP and WebSocket
 
 **Enrollment:** `POST /api/agents/enroll` requires short-lived one-use token, browser `Origin` disallowed. Returns `agentId`, `agentSecret` (random secret stored only as hash in DB).
+
+`opspilot-agent enroll` is a finite local command using the same `{token,hostname,version}` / `{agentId,agentSecret}` contract, not a new HTTP operation. It requires an HTTPS origin, refuses redirects, validates returned credentials and atomically saves a 0600 identity. A valid existing identity avoids enrollment; a corrupt identity fails unchanged. No arguments retains the reconnecting monitor and local HTTP development compatibility.
 
 **WebSocket handshake:** `GET /api/agents/connect` with headers:
 
@@ -109,7 +119,7 @@ Starter wire version is implicit 0.1; add `protocolVersion` on enrollment and ev
 
 ## API failure semantics
 
-`400` invalid input, `401` admin/agent unauthorized, `403` forbidden browser origin, `404` missing resource, `409` state conflict, `500` unexpected error, `503` LLM not configured / DB failed health. Never return provider keys to clients.
+`400` invalid input, `401` admin/agent unauthorized, `403` forbidden browser origin, `404` missing resource, `409` state conflict, `500` unexpected error, `503` installation metadata unavailable / LLM not configured / DB failed health. Never return provider keys to clients.
 
 <a id="fleet-services-contract-boundary-planned"></a>
 

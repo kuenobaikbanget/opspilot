@@ -8,6 +8,7 @@ Type=simple
 User=opspilot
 Group=opspilot
 StateDirectory=opspilot
+StateDirectoryMode=0700
 EnvironmentFile=/etc/opspilot/agent.env
 Environment=OPSPILOT_AGENT_STATE_PATH=/var/lib/opspilot/identity.json
 ExecStart=/usr/local/bin/opspilot-agent
