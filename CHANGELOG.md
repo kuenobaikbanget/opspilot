@@ -2,6 +2,9 @@
 
 ## Unreleased — 2026-11-18
 
+- Split GitHub automation into clearly named CI, versioned Release and reusable GHCR Packages workflows. Version tags must be valid SemVer and belong to `main`; publication is gated by CI. Releases include Linux AMD64/ARM64 agent archives, systemd templates, SHA-256 checksums and generated notes.
+- Added multi-platform Hub/Worker/Web/Agent image publishing with version aliases restricted to stable releases. Pinned Bun container builds to 1.4.2 with frozen dependencies, verified Go modules, and excluded nested local build directories/environment secrets from Docker contexts. Documented required-check renaming, tag publication, package access, unsigned-artifact limitations and non-transactional image pushes.
+- Verified workflow syntax, version/ancestry guards, all four AMD64 image builds and the packaged Web server's HTTP response. No live GitHub release/package publication or production deployment was performed; see `docs/TESTING.md` for verification limits.
 - Simplified the sidebar to Hosts, Incidents, Configuration drift and Incident memory. Merged the duplicate Overview/Hosts views; removed sidebar enrollment (still in the header), the developer catalog link and repeated deployment/account captions. Provider settings and Sign out remain below; mobile exposes them through More.
 - Replaced the count-dependent moving navigation marker with a marker on the active item. Preserved icon-only mode, accessible names, keyboard focus and the stored collapse preference.
 - Web typecheck passed. Browser checks with synthetic API responses covered desktop/mobile navigation at 1440/1024/390/320px, collapse persistence, keyboard access, More, enrollment focus and sign-out UI. No live authentication or diagnostics integration was tested; the detector only reported existing meter-width/root-font findings.

@@ -1,17 +1,18 @@
-FROM oven/bun:1 AS build
+FROM oven/bun:1.4.2 AS build
 WORKDIR /workspace
-COPY package.json ./
+COPY package.json bun.lock ./
 COPY apps/hub/package.json apps/hub/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/ai/package.json packages/ai/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
-RUN bun install
+RUN bun install --frozen-lockfile
 COPY apps/web apps/web
+COPY packages packages
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HUB_INTERNAL_URL=http://hub:3001
 RUN cd apps/web && bun run --bun build
-FROM oven/bun:1
+FROM oven/bun:1.4.2
 WORKDIR /workspace
 COPY --from=build /workspace /workspace
 ENV NODE_ENV=production

@@ -10,6 +10,17 @@ bun run typecheck
 
 `tests/contracts.test.ts` tests tool enum, metric bounds, and redaction smoke tests. `agent/internal/agent/agent_test.go` checks basic parsing/redaction/WS URL. These tests are **not** a substitute for integration, security, and AI evaluation.
 
+## GitHub publication verification — 2026-11-18
+
+- `actionlint` 1.7.12 passed for CI, Release and reusable Packages workflows.
+- Executed the actual version-validation shell steps: both accepted seven valid stable/prerelease versions and rejected thirteen malformed versions. Package publication also rejected PR context, branch refs, mismatched version tags and an oversized Docker tag.
+- Executed the release ancestry guard in an isolated Git repository: a commit on `origin/main` passed; an unmerged tag failed.
+- Built all four Dockerfiles successfully for Linux AMD64 using Buildx with frozen Bun dependencies and verified Go modules.
+- Started the built Web image and fetched its public `/design-system` route: HTTP 200 with OpsPilot content. This is a packaged-server smoke, not a browser/layout or live-backend test.
+- Ran the release archive build step for AMD64 and ARM64 using Go 1.24.2 in Docker. Both archives contained an executable ELF for the intended architecture and the two installation templates; SHA-256 checksums matched. CI selects Go from `agent/go.mod`; this local archive smoke did not execute the ARM64 binary.
+
+No tag was pushed and no GitHub Release or GHCR package was published. The remote Actions/token/registry integration, ARM64 container execution, full Compose deployment and production security remain unverified.
+
 ## Host-only slice verification — 2026-11-17
 
 Executed against a separate PostgreSQL 16 database, real Bun Hub, Next.js browser surface and native Linux amd64 Go agent (built with Go 1.24.2 in Docker). No synthetic telemetry was used for the live host/history/disconnect checks.

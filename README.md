@@ -33,7 +33,7 @@ bun run dev
 
 Open **http://localhost:3100**. Hub health: **http://localhost:3001/healthz**.
 
-Dependency locks (`bun.lock` and `agent/go.sum`) are committed. GitHub Actions runs Bun tests, workspace typechecks, the Next.js production build, and Linux Go tests on pushes and pull requests.
+Dependency locks (`bun.lock` and `agent/go.sum`) are committed. **CI — Tests & builds** runs Bun tests, workspace typechecks, the Next.js production build and Linux Go tests for branches and pull requests. Version tags run the same checks before release publication.
 
 ### Design system preview — no backend required
 
@@ -95,6 +95,14 @@ OPSPILOT_ENROLL_TOKEN='<one-time-token>' docker compose --profile full --profile
 ```
 
 The container agent intentionally has narrower host visibility than a properly permissioned Linux binary. No Docker daemon socket is mounted by default; container monitoring is disabled. Full Compose build is **not verified in this artifact environment**; test in your development machine before relying on it.
+
+## GitHub releases and packages
+
+Pushing a valid version tag such as `v0.1.0-rc.1` on a commit already in `main` runs **Release — Versioned binaries & images**. After CI passes, it builds Linux AMD64/ARM64 agent archives with systemd templates and SHA-256 checksums, publishes four multi-platform images through **Packages — Publish multi-platform GHCR images**, then creates a GitHub Release with generated notes.
+
+Images: `ghcr.io/kuenobaikbanget/opspilot-{hub,worker,web,agent}:<version-without-v>`. Prereleases never update `latest`; stable versions do. Packages start private, and no npm packages or automatic deployments are included. Artifacts are unsigned; the production-hardening and licensing requirements still apply.
+
+See [publishing and package-access setup](docs/DEVELOPMENT.md#github-actions-releases-and-packages) and [using published artifacts](docs/DEPLOYMENT.md#published-release-assets-and-container-images). The workflows must first be merged/pushed; these instructions do not mean a release has already been published.
 
 ## Feature status
 

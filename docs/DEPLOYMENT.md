@@ -22,6 +22,30 @@ docker compose --profile full up --build -d
 
 Services: `db`, `hub`, `worker`, `web`. DB and app ports bind to loopback. For remote exposure, publish **only** reverse-proxy HTTPS endpoint, use `COOKIE_SECURE=true`, and correct `ALLOWED_ORIGIN` (public origin). The Next.js `/api` rewrite points to `http://hub:3001` inside Compose and is built with that origin. Validate reverse proxy `Upgrade` for WSS and origin policy.
 
+## Published release assets and container images
+
+After a successful [tagged release](DEVELOPMENT.md#publish-a-version), download the Linux agent for your architecture and check its archive before installation. The tag below is an example, not a promise that it has already been published:
+
+```bash
+version=v0.1.0-rc.1 # replace with an existing release tag
+arch=amd64        # arm64 on ARM hosts
+archive="opspilot-agent_${version#v}_linux_${arch}.tar.gz"
+release_dir=$(mktemp -d)
+gh release download "$version" --repo kuenobaikbanget/opspilot \
+  --pattern "$archive" --pattern SHA256SUMS --dir "$release_dir"
+(cd "$release_dir" && sha256sum --check --ignore-missing SHA256SUMS \
+  && tar -xzf "$archive")
+sudo install -m 0755 "$release_dir/opspilot-agent" /usr/local/bin/opspilot-agent
+```
+
+The extracted `opspilot-agent.service` and `agent.env.example` are the same templates used in the source-install instructions below. Configure the dedicated user, protected environment file and systemd unit before starting the agent. Checksums are unsigned; they verify archive integrity, not independent publisher identity.
+
+GHCR provides `ghcr.io/kuenobaikbanget/opspilot-hub`, `opspilot-worker`, `opspilot-web` and `opspilot-agent`, each for Linux AMD64/ARM64. Use the version without `v` as the image tag, for example `ghcr.io/kuenobaikbanget/opspilot-web:0.1.0-rc.1`. Stable releases also publish mutable version aliases and `latest`; prereleases do not. Pin a reviewed image digest for deployment.
+
+The checked-in Compose file still builds from local source. To use published images without changing its service/environment/volume configuration, add an `image: ghcr.io/kuenobaikbanget/opspilot-<component>:<version>` entry to each app service in a local Compose override, then pass that override with `-f` and use `up --no-build`. Keep PostgreSQL separate. The Web image's `/api` rewrite is built for `http://hub:3001`; preserve the `hub` service name. Changing `HUB_INTERNAL_URL` only at runtime does not rebuild that rewrite.
+
+First publication creates packages with private visibility; private pulls require GitHub package access and registry login. Review package visibility/access deliberately before distribution. These images retain the starter's deployment/security limitations; publication is not a production-readiness guarantee.
+
 ## Binary agent installation on Ubuntu
 
 ```bash

@@ -1,0 +1,125 @@
+name: Packages — Publish multi-platform GHCR images
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Validated v-prefixed SemVer release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-${{ github.repository }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate container release version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      major: ${{ steps.version.outputs.major }}
+      minor: ${{ steps.version.outputs.minor }}
+      stable: ${{ steps.version.outputs.stable }}
+      major-alias: ${{ steps.version.outputs.major-alias }}
+      repository: ${{ steps.version.outputs.repository }}
+    steps:
+      - name: Validate tag and derive safe image metadata
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          number='(0|[1-9][0-9]*)'
+          identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          pattern="^v${number}\\.${number}\\.${number}(-${identifier}(\\.${identifier})*)?$"
+          if [[ ! "$RELEASE_TAG" =~ $pattern ]]; then
+            echo '::error::Expected vMAJOR.MINOR.PATCH with an optional SemVer prerelease; build metadata is not supported.'
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          if (( ${#version} > 128 )); then
+            echo '::error::Version exceeds the Docker tag limit of 128 characters.'
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" != push || "$GITHUB_REF" != "refs/tags/$RELEASE_TAG" ]]; then
+            echo '::error::Container publishing requires the matching version tag push.'
+            exit 1
+          fi
+          core="${version%%-*}"
+          IFS=. read -r major minor patch <<< "$core"
+          stable=true
+          major_alias=true
+          if [[ "$version" == *-* ]]; then
+            stable=false
+            major_alias=false
+          elif [[ "$major" == 0 ]]; then
+            major_alias=false
+          fi
+          {
+            echo "version=$version"
+            echo "major=$major"
+            echo "minor=$minor"
+            echo "stable=$stable"
+            echo "major-alias=$major_alias"
+            echo "repository=${GITHUB_REPOSITORY,,}"
+          } >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish ${{ matrix.component }} — Linux AMD64 & ARM64
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [hub, worker, web, agent]
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up ARM64 emulation
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+      - name: Set up multi-platform Docker builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate release image tags and OCI labels
+        id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.component }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.validate.outputs.version }},priority=1000
+            type=raw,value=${{ needs.validate.outputs.major }}.${{ needs.validate.outputs.minor }},enable=${{ needs.validate.outputs.stable }}
+            type=raw,value=${{ needs.validate.outputs.major }},enable=${{ needs.validate.outputs.major-alias }}
+            type=raw,value=latest,enable=${{ needs.validate.outputs.stable }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Build and publish both Linux architectures
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: infra/docker/Dockerfile.${{ matrix.component }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}

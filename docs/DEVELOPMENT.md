@@ -37,11 +37,40 @@ Use shared primitives instead of introducing parallel button/field styles. Conne
 
 For dashboard changes, follow the [Fleet & services target contract](UI-UX.md#fleet-services-dashboard-contract-target) and [staged data/security gates](ROADMAP.md#fleet-services-dashboard-delivery-planned). Root `DESIGN.md` separates implemented tokens/primitives from the target composition; do not treat the reference screenshot as proof of an API capability. Keep `.impeccable/design.json` narrative aligned when updating the shared design rules, and keep synthetic reference states separate from live data. Use the [planned acceptance scenarios](TESTING.md#fleet-services-dashboard-acceptance-planned) when implementing the target.
 
-GitHub Actions uses Bun 1.4.2 and frozen installation, then runs existing tests, all workspace typechecks, the Web production build, and Go tests on Linux. Browser checks using synthetic API responses verify UI behavior only, not live authentication, diagnostics, or AI integrations.
+## GitHub Actions, releases and packages
 
-The workflow is **CI-only**: pushes and pull requests run validation, with no deployment, release publishing, or production credentials. Actions are pinned to full commit SHAs; update the SHA and version comment together after reviewing upstream changes. Checkout does not persist credentials, and the workflow token has only `contents: read`.
+| Workflow | Trigger | Responsibility |
+| --- | --- | --- |
+| `CI — Tests & builds` (`checks.yml`) | Branch pushes, pull requests, manual runs and reusable calls | Bun tests, workspace typechecks, Web production build and Linux Go tests |
+| `Release — Versioned binaries & images` (`release.yml`) | Push of a `v*` tag | Validate version/main ancestry, run CI, build agent archives, publish images, then create the GitHub Release |
+| `Packages — Publish multi-platform GHCR images` (`packages.yml`) | Reusable call from Release only | Publish Hub, Worker, Web and Agent images for Linux AMD64/ARM64 |
 
-Configure a GitHub branch rule for `main` requiring pull requests and successful `typescript` and `go` checks before merge; require checks against the latest base branch and disallow bypasses/direct pushes. Workflow YAML alone does not enforce this merge gate. A green CI run covers the commands above, not live DB/auth/WSS/provider integration or production security.
+CI uses Bun 1.4.2 with a frozen lockfile. All actions are pinned to full commit SHAs; update the SHA and version comment together after reviewing upstream changes. Checkout never persists credentials. PR validation has only `contents: read`; it cannot publish or deploy. Browser checks using synthetic API responses verify UI behavior only, not live authentication, diagnostics or AI integrations.
+
+Configure a GitHub branch rule for `main` requiring pull requests and the **`TypeScript — Tests, types & Web build`** and **`Go agent — Tests`** checks from CI. These replace the old displayed check names `typescript` and `go`; update existing required-check selections when adopting the workflow. Require checks against the latest base branch and disallow bypasses/direct pushes. Workflow YAML alone does not enforce this gate.
+
+### Publish a version
+
+Merge the workflow changes and intended release code into `main` first. Choose an unused SemVer tag; development builds should use a prerelease such as `v0.1.0-rc.1`, not imply production readiness:
+
+```bash
+git switch main
+git pull --ff-only
+git tag -a v0.1.0-rc.1 -m "OpsPilot v0.1.0-rc.1"
+git push origin v0.1.0-rc.1
+```
+
+Tags must be `vMAJOR.MINOR.PATCH`, optionally with a SemVer prerelease suffix; numeric identifiers cannot have leading zeroes. Build metadata (`+build`) is unsupported, and the version without `v` must fit Docker's 128-character tag limit. The tag commit must be contained in `origin/main`. A tag does not bypass CI. Never move a published tag; use a new version for changed source.
+
+Release assets are `opspilot-agent_<version>_linux_amd64.tar.gz`, the matching `arm64` archive, and `SHA256SUMS`. Each archive contains the executable `opspilot-agent`, `opspilot-agent.service` and `agent.env.example`. Assets are unsigned. GitHub generates release notes; prerelease tags create prereleases without changing GitHub's latest release. Stable tags become latest.
+
+GHCR publishes `ghcr.io/kuenobaikbanget/opspilot-{hub,worker,web,agent}` (forks use their own lowercase owner/repository). `v1.2.3` publishes `1.2.3`, `1.2`, `1` and `latest`; `v0.2.3` omits the `0` alias. Prereleases publish only their full version, never stable aliases. The version comes from the tag, not the private workspace package versions. No npm packages are published.
+
+Only image-publishing jobs get `packages: write`; only the final GitHub Release job gets `contents: write`. Both use the built-in `GITHUB_TOKEN`, not a PAT or production credentials. GitHub Release creation waits for both archives and all images, but publishing is not transactional: failed runs can leave images/aliases already pushed. Inspect a failure before rerunning; already-published releases must not be overwritten.
+
+After first publication, check each package's **Package settings → Manage Actions access** and visibility. GHCR packages default to private, even for public repositories; make them public only deliberately and after selecting a distribution license. Private pulls require package access. See [deployment instructions](DEPLOYMENT.md#published-release-assets-and-container-images) and the [publishing trust boundary](SECURITY.md#release-and-package-publishing).
+
+Nothing deploys automatically. A green release is build/publication evidence, not proof of live DB/auth/WSS/provider integration or production security.
 
 ## Definition of done for code changes
 

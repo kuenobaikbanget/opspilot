@@ -69,9 +69,19 @@ This route does not grant access to protected `/api` endpoints. Do not import se
 
 ## CI trust boundary
 
-`.github/workflows/checks.yml` runs untrusted pull-request code only on GitHub-hosted runners using `pull_request`, not `pull_request_target`. It requests only `contents: read`, disables persisted checkout credentials, pins third-party actions to full commit SHAs, and bounds job duration. Keep production credentials and deployment steps out of this CI-only workflow.
+`.github/workflows/checks.yml` (`CI — Tests & builds`) runs untrusted pull-request code only on GitHub-hosted runners using `pull_request`, not `pull_request_target`. It requests only `contents: read`, disables persisted checkout credentials, pins third-party actions to full commit SHAs, and bounds job duration. Keep production credentials and deployment steps out of validation.
 
-Require the `typescript` and `go` checks through a protected `main` branch rule without bypasses; successful workflow runs alone cannot prevent unchecked merges or direct pushes. SHA pinning prevents silent tag movement, not vulnerabilities in a pinned action or dependency. CI does not replace the release blockers below.
+Require the `TypeScript — Tests, types & Web build` and `Go agent — Tests` checks through a protected `main` branch rule without bypasses; migrate any old `typescript`/`go` required-check selections. Successful runs alone cannot prevent unchecked merges or direct pushes. SHA pinning prevents silent tag movement, not vulnerabilities in a pinned action or dependency.
+
+## Release and package publishing
+
+`release.yml` accepts version-tag pushes only, verifies strict SemVer and that the tag commit belongs to `origin/main`, and reruns CI before building/publishing. Protect `main` and restrict creation/update/deletion of `v*` tags to trusted maintainers using repository rulesets. An ancestry check is not a substitute for reviewed code or protected tags; repository rules must be configured separately.
+
+The reusable `packages.yml` additionally requires a matching tag-push context. Only its image jobs receive `packages: write`; only the final release job receives `contents: write`. Publication uses the short-lived built-in `GITHUB_TOKEN`, never production credentials, enrollment secrets, database URLs or provider keys. OCI source/revision labels link images to the repository. `.dockerignore` excludes environment secrets, Git metadata and nested local dependency/build directories; do not pass secrets as build arguments or commit them into source.
+
+Agent archives ship SHA-256 checksums, not signatures: these detect corruption but do not establish independent publisher authenticity. Signed releases, SBOMs, digest-pinned base images and security scanning remain roadmap work. Image pushes are not atomic across components or with GitHub Release creation; a failed run may already have updated image aliases. Use reviewed versions and record deployment digests rather than relying on mutable `latest`.
+
+GHCR visibility/access is a separate package setting; new packages default to private. Review package Actions access and visibility after first publication, and select a license before enabling public distribution. Neither a stable tag nor successful publication resolves the production blockers below. No workflow deploys the application or enables network exposure.
 
 ## Open security issues — explicit release blockers
 
