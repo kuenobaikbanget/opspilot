@@ -1,6 +1,6 @@
 # API & Agent Protocol (starter contract)
 
-Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` rewrite. JSON endpoints require **admin HttpOnly cookie**, except agent enrollment, WebSocket agent connect, and `/healthz`.
+Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` rewrite. JSON endpoints require **admin HttpOnly cookie** (unless `DISABLE_AUTH=true` in non-production; refused at startup in production, with `ALLOWED_ORIGIN` still enforced), except agent enrollment, WebSocket agent connect, and `/healthz`.
 
 ## Admin HTTP routes
 
@@ -8,10 +8,10 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 |---|---|---|---|
 | POST | `/api/auth/login` | `{"password":"..."}` | `200` sets signed cookie |
 | POST | `/api/auth/logout` | none | `200` clears cookie |
-| GET | `/api/auth/me` | none | role and auth status |
+| GET | `/api/auth/me` | none | role, auth status, and `authDisabled` flag |
 | POST | `/api/agents/enrollment-token` | `{}` | `{token, expiresInSeconds}`; show once |
 | GET | `/api/agents/install-config` | none | `{hubUrl,installerUrl,version,repository}` or `503 {"error":"Agent installation is not configured"}` |
-| GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds}` |
+| GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}` |
 | GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; 400 invalid ID, 404 unknown host |
 | GET | `/api/ai/providers` | none | `{providers: AiProvider[], encryptionConfigured: boolean}` |
 | POST | `/api/ai/providers` | `{name,protocol,baseUrl,apiKey,defaultModel,enabled}` | `201 {provider}` |
@@ -58,7 +58,9 @@ Each host includes `id`, `hostname`, `version`, `status`, `created_at`, `last_se
 
 The current display freshness policy is `stale_after_seconds: 60`. An online connection with an older sample has stale telemetry; a disconnected agent's retained samples are historical even when recent. Agents configured with intervals above 60 seconds will intentionally show stale between samples; interval negotiation is not implemented.
 
-History returns `sampled_at`, host CPU/memory/disk percentages and cumulative `network_rx_bytes`/`network_tx_bytes`; counters are not network rates. Samples are neither aggregated nor interpolated. Workload inventory, endpoint monitoring and alert-policy metadata remain unavailable.
+`thresholds` contains the Hub's effective CPU, memory and disk alert limits as percent values under `cpu_percent`, `memory_percent`, and `disk_percent`. Invalid limits are `null` and do not produce a threshold alert. The Overview uses the same configured limits to compare individual fresh online samples; its near-limit band is a display rule, not an incident trigger.
+
+History returns `sampled_at`, host CPU/memory/disk percentages and cumulative `network_rx_bytes`/`network_tx_bytes`; counters are not network rates. Samples are neither aggregated nor interpolated. Workload inventory and endpoint monitoring remain unavailable.
 
 Example agent install / Hub interaction:
 

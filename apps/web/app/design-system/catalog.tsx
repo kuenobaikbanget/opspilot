@@ -14,10 +14,10 @@ const palette = [
   ["Text", "--color-text"],
   ["Muted text", "--color-text-muted"],
   ["Accent / action", "--color-accent"],
-  ["On accent", "--color-on-accent"],
-  ["Success", "--color-success"],
-  ["Warning", "--color-warning"],
-  ["Danger", "--color-danger"],
+  ["On action", "--color-on-accent"],
+  ["Within limit", "--color-success"],
+  ["Near limit", "--color-warning"],
+  ["Limit reached", "--color-danger"],
   ["Information", "--color-info"],
 ] as const;
 
@@ -76,10 +76,9 @@ export default function DesignCatalog() {
           <Link href="/" className={styles.dashboardLink}>Back to live dashboard</Link>
         </div>
         <div className={styles.titleRow}>
-          <h1>Design system</h1>
-          <Badge>v0.1 / UI foundation</Badge>
+          <h1>OpsPilot / Monochrome system</h1>
         </div>
-        <p className={styles.intro}>A practical reference for clear operations: reusable controls, readable signals, and evidence that keeps its provenance.</p>
+        <p className={styles.intro}>Threshold-first monitoring. Neutral surfaces, precise data, semantic color for risk.</p>
         <Notice tone="info">Synthetic examples. No live telemetry or saved settings.</Notice>
       </header>
 
@@ -96,7 +95,7 @@ export default function DesignCatalog() {
           <section id="foundations" className={styles.section} aria-labelledby="foundations-title">
             <div className={styles.sectionHeading}>
               <h2 id="foundations-title">Foundations</h2>
-              <p>Flat navy surfaces. Mint for intent. Semantic color supports a written status; it never replaces one.</p>
+              <p>Graphite surfaces and neutral actions. Amber marks near limits; rose marks reached limits. Always show a written state.</p>
             </div>
             <div className={styles.palette}>
               {palette.map(([label, token]) => (
@@ -113,7 +112,7 @@ export default function DesignCatalog() {
                 <div className={styles.typeSample}><p className={styles.typeHeading}>Host investigation</p><code>--text-xl · section heading</code></div>
                 <div className={styles.typeSample}><p className={styles.typeBody}>Measured signals lead the story.</p><code>--text-base · body / controls</code></div>
                 <div className={styles.typeSample}><p className={styles.typeMeta}>Last sample: 14:32:10 UTC</p><code>--text-sm · supporting detail</code></div>
-                <p className={styles.guidance}>System sans for the interface. Monospace for code and measurements, not for every technical label.</p>
+                <p className={styles.guidance}>Geist for the interface. Geist Mono for code, measurements and timestamps.</p>
               </div>
               <div>
                 <h3>Spacing rhythm</h3>

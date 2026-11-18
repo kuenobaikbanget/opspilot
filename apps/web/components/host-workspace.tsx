@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import type { AgentInstallConfig, Host, HostList, HostMetric } from "@opspilot/contracts";
+import type { Host, HostList, HostMetric } from "@opspilot/contracts";
 import { Badge, Button, Input, Notice, Panel } from "./ui";
-import { buildAgentInstallCommand } from "../lib/agent-install";
+import { hasFreshSample, percent, pressure, resourcePressure, resources, type Resource } from "../lib/host-pressure";
+import { WorkspaceIcon } from "./workspace-shell";
 
 type FleetIncident = {
   id: string;
@@ -18,25 +19,16 @@ type FleetIncident = {
 
 type Props = {
   refreshKey: number;
-  onHosts: (hosts: Host[]) => void;
+  onFleet: (fleet: HostList) => void;
+  onFleetError: (message: string) => void;
   onUnauthorized: () => void;
-  openIncidents: number;
+  openIncidents: number | null;
+  incidentsStale: boolean;
   incidents: FleetIncident[];
   onOpenIncident: (id: string) => void;
-  enrollmentOpen: boolean;
-  onCloseEnrollment: () => void;
+  inspectHost: { id: string; resource?: Resource } | null;
+  onConnect: () => void;
 };
-
-type Resource = "cpu_percent" | "memory_percent" | "disk_percent";
-
-const resources = [
-  { key: "cpu_percent", label: "CPU" },
-  { key: "memory_percent", label: "Memory" },
-  { key: "disk_percent", label: "Disk" },
-] as const;
-
-const percent = (n: number | null) =>
-  n == null || !Number.isFinite(n) ? "—" : `${Number(n.toFixed(1))}%`;
 
 const stamp = (s: string | null) => (s ? new Date(s).toLocaleString() : "Not observed");
 
@@ -52,14 +44,9 @@ const age = (s: string | null, now: number) => {
         : `${Math.floor(seconds / 86400)}d ago`;
 };
 
-const measurementClass = (n: number | null) =>
-  n == null || !Number.isFinite(n)
-    ? "measurement--unknown"
-    : n > 90
-      ? "measurement--danger"
-      : n > 75
-        ? "measurement--warning"
-        : "";
+const pressureLabel = { within: "Within limit", near: "Near limit", exceeded: "Limit reached" };
+const pressureClass = (state?: keyof typeof pressureLabel) =>
+  state === "exceeded" ? "measurement--danger" : state === "near" ? "measurement--warning" : "";
 
 function selectWithTransition(update: () => void) {
   if (!document.startViewTransition || window.matchMedia("(prefers-reduced-motion: reduce), (max-width: 700px)").matches) {
@@ -120,7 +107,7 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
         <span>{duration ? `${Math.round(duration / 60000)} min` : "Single sample"} · Raw samples</span>
       </figcaption>
       <div className="history-observation">
-        <strong className={measurementClass(observation[resource])}>{percent(observation[resource])}</strong>
+        <strong>{percent(observation[resource])}</strong>
         <time dateTime={observation.sampled_at}>{stamp(observation.sampled_at)}</time>
       </div>
       <svg
@@ -153,7 +140,7 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
             width={barWidth}
             height={(height * r[resource]) / 100}
             rx="1.5"
-            className={`chart-bar ${measurementClass(r[resource])}`}
+            className="chart-bar"
             data-active={r.sampled_at === observation.sampled_at}
           >
             <title>{stamp(r.sampled_at)} · {percent(r[resource])}</title>
@@ -193,17 +180,20 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
 
 export function HostWorkspace({
   refreshKey,
-  onHosts,
+  onFleet,
+  onFleetError,
   onUnauthorized,
   openIncidents,
+  incidentsStale,
   incidents,
   onOpenIncident,
-  enrollmentOpen,
-  onCloseEnrollment,
+  inspectHost,
+  onConnect,
 }: Props) {
   const [fleet, setFleet] = useState<HostList | null>(null);
   const [failure, setFailure] = useState("");
   const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("all");
   const [selected, setSelected] = useState<string | null>(null);
   const [selectionNotice, setSelectionNotice] = useState("");
   const selectedRef = useRef(selected);
@@ -213,65 +203,7 @@ export function HostWorkspace({
   const [historyError, setHistoryError] = useState("");
   const [resource, setResource] = useState<Resource>("disk_percent");
   const [now, setNow] = useState(Date.now());
-  const [token, setToken] = useState<{ command: string; expires: number } | null>(null);
-  const tokenRef = useRef(token);
-  const generation = useRef(0);
-  const tokenController = useRef<AbortController | null>(null);
-  const enrollmentVisible = useRef(enrollmentOpen);
-  enrollmentVisible.current = enrollmentOpen;
-  const [enrolling, setEnrolling] = useState(false);
-  const enrollmentPanel = useRef<HTMLElement>(null);
-  const [enrollError, setEnrollError] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState("");
-  const [installConfig, setInstallConfig] = useState<AgentInstallConfig | null>(null);
-  const [configLoading, setConfigLoading] = useState(false);
-  const [configError, setConfigError] = useState("");
-  const callbacks = useRef({ onHosts, onUnauthorized });
-  callbacks.current = { onHosts, onUnauthorized };
-
-  const clearSecret = useCallback(() => {
-    generation.current++;
-    tokenController.current?.abort();
-    tokenController.current = null;
-    tokenRef.current = null;
-    setToken(null);
-    setCopied(false);
-    setCopyError("");
-    setEnrollError("");
-    setEnrolling(false);
-  }, []);
-
-  const unauthorized = useCallback(() => {
-    enrollmentVisible.current = false;
-    clearSecret();
-    callbacks.current.onUnauthorized();
-  }, [clearSecret]);
-
-  useEffect(() => {
-    clearSecret();
-    setInstallConfig(null);
-    setConfigError("");
-    setConfigLoading(enrollmentOpen);
-    if (!enrollmentOpen) return;
-    let active = true;
-    const controller = new AbortController();
-    void request("/agents/install-config", controller.signal).then((config: AgentInstallConfig) => {
-      if (active && enrollmentVisible.current) setInstallConfig(config);
-    }).catch((e: unknown) => {
-      if (!active || !enrollmentVisible.current) return;
-      const message = e instanceof Error ? e.message : String(e);
-      if (message === "Unauthorized") unauthorized();
-      else setConfigError(message);
-    }).finally(() => {
-      if (active) setConfigLoading(false);
-    });
-    return () => {
-      active = false;
-      controller.abort();
-      clearSecret();
-    };
-  }, [enrollmentOpen, clearSecret, unauthorized]);
+  const inspectorHeading = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -286,7 +218,8 @@ export function HostWorkspace({
         if (!active) return;
         setFleet(next);
         setFailure("");
-        callbacks.current.onHosts(next.hosts);
+        onFleet(next);
+        onFleetError("");
         if (!loadedOnce.current) {
           loadedOnce.current = true;
           setSelected(next.hosts[0]?.id ?? null);
@@ -298,8 +231,8 @@ export function HostWorkspace({
       } catch (e) {
         if (!active) return;
         const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") unauthorized();
-        else setFailure(message);
+        if (message === "Unauthorized") onUnauthorized();
+        else { setFailure(message); onFleetError(message); }
       } finally {
         pending = false;
       }
@@ -314,7 +247,7 @@ export function HostWorkspace({
       clearInterval(poll);
       clearInterval(clock);
     };
-  }, [refreshKey, unauthorized]);
+  }, [refreshKey, onFleet, onFleetError, onUnauthorized]);
 
   useEffect(() => {
     setHistory(null);
@@ -336,7 +269,7 @@ export function HostWorkspace({
       } catch (e) {
         if (!active) return;
         const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") unauthorized();
+        if (message === "Unauthorized") onUnauthorized();
         else setHistoryError(message);
       } finally {
         pending = false;
@@ -350,25 +283,33 @@ export function HostWorkspace({
       controller.abort();
       clearInterval(poll);
     };
-  }, [selected, unauthorized]);
+  }, [selected, onUnauthorized]);
 
   useEffect(() => {
-    if (token && now >= token.expires) clearSecret();
-  }, [now, token, clearSecret]);
-
-  useEffect(() => {
-    if (enrollmentOpen) {
-      enrollmentPanel.current?.focus();
-      enrollmentPanel.current?.scrollIntoView({ block: "start" });
-    }
-  }, [enrollmentOpen]);
+    if (!inspectHost) return;
+    setSelected(inspectHost.id);
+    setSelectionNotice("");
+    setResource(inspectHost.resource ?? "cpu_percent");
+    const frame = requestAnimationFrame(() => {
+      inspectorHeading.current?.closest(".host-inspector")?.scrollIntoView({ block: "start" });
+      inspectorHeading.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [inspectHost]);
 
   const hosts = fleet?.hosts ?? [];
-  const visible = hosts.filter(h => `${h.hostname} ${h.id}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const rows = hosts.map(host => ({ host, risk: fleet && !failure ? pressure(host, fleet, now) : null }));
+  rows.sort((a, b) => (a.risk?.headroom ?? Infinity) - (b.risk?.headroom ?? Infinity));
+  const term = query.trim().toLowerCase();
+  const visible = rows.filter(({ host, risk }) =>
+    `${host.hostname} ${host.id}`.toLowerCase().includes(term) &&
+    (status === "all" || host.status === status || (status === "attention" && !!risk && risk.state !== "within")),
+  );
+  const attention = rows.filter(({ risk }) => risk && risk.state !== "within").length;
+  const assessed = rows.filter(({ risk }) => risk !== null).length;
   const host = hosts.find(h => h.id === selected);
-  const stale = (h: Host) => !h.sampled_at || now - Date.parse(h.sampled_at) > (fleet?.stale_after_seconds ?? 60) * 1000;
+  const stale = (h: Host) => !fleet || !hasFreshSample(h, fleet, now);
   const relatedIncident = host ? incidents.find(i => i.agent_id === host.id && i.status === "open") : undefined;
-  const drift = incidents.find(i => i.category === "config_drift");
 
   function selectHost(id: string) {
     if (id === selected) return;
@@ -378,84 +319,23 @@ export function HostWorkspace({
     });
   }
 
-  async function enroll() {
-    if (!enrollmentVisible.current || !installConfig) return;
-    clearSecret();
-    const current = generation.current;
-    const controller = new AbortController();
-    tokenController.current = controller;
-    setEnrolling(true);
-    try {
-      const result = await request("/agents/enrollment-token", controller.signal, "POST");
-      if (current !== generation.current || !enrollmentVisible.current) return;
-      const next = {
-        command: buildAgentInstallCommand(installConfig, result.token),
-        expires: Date.now() + result.expiresInSeconds * 1000,
-      };
-      tokenRef.current = next;
-      setToken(next);
-    } catch (e) {
-      if (current !== generation.current || !enrollmentVisible.current) return;
-      const message = e instanceof Error ? e.message : String(e);
-      if (message === "Unauthorized") unauthorized();
-      else setEnrollError(message);
-    } finally {
-      if (current === generation.current) setEnrolling(false);
-    }
-  }
-
-  async function copyCommand() {
-    const secret = tokenRef.current;
-    if (!secret || !enrollmentVisible.current) return;
-    if (Date.now() >= secret.expires) {
-      clearSecret();
-      return;
-    }
-    const current = generation.current;
-    setCopied(false);
-    setCopyError("");
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
-      await navigator.clipboard.writeText(secret.command);
-      if (current === generation.current && enrollmentVisible.current && Date.now() < secret.expires) setCopied(true);
-    } catch {
-      if (current === generation.current && enrollmentVisible.current && Date.now() < secret.expires) {
-        setCopyError("Clipboard unavailable. Select and copy the install command manually.");
-      }
-    }
-  }
-
-  function closeEnrollment() {
-    enrollmentVisible.current = false;
-    clearSecret();
-    onCloseEnrollment();
-  }
-
   return (
     <section aria-labelledby="fleet-title" className="fleet-section">
-      <div className="fleet-summary" aria-label="Fleet summary">
-        <div className="fleet-summary-primary">
-          <span className="summary-label">Hosts online</span>
-          <strong className={failure ? undefined : "measurement--success"}>
-            {fleet ? <>{fleet.online}<span className="summary-denominator"> / {fleet.total}</span></> : "—"}
-          </strong>
-          <small>fleet{failure ? " · cached" : ""}</small>
+      <div className="host-inventory-toolbar">
+        <label className="sr-only" htmlFor="host-status-filter">Filter by host status</label>
+        <select className="ui-input" id="host-status-filter" value={status} onChange={e => setStatus(e.target.value)}>
+          <option value="all">All statuses</option><option value="online">Online</option><option value="offline">Offline</option><option value="attention">Needs attention</option>
+        </select>
+        <div className="host-search">
+          <label className="sr-only" htmlFor="host-search">Search hosts</label>
+          <Input id="host-search" type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search hosts or ID…" />
         </div>
-        <div>
-          <span className="summary-label">Open host incidents</span>
-          <strong className={openIncidents ? "measurement--warning" : undefined}>{openIncidents}</strong>
-          <small>latest 100</small>
+      </div>
+      <div className="host-inventory-summary">
+        <div><h2 id="fleet-title">{fleet ? `${fleet.online} of ${fleet.total} hosts online${failure ? " · cached" : ""}` : failure ? "Host inventory unavailable" : "Loading host inventory…"}</h2>
+          <p>Agent connectivity and resource limits are measured independently of endpoint health.</p>
         </div>
-        <div>
-          <span className="summary-label">Endpoints up</span>
-          <strong className="measurement--unknown">—</strong>
-          <small>Monitoring unavailable</small>
-        </div>
-        <div>
-          <span className="summary-label">Endpoints failing</span>
-          <strong className="measurement--unknown">—</strong>
-          <small>Monitoring unavailable</small>
-        </div>
+        {fleet && !failure && <Badge tone={rows.some(({ risk }) => risk?.state === "exceeded") ? "danger" : attention ? "warning" : "neutral"}>{assessed ? `${attention} of ${assessed} assessed near or at limit` : "No hosts assessed"}</Badge>}
       </div>
 
       {failure && (
@@ -467,61 +347,8 @@ export function HostWorkspace({
         </Notice>
       )}
 
-      {hosts.length > 0 && (
-        <div className="fleet-signals" role="group" aria-label="Select a loaded host">
-          {hosts.map(h => (
-            <Button
-              key={h.id}
-              variant="ghost"
-              className="fleet-signal"
-              aria-pressed={selected === h.id}
-              aria-controls="host-inspector"
-              aria-label={`${h.hostname}, ${h.status}${failure ? ", cached" : ""}, inspect host`}
-              title={`${h.hostname} · ${h.status}${failure ? " (cached)" : ""} · Last contact ${stamp(h.last_seen_at)}`}
-              onClick={() => selectHost(h.id)}
-            >
-              <span className="signal-track" aria-hidden="true">
-                <span className={failure ? "measurement--unknown" : h.status === "online" ? "measurement--success" : "measurement--warning"} />
-              </span>
-              <span className="signal-hostname">{h.hostname}</span>
-              <span className="signal-status">{h.status === "online" ? "Online" : "Offline"}{failure ? " · cached" : ""}</span>
-            </Button>
-          ))}
-        </div>
-      )}
-
       <div className="fleet-workspace">
         <div className="fleet-list">
-          <div className="panel-head fleet-list-heading">
-            <div>
-              <h2 id="fleet-title">Linux hosts</h2>
-              <p>Agent connectivity and host resources</p>
-            </div>
-            <div className="host-search">
-              <label className="sr-only" htmlFor="host-search">Search hosts</label>
-              <Input
-                id="host-search"
-                type="search"
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder="Search hosts or ID…"
-              />
-              {query && (
-                <Button size="sm" variant="ghost" onClick={() => setQuery("")}>
-                  Clear
-                </Button>
-              )}
-            </div>
-          </div>
-
-          <p className="tiny fleet-coverage" role="status">
-            {fleet
-              ? `${visible.length} matching · ${hosts.length} of ${fleet.total} hosts loaded · Limit ${fleet.limit}`
-              : failure
-                ? "Host inventory unavailable"
-                : "Loading host inventory…"}
-          </p>
-
           <div
             className="host-table-scroll"
             role="region"
@@ -534,16 +361,16 @@ export function HostWorkspace({
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Host</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">CPU</th>
-                  <th scope="col">Memory</th>
+                  <th scope="col">Host / agent version</th>
+                  <th scope="col">Agent / last seen</th>
+                  <th scope="col">CPU / limit</th>
+                  <th scope="col">Memory / limit</th>
                   <th scope="col">Disk</th>
-                  <th scope="col">Last seen</th>
+                  <th scope="col">Resource status</th>
                 </tr>
               </thead>
               <tbody>
-                {visible.map(h => (
+                {visible.map(({ host: h, risk }) => (
                   <tr key={h.id} className={selected === h.id ? "host-selected" : ""}>
                     <th scope="row">
                       <Button
@@ -558,6 +385,7 @@ export function HostWorkspace({
                           {selected === h.id ? ", selected" : ", inspect host"}
                         </span>
                       </Button>
+                      <small>{h.version ? `Agent ${h.version}` : "Agent version unavailable"}</small>
                       {(failure || h.status === "offline" || stale(h)) && (
                         <small>
                           {failure ? "Cached" : h.sampled_at ? "Historical sample" : "No measurement"}
@@ -585,22 +413,17 @@ export function HostWorkspace({
                         {h.status === "online" ? "Online" : "Offline"}
                         {failure ? " (cached)" : ""}
                       </span>
+                      <small><time dateTime={h.last_seen_at ?? undefined} title={stamp(h.last_seen_at)}>{age(h.last_seen_at, now)}</time></small>
                     </td>
-                    {[h.cpu_percent, h.memory_percent, h.disk_percent].map((v, i) => (
-                      <td key={i}>
-                        <span
-                          className={measurementClass(v)}
-                          aria-label={v == null || !Number.isFinite(v) ? "No measurement" : undefined}
-                        >
-                          {percent(v)}
-                        </span>
-                      </td>
-                    ))}
-                    <td>
-                      <time dateTime={h.last_seen_at ?? undefined} title={stamp(h.last_seen_at)}>
-                        {age(h.last_seen_at, now)}
-                      </time>
-                    </td>
+                    {resources.map(({ key }) => {
+                      const reading = fleet && !failure ? resourcePressure(h, fleet, now, key) : null;
+                      const limit = fleet?.thresholds?.[key] ?? null;
+                      return <td key={key}>
+                        <span className={pressureClass(reading?.state)} aria-label={h[key] == null ? "No measurement" : undefined}>{percent(h[key])}{key !== "disk_percent" && ` / ${percent(limit)}`}</span>
+                        {reading && key === "cpu_percent" && <small>{reading.headroom > 0 ? `${Number(reading.headroom.toFixed(1))}% below limit` : reading.headroom < 0 ? `${Number((-reading.headroom).toFixed(1))}% over limit` : "At limit"}</small>}
+                      </td>;
+                    })}
+                    <td><span className={pressureClass(risk?.state)}>{risk ? pressureLabel[risk.state] : failure ? "Cached" : h.status === "offline" ? "Historical" : stale(h) ? "No fresh sample" : "Unavailable"}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -609,15 +432,19 @@ export function HostWorkspace({
 
           {fleet && !hosts.length && (
             <p className="empty">
-              No hosts enrolled. Use Enroll host to create a one-time token and connect your first Linux host.
+              No hosts enrolled. Connect a server to see agent connectivity and measured resource usage.
             </p>
           )}
           {hosts.length > 0 && !visible.length && (
             <p className="empty" role="status">
-              No hosts match “{query}”.{" "}
-              <Button variant="ghost" onClick={() => setQuery("")}>Clear search</Button>
+              No hosts match these filters.{" "}
+              <Button variant="ghost" onClick={() => { setQuery(""); setStatus("all"); }}>Clear filters</Button>
             </p>
           )}
+
+          <p className="tiny fleet-coverage" role="status">
+            {fleet && `${visible.length} of ${hosts.length} loaded · ${fleet.total} enrolled · Sorted by resource risk`}
+          </p>
 
           <p className="tiny fleet-freshness">
             {fleet && (
@@ -625,7 +452,7 @@ export function HostWorkspace({
                 Fleet observed <time dateTime={fleet.observed_at}>{stamp(fleet.observed_at)}</time>.{" "}
               </>
             )}
-            Samples older than {fleet?.stale_after_seconds ?? 60}s are stale. Offline agents retain historical observations; connectivity is not endpoint reachability.
+            Offline or stale samples stay in the inventory as historical readings. Resource status requires fresh telemetry.
           </p>
           {host && (
             <a className="inspector-jump" href="#host-inspector">
@@ -638,7 +465,7 @@ export function HostWorkspace({
 
         <Panel className="host-inspector" id="host-inspector" role="region" aria-labelledby="host-inspector-title" tabIndex={-1}>
           <div className="panel-head">
-            <h2 id="host-inspector-title">{host ? host.hostname : "Host inspector"}</h2>
+            <h2 id="host-inspector-title" ref={inspectorHeading} tabIndex={-1}>{host ? host.hostname : "Host inspector"}</h2>
             {host && (
               <Badge tone={host.status === "online" && !failure ? "success" : "warning"}>
                 {host.status === "online" ? "Online" : "Offline"}
@@ -665,7 +492,7 @@ export function HostWorkspace({
                     }}
                   >
                     <span
-                      className={`resource-value ${measurementClass(host[key])}`}
+                      className={`resource-value ${pressureClass(fleet && !failure ? resourcePressure(host, fleet, now, key)?.state : undefined)}`}
                       aria-label={host[key] == null ? "No measurement" : undefined}
                     >
                       {percent(host[key])}
@@ -722,8 +549,9 @@ export function HostWorkspace({
                     </Button>
                   </>
                 ) : (
-                  <p className="muted small">No open incident for this host in the latest 100 records.</p>
+                  <p className="muted small">{openIncidents === null ? incidentsStale ? "Related incident data is unavailable." : "Loading related incidents…" : "No open incident for this host in the latest 100 records."}</p>
                 )}
+                {incidentsStale && openIncidents !== null && <p className="tiny">Cached incident records; the latest refresh failed.</p>}
                 <p className="tiny">Measured signals only. No root cause inferred.</p>
               </section>
 
@@ -744,146 +572,12 @@ export function HostWorkspace({
             </>
           )}
         </Panel>
-          {drift && (
-            <section className="fleet-drift" aria-labelledby="fleet-drift-title">
-              <h2 id="fleet-drift-title">Monitored file changed</h2>
-              <p className="drift-observation">
-                {drift.hostname} · <time dateTime={drift.created_at}>{stamp(drift.created_at)}</time>
-              </p>
-              <Button variant="ghost" onClick={() => onOpenIncident(drift.id)}>
-                {drift.title}
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M5 12h14 M13 6l6 6-6 6" />
-                </svg>
-              </Button>
-              <p className="muted">Hash change recorded. Relationship to resource incidents is unknown.</p>
-              <small className="muted">
-                Latest recorded drift in the last 100 incidents · {drift.status}
-              </small>
-            </section>
-          )}
-
-          <details className="service-inventory">
-            <summary>
-              Service &amp; endpoint availability <span className="muted">Not collected</span>
-            </summary>
-            <section aria-labelledby="services-title">
-              <div className="panel-head">
-                <div>
-                  <h2 id="services-title">
-                    {host ? `Services on ${host.hostname}` : "Services on selected host"}
-                  </h2>
-                  <p>Read-only inventory · Collection unavailable</p>
-                </div>
-                <Button size="sm" disabled aria-describedby="inventory-unavailable">
-                  Add endpoint
-                </Button>
-              </div>
-              <div
-                className="host-table-scroll"
-                role="region"
-                aria-label="Service inventory table, horizontally scrollable"
-                tabIndex={0}
-              >
-                <table className="host-table service-table">
-                  <caption className="sr-only">
-                    Service runtime, process state, resources and independent endpoint checks. Inventory is unavailable.
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Service / runtime</th>
-                      <th scope="col">Process</th>
-                      <th scope="col">Resources</th>
-                      <th scope="col">Endpoint</th>
-                    </tr>
-                  </thead>
-                </table>
-              </div>
-              <div className="inventory-unavailable" id="inventory-unavailable">
-                <strong>{host ? "Inventory unavailable" : "Select a host to view inventory availability"}</strong>
-                <p>
-                  Continuous Docker/systemd inventory is not collected. Workload count, process state and per-service resources are unavailable—not zero.
-                </p>
-                <p>
-                  Endpoint configuration and HTTP checks are not available. No reachability result has been inferred.
-                </p>
-              </div>
-              <div className="signal-boundary">
-                <p>Running is not the same as reachable.</p>
-                <p className="muted small">
-                  Agent telemetry describes the host. Endpoint checks require independent observations from a named probe.
-                </p>
-              </div>
-            </section>
-          </details>
+        <section className="host-guidance">
+          <div><h2>Connect another server</h2><p className="muted">Install the Linux agent to add this server’s resource signals to the fleet.</p></div>
+          <Button onClick={onConnect}><WorkspaceIcon name="terminal" />Agent installation</Button>
+        </section>
       </div>
 
-      <section
-        ref={enrollmentPanel}
-        tabIndex={-1}
-        className="host-enrollment"
-        id="host-enrollment"
-        aria-labelledby="enroll-host-title"
-        hidden={!enrollmentOpen}
-      >
-        <div className="panel-head">
-          <div>
-            <h2 id="enroll-host-title">Enroll a Linux host</h2>
-            <p>Copy one command, SSH to the intended host, and paste it there.</p>
-          </div>
-          <Button size="sm" variant="ghost" onClick={closeEnrollment}>
-            Close enrollment
-          </Button>
-        </div>
-
-        <p className="small">
-          Requires Linux with running systemd, amd64 or arm64, curl and CA certificates.
-          {" "}Run as root or with sudo (which may prompt for your password). No Go toolchain or repository checkout needed.
-        </p>
-        {configLoading && <p role="status">Loading installation configuration…</p>}
-        {configError && <Notice tone="warning" role="alert">{configError}. Monitoring and manual enrollment remain available.</Notice>}
-        {installConfig && (
-          <p className="small">
-            Hub: <code>{installConfig.hubUrl}</code><br />
-            Pinned release: <code>{installConfig.version}</code> from <code>{installConfig.repository}</code>
-          </p>
-        )}
-        <Button loading={enrolling} disabled={!installConfig || configLoading} onClick={() => void enroll()}>
-          Generate install command
-        </Button>
-
-        {enrollError && (
-          <Notice tone="danger" role="alert">
-            {enrollError}
-          </Notice>
-        )}
-
-        {token && now < token.expires && (
-          <div className="enrollment-secret">
-            <Notice tone="warning">
-              This command contains a one-time token and may remain in shell history and the clipboard. It expires after 10 minutes; use it only on the intended host.
-            </Notice>
-            <p>
-              Expires {new Date(token.expires).toLocaleTimeString()} ·{" "}
-              {Math.max(0, Math.ceil((token.expires - now) / 1000))}s remaining.
-              {" "}Usable once; creating another does not revoke earlier tokens.
-            </p>
-            <pre className="agent-command" tabIndex={0} aria-label="Install command"><code>{token.command}</code></pre>
-            <div className="token">
-              <Button size="sm" onClick={() => void copyCommand()}>Copy install command</Button>
-              <Button size="sm" variant="ghost" onClick={clearSecret}>Hide command</Button>
-              {copied && <span role="status">Install command copied.</span>}
-            </div>
-            {copyError && <Notice tone="warning" role="alert">{copyError}</Notice>}
-          </div>
-        )}
-
-        <p className="tiny">
-          The installer verifies the pinned binary and enables a nonroot systemd service.
-          {" "}Hiding a command does not clear clipboard/history or revoke its token.
-          {" "}Verify the host’s Online status and fresh measurements in the fleet table; it refreshes every 10 seconds.
-        </p>
-      </section>
     </section>
   );
 }

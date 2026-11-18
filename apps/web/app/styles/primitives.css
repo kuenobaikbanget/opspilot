@@ -4,14 +4,15 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 42px;
+  min-height: 38px;
   max-width: 100%;
   padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--color-border-strong);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
+  background: var(--color-surface);
   color: var(--color-text);
-  font-weight: 650;
+  font-size: 0.75rem;
+  font-weight: 500;
   line-height: 1.4;
   text-align: center;
   cursor: pointer;
@@ -57,11 +58,11 @@
 .ui-button--sm {
   min-height: 36px;
   padding: var(--space-1) var(--space-3);
-  font-size: var(--text-sm);
+  font-size: 0.75rem;
 }
 
 .ui-button:disabled {
-  opacity: 0.55;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
@@ -252,4 +253,12 @@
 
 .ui-notice p {
   margin: var(--space-2) 0 0;
+}
+
+@media (any-pointer: coarse), (max-width: 700px) {
+  .ui-button,
+  .ui-input {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }

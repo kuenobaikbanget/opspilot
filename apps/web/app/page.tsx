@@ -4,33 +4,60 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import Link from "next/link";
 import { BrandMark } from "../components/brand-mark";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../components/ui";
-import type { AiProvider, Host, ProviderProtocol } from "@opspilot/contracts";
+import type { AiProvider, EndpointMonitor, HostList, HostService, ProviderProtocol, ServicesPayload } from "@opspilot/contracts";
 import { HostWorkspace } from "../components/host-workspace";
 import { ProviderSettings } from "../components/provider-settings";
+import { WorkspaceIcon, WorkspaceShell, type WorkspacePage } from "../components/workspace-shell";
+import { ThresholdOverview } from "../components/threshold-overview";
+import { ServerOnboarding } from "../components/server-onboarding";
 import { api, ApiError } from "../lib/api";
-type Incident = { id: string; title: string; category: string; status: string; hostname: string; agent_id: string; created_at: string; resolution: string | null };
+import { percent, resources, type Resource } from "../lib/host-pressure";
+type Incident = { id: string; title: string; category: string; status: string; hostname: string; agent_id: string; created_at: string; resolved_at: string | null; resolution: string | null };
 type Evidence = { id: string; source: string; content: string; created_at: string };
 type Investigation = { id: string; provider: { id: string | null; name: string; protocol: ProviderProtocol; baseUrl: string | null; model: string | null }; status: string; result_json: { probable_cause?: string; confidence?: number | string; evidence_ids?: string[]; recommended_checks?: string[] } | null; error: string | null };
 type Detail = { incident: Incident; evidence: Evidence[]; investigations: Investigation[] };
 type Memory = { id: string; summary: string; resolution: string; created_at: string };
 
-const destinations = [
-  { id: "hosts", label: "Hosts", title: "Fleet & services", description: "Infrastructure signals and endpoint checks. Side by side, never conflated.", icon: "M3 3h18v7H3z M3 14h18v7H3z M6 6h.01 M6 17h.01" },
-  { id: "incidents", label: "Incidents", title: "Host incidents", description: "Measured evidence, advisory AI hypotheses and human-confirmed resolutions.", icon: "M12 8v5 M12 16h.01 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0" },
-  { id: "drift", label: "Configuration drift", title: "Configuration drift", description: "Recorded configuration hash changes. Correlation is not causation.", icon: "M14 2H5v20h14V7z M14 2v5h5 M8 12h8 M8 16h5" },
-  { id: "memory", label: "Incident memory", title: "Incident memory", description: "Human-confirmed resolutions from previous investigations.", icon: "M12 5v16 M3 3h5l4 2 4-2h5v16h-5l-4 2-4-2H3z" },
-] as const;
-type Destination = typeof destinations[number]["id"] | "providers";
+const headings = {
+  overview: ["Know what’s close to the edge.", "See which resources have reached their configured limits and how much headroom is left."],
+  hosts: ["Every host. One clear view.", "Monitor agent connectivity and resource usage across your Linux hosts."],
+  services: ["Services", "Workload state and endpoint reachability are measured separately from host health."],
+  incidents: ["From signal to resolution.", "Review measured evidence, investigate, and record what fixed the incident."],
+  drift: ["Configuration drift", "Recorded configuration hash changes. Correlation is not causation."],
+  memory: ["Incident memory", "Human-confirmed resolutions from previous investigations."],
+  providers: ["Provider settings", "Encrypted AI connections. Choose the endpoint and model explicitly; no automatic fallback."],
+} as const;
+
+function categoryLabel(category: string) {
+  switch (category) {
+    case "cpu": return "CPU pressure";
+    case "memory": return "Memory pressure";
+    case "disk": return "Disk pressure";
+    case "config_drift": return "Configuration drift";
+    case "manual": return "Manual investigation";
+    default: return category;
+  }
+}
 
 
 export default function Home() {
   const [logged, setLogged] = useState<boolean | null>(null);
+  const [authDisabled, setAuthDisabled] = useState(false);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [hosts, setHosts] = useState<Host[]>([]);
+  const [sessionError, setSessionError] = useState("");
+  const [incidentsError, setIncidentsError] = useState("");
+  const [fleet, setFleet] = useState<HostList | null>(null);
+  const [fleetError, setFleetError] = useState("");
+  const [services, setServices] = useState<HostService[]>([]);
+  const [endpoints, setEndpoints] = useState<EndpointMonitor[]>([]);
+  const [servicesError, setServicesError] = useState("");
+  const [checkingEndpointId, setCheckingEndpointId] = useState<string | null>(null);
+  const [inspectHost, setInspectHost] = useState<{ id: string; resource?: Resource } | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const selectedIncident = useRef<string | null>(null);
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
@@ -46,44 +73,53 @@ export default function Home() {
   const [hostId, setHostId] = useState("");
   const [resolution, setResolution] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<Destination>("hosts");
-  const [utilitiesOpen, setUtilitiesOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [tab, setTab] = useState<WorkspacePage>("overview");
   const [memories, setMemories] = useState<Memory[]>([]);
   const [search, setSearch] = useState("");
   const [hostRefresh, setHostRefresh] = useState(0);
-  const [enrollmentOpen, setEnrollmentOpen] = useState(false);
-  const enrollmentTrigger = useRef<HTMLButtonElement>(null);
+  const pageHeading = useRef<HTMLHeadingElement>(null);
+  const focusPage = useRef(false);
   const focusIncident = useRef(false);
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
-  useEffect(() => {
-    const unauthorized = () => {
-      sessionGeneration.current++;
-      setLogged(false); setHosts([]); setDetail(null); setSelected(null);
-      setProviders([]); setEncryptionConfigured(false); setProviderId(""); setModel("");
-      selectedProviderId.current = "";
-    };
-    window.addEventListener("opspilot-unauthorized", unauthorized);
-    return () => window.removeEventListener("opspilot-unauthorized", unauthorized);
+  const endSession = useCallback(() => {
+    sessionGeneration.current++;
+    setLogged(false); setAuthDisabled(false); setFleet(null); setFleetError(""); setInspectHost(null);
+    setDetail(null); setSelected(null); selectedIncident.current = null;
+    setTab("overview");
+    setIncidents([]); setIncidentsError(""); setRefreshedAt(null);
+    setServices([]); setEndpoints([]); setServicesError(""); setCheckingEndpointId(null);
+    setProviders([]); setEncryptionConfigured(false); setProviderId(""); setModel("");
+    selectedProviderId.current = "";
   }, []);
 
   useEffect(() => {
+    window.addEventListener("opspilot-unauthorized", endSession);
+    return () => window.removeEventListener("opspilot-unauthorized", endSession);
+  }, [endSession]);
+
+  const checkSession = useCallback(async () => {
+    const generation = sessionGeneration.current;
+    setSessionError("");
     try {
-      setSidebarCollapsed(localStorage.getItem("opspilot-sidebar-collapsed") === "true");
-    } catch {
-      // Navigation still works when browser storage is unavailable.
+      const me = await api("/auth/me");
+      if (generation === sessionGeneration.current) {
+        setAuthDisabled(Boolean(me?.authDisabled));
+        setLogged(true);
+      }
+    } catch (cause) {
+      if (generation === sessionGeneration.current && !(cause instanceof ApiError && cause.status === 401)) {
+        setSessionError(cause instanceof Error ? cause.message : "Unable to verify your session.");
+      }
     }
   }, []);
 
-  function toggleSidebar() {
-    const collapsed = !sidebarCollapsed;
-    setSidebarCollapsed(collapsed);
-    try {
-      localStorage.setItem("opspilot-sidebar-collapsed", String(collapsed));
-    } catch {
-      // Keep the current session's preference without persistent storage.
-    }
-  }
+  useEffect(() => { void checkSession(); }, [checkSession]);
+
+  useEffect(() => {
+    if (!focusPage.current || !logged) return;
+    focusPage.current = false;
+    pageHeading.current?.focus({ preventScroll: true });
+  }, [tab, logged]);
 
   const refreshProviders = useCallback((): Promise<void> => {
     if (providerRequest.current) return providerRequest.current;
@@ -116,34 +152,70 @@ export default function Home() {
     return request;
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refreshIncidents = useCallback(async () => {
     const generation = sessionGeneration.current;
-    setHostRefresh(value => value + 1);
-    const providerRefresh = refreshProviders();
     try {
       const nextIncidents = await api("/incidents");
       if (generation !== sessionGeneration.current) return;
       setIncidents(nextIncidents);
       setRefreshedAt(new Date().toISOString());
-      setLogged(old => old === null ? true : old);
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e);
-      if (message.includes("Unauthorized")) setLogged(false);
-      else setError(message);
+      setIncidentsError("");
+    } catch (cause) {
+      if (generation === sessionGeneration.current && !(cause instanceof ApiError && cause.status === 401)) {
+        setIncidentsError(cause instanceof Error ? cause.message : "Incident records could not be loaded.");
+      }
     }
-    await providerRefresh;
-  }, [refreshProviders]);
+  }, []);
+
+  const refreshServices = useCallback(async () => {
+    const generation = sessionGeneration.current;
+    try {
+      const data: ServicesPayload = await api("/services");
+      if (generation !== sessionGeneration.current) return;
+      setServices(data.services);
+      setEndpoints(data.endpoints);
+      setServicesError("");
+    } catch (cause) {
+      if (generation === sessionGeneration.current && !(cause instanceof ApiError && cause.status === 401)) {
+        setServicesError(cause instanceof Error ? cause.message : "Service and endpoint records could not be loaded.");
+      }
+    }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    setHostRefresh(value => value + 1);
+    await Promise.all([refreshIncidents(), refreshProviders(), refreshServices()]);
+  }, [refreshIncidents, refreshProviders, refreshServices]);
+
+  async function checkEndpoint(id: string) {
+    setCheckingEndpointId(id);
+    try {
+      const res: { endpoint: EndpointMonitor } = await api(`/endpoints/${id}/check`, "POST", {});
+      setEndpoints(prev => prev.map(item => (item.id === id ? res.endpoint : item)));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Endpoint check failed.");
+    } finally {
+      setCheckingEndpointId(current => (current === id ? null : current));
+    }
+  }
 
   const loadDetail = useCallback(async (id: string) => {
-    try { setDetail(await api(`/incidents/${id}`)); }
-    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+    try {
+      const result: Detail = await api(`/incidents/${id}`);
+      if (selectedIncident.current === id) setDetail(result);
+    } catch (e: unknown) {
+      if (selectedIncident.current === id) setError(e instanceof Error ? e.message : String(e));
+    }
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const timer = setInterval(() => { void refresh(); }, 10000);
+    if (!logged) return;
+    void refreshIncidents();
+    void refreshProviders();
+    void refreshServices();
+    const timer = setInterval(() => { void refreshIncidents(); void refreshProviders(); void refreshServices(); }, 10000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [logged, refreshIncidents, refreshProviders, refreshServices]);
   const activeProviderTest = providers.some(p => p.lastTest?.status === "queued" || p.lastTest?.status === "running");
   useEffect(() => {
     if (!logged || tab !== "providers" || !activeProviderTest) return;
@@ -163,8 +235,8 @@ export default function Home() {
     }
   }, [detail]);
   useEffect(() => {
-    if (tab === "memory") void api(`/memory?q=${encodeURIComponent(search)}`).then(setMemories).catch(e => setError(e.message));
-  }, [tab, search]);
+    if (logged && tab === "memory") void api(`/memory?q=${encodeURIComponent(search)}`).then(setMemories).catch(e => setError(e.message));
+  }, [logged, tab, search]);
 
   async function act(action: () => Promise<unknown>) {
     setBusy(true);
@@ -180,11 +252,15 @@ export default function Home() {
 
   async function login(e: FormEvent) {
     e.preventDefault();
-    await act(async () => {
+    setBusy(true);
+    setError("");
+    try {
       await api("/auth/login", "POST", { password });
       setPassword("");
       setLogged(true);
-    });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to sign in.");
+    } finally { setBusy(false); }
   }
 
   async function investigate(event: FormEvent) {
@@ -207,8 +283,8 @@ export default function Home() {
   if (logged === null) return (
     <main className="center">
       <div>
-        <p role="status">Loading OpsPilot…</p>
-        {error && <Notice tone="danger" role="alert">{error}</Notice>}
+        <p role="status">{sessionError ? "Unable to verify your session." : "Checking admin session…"}</p>
+        {sessionError && <Notice tone="danger" role="alert">{sessionError}<p><Button onClick={() => void checkSession()}>Retry session check</Button></p></Notice>}
         <Link href="/design-system">Explore the design system</Link>
       </div>
     </main>
@@ -218,7 +294,7 @@ export default function Home() {
     <main className="login-container">
       <Panel className="login-card">
         <div className="logo"><BrandMark size={24} /><span>OpsPilot</span></div>
-        <h1>Welcome back.</h1>
+        <h1>Sign in to OpsPilot</h1>
         <p className="muted">Sign in with your single-admin password.</p>
         <form onSubmit={login}>
           <Field id="admin-password" label="Admin password" required>
@@ -233,102 +309,238 @@ export default function Home() {
     </main>
   );
 
-  const open = incidents.filter(i => i.status === "open").length;
-  const page = destinations.find(item => item.id === tab);
-  const fleetVisible = tab === "hosts";
+  const open = refreshedAt ? incidents.filter(i => i.status === "open").length : null;
+  const heading = tab === "connect" || tab === "new-monitor" ? null : headings[tab];
+  const hosts = fleet?.hosts ?? [];
   const incidentView = tab === "incidents" || tab === "drift";
   const visibleIncidents = tab === "drift" ? incidents.filter(i => i.category === "config_drift") : incidents;
   const selectedProvider = providers.find(p => p.id === providerId && p.enabled);
+  const detailHost = detail && hosts.find(h => h.id === detail.incident.agent_id);
+
+  function chooseIncident(id: string | null) {
+    if (id === selectedIncident.current) return;
+    selectedIncident.current = id;
+    setDetail(null);
+    setSelected(id);
+    setResolution("");
+  }
+
+  function navigate(next: WorkspacePage) {
+    if (tab === next) return;
+    focusIncident.current = false;
+    const records = next === "drift" ? incidents.filter(i => i.category === "config_drift") : incidents;
+    chooseIncident(next === "incidents" || next === "drift"
+      ? records.find(i => i.status === "open")?.id ?? records[0]?.id ?? null
+      : null);
+    focusPage.current = true;
+    setTab(next);
+    window.scrollTo(0, 0);
+  }
+
+  function inspect(id: string, resource?: Resource) {
+    navigate("hosts");
+    setInspectHost({ id, resource });
+  }
+
+  function openIncident(id: string) {
+    focusIncident.current = true;
+    setTab("incidents");
+    chooseIncident(id);
+    window.scrollTo(0, 0);
+  }
+
+  function signOut() {
+    window.dispatchEvent(new Event("opspilot-clear-provider-draft"));
+    setBusy(true);
+    void api("/auth/logout", "POST").then(endSession).catch(e => setError(e.message)).finally(() => setBusy(false));
+  }
 
   return (
-    <div className="shell" data-sidebar-collapsed={sidebarCollapsed}>
-      <a className="skip-link" href="#main-content">Skip to content</a>
-      <aside className="sidebar" id="opspilot-sidebar" aria-label="OpsPilot">
-        <div className="sidebar-header">
-          <div className="sidebar-brand">
-            <div className="logo sidebar-brand-name"><BrandMark size={22} /><span>OpsPilot</span></div>
-            <span className="sidebar-monogram" aria-hidden="true"><BrandMark size={26} /></span>
-          </div>
-          <Button variant="ghost" className="sidebar-utilities-toggle" aria-expanded={utilitiesOpen} aria-controls="sidebar-utilities" onClick={() => setUtilitiesOpen(value => !value)}>
-            More
-            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={utilitiesOpen ? "m6 12 4-4 4 4" : "m6 8 4 4 4-4"} /></svg>
-          </Button>
-        </div>
-        <nav className="sidebar-navigation" aria-label="Main navigation">
-          {destinations.map(item => (
-            <Button key={item.id} variant="ghost" className={`nav ${tab === item.id ? "active" : ""}`} title={sidebarCollapsed ? item.label : undefined} aria-current={tab === item.id ? "page" : undefined} onClick={() => { setTab(item.id); setDetail(null); setSelected(null); }}>
-              <svg className="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={item.icon} /></svg>
-              <span className="sidebar-label">{item.label}</span>
-            </Button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom" id="sidebar-utilities" data-open={utilitiesOpen}>
-          <Button variant="ghost" className={`nav ${tab === "providers" ? "active" : ""}`} title={sidebarCollapsed ? "Provider settings" : undefined} aria-current={tab === "providers" ? "page" : undefined} onClick={() => setTab("providers")}>
-            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h3m4 0h7M3 14h7m4 0h3M8 4v4m4 4v4" /></svg>
-            <span className="sidebar-label">Provider settings</span>
-          </Button>
-          <Button variant="ghost" className="nav" title={sidebarCollapsed ? "Sign out" : undefined} disabled={busy} onClick={() => { window.dispatchEvent(new Event("opspilot-clear-provider-draft")); setBusy(true); void api("/auth/logout", "POST").then(() => { sessionGeneration.current++; setLogged(false); setHosts([]); setDetail(null); setSelected(null); setProviders([]); setEncryptionConfigured(false); setProviderId(""); setModel(""); selectedProviderId.current = ""; }).catch(e => setError(e.message)).finally(() => setBusy(false)); }}>
-            <svg className="sidebar-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4M8 10h9m-4-4 4 4-4 4" /></svg>
-            <span className="sidebar-label">Sign out</span>
-          </Button>
-        </div>
-      </aside>
-
+    <WorkspaceShell page={tab} onNavigate={navigate} onInspectHost={inspect} hosts={hosts} incidents={open} incidentsStale={!!incidentsError} busy={busy} onSignOut={authDisabled ? undefined : signOut}>
       <main className="content" id="main-content" tabIndex={-1}>
-        <div className="dashboard-context"><span>{refreshedAt ? <>Incident refresh <time dateTime={refreshedAt}>{new Date(refreshedAt).toLocaleTimeString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}</time></> : "Waiting for observations"}</span></div>
-        <header className="topbar">
-          <div className="topbar-heading">
-            <Button variant="ghost" className="sidebar-toggle" aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!sidebarCollapsed} aria-controls="opspilot-sidebar" onClick={toggleSidebar}>
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="2" /><path d="M7.5 3v14" /><path d={sidebarCollapsed ? "m11 8 2 2-2 2" : "m13 8-2 2 2 2"} /></svg>
-            </Button>
-            <div>
-              <h1>{page?.title ?? "Provider settings"}</h1>
-              <p className="muted">{page?.description ?? "Encrypted AI connections. Choose the endpoint and model explicitly; no automatic fallback."}</p>
-            </div>
+        {heading && <header className="topbar">
+          <div>
+            <h1 ref={pageHeading} tabIndex={-1}>{heading[0]}</h1>
+            <p className="muted">{heading[1]}</p>
           </div>
           <div className="header-actions">
-            <Button size="sm" variant="ghost" onClick={() => void refresh()}>
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M16 7a6 6 0 1 0 .1 6M16 3v4h-4" /></svg>
-              Refresh
-            </Button>
-            <Button ref={enrollmentTrigger} aria-expanded={enrollmentOpen} aria-controls="host-enrollment" onClick={() => { setTab("hosts"); setEnrollmentOpen(true); }}>
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
-              Enroll host
-            </Button>
+            {(tab === "overview" || tab === "hosts") && <Button variant={tab === "hosts" ? "primary" : "secondary"} onClick={() => navigate("connect")}><WorkspaceIcon name="terminal" />Connect server</Button>}
+            {(tab === "overview" || tab === "services") && <Button variant="primary" onClick={() => navigate("new-monitor")}><WorkspaceIcon name="add" />{tab === "services" ? "Add service" : "New monitor"}</Button>}
+            {tab === "incidents" && <a className="workspace-action-link" href="#create-incident"><WorkspaceIcon name="add" />Create incident</a>}
           </div>
-        </header>
+        </header>}
+        {heading && <div className="workspace-toolbar">
+          <span className="workspace-context">{tab === "overview" || tab === "hosts" ? <>
+            Local workspace {fleet && <span className="workspace-meta">· {fleet.total} {fleet.total === 1 ? "host" : "hosts"}{fleetError ? " · cached" : ""}</span>}
+          </> : incidentView ? <>
+            {open === null ? incidentsError ? "Incident data unavailable" : "Loading incidents…" : `${visibleIncidents.filter(i => i.status === "open").length} open${incidentsError ? " · cached" : ""}`}
+          </> : "Local workspace"}</span>
+          {(tab === "overview" || tab === "hosts" || incidentView) && <div className="workspace-toolbar-actions">
+            <span className="workspace-meta">{incidentView ? "Incident" : "Fleet"} refresh · 10s</span>
+            <Button size="sm" onClick={() => void refresh()}><WorkspaceIcon name="refresh" />Refresh</Button>
+          </div>}
+        </div>}
 
         {error && <Notice tone="danger" role="alert" className="dashboard-alert"><span>{error}</span><Button variant="ghost" size="sm" onClick={() => setError("")}>Dismiss</Button></Notice>}
+        {incidentsError && <Notice tone="warning" role="alert" className="dashboard-alert"><span>Incident refresh failed: {incidentsError}. {refreshedAt ? `Showing cached incident records from ${new Date(refreshedAt).toLocaleString()}.` : "Incident data is unavailable, not zero open incidents."}</span><Button size="sm" onClick={() => void refreshIncidents()}>Retry incidents</Button></Notice>}
 
-        <div hidden={!fleetVisible}><HostWorkspace refreshKey={hostRefresh} onHosts={setHosts} onUnauthorized={() => { setLogged(false); setHosts([]); setDetail(null); setSelected(null); }} openIncidents={open} incidents={incidents} onOpenIncident={id => { focusIncident.current = true; setTab("incidents"); setDetail(null); setSelected(id); setResolution(""); }} enrollmentOpen={enrollmentOpen && fleetVisible} onCloseEnrollment={() => { setEnrollmentOpen(false); enrollmentTrigger.current?.focus(); }} /></div>
+        <div hidden={tab !== "hosts"}><HostWorkspace refreshKey={hostRefresh} onFleet={setFleet} onFleetError={setFleetError} onUnauthorized={endSession} openIncidents={open} incidentsStale={!!incidentsError} incidents={incidents} onOpenIncident={openIncident} inspectHost={inspectHost} onConnect={() => navigate("connect")} /></div>
+        {tab === "overview" && (
+          <ThresholdOverview
+            fleet={fleet}
+            fleetError={fleetError}
+            openIncidents={open}
+            incidentsStale={!!incidentsError}
+            incidents={incidents}
+            services={services}
+            endpoints={endpoints}
+            servicesError={servicesError}
+            checkingEndpointId={checkingEndpointId}
+            onCheckEndpoint={(id) => void checkEndpoint(id)}
+            onOpenIncident={openIncident}
+            onInspectHost={inspect}
+            onBrowseHosts={() => navigate("hosts")}
+          />
+        )}
+        {tab === "connect" && <ServerOnboarding onBack={() => navigate("hosts")} onUnauthorized={endSession} fleet={fleet} fleetError={fleetError} onRefresh={() => setHostRefresh(value => value + 1)} />}
+        {tab === "services" && (
+          services.length || endpoints.length ? (
+            <div className="services-workspace">
+              <Panel aria-labelledby="services-workloads-title">
+                <div className="panel-head">
+                  <div>
+                    <h2 id="services-workloads-title">Recorded host services</h2>
+                    <p className="muted">Process states are reported separately from host metrics and endpoint checks.</p>
+                  </div>
+                  <Badge>{services.filter(s => s.state === "running").length} / {services.length} running</Badge>
+                </div>
+                <ul className="overview-inventory-list" role="list">
+                  {services.map(service => {
+                    const host = hosts.find(h => h.id === service.agent_id);
+                    return (
+                      <li key={service.id} className="overview-inventory-row">
+                        <div className="overview-identity">
+                          <span className="overview-hostname">{service.name}</span>
+                          <span className="overview-meta">{host?.hostname ?? service.agent_id} · {service.runtime} · {service.source}</span>
+                        </div>
+                        <Badge tone={service.state === "running" ? "success" : service.state === "failed" ? "danger" : service.state === "stopped" ? "warning" : "neutral"} dot>
+                          {service.state}
+                        </Badge>
+                        <span className="overview-meta">{new Date(service.observed_at).toLocaleString()}</span>
+                        {host && <Button size="sm" onClick={() => inspect(host.id)}>Inspect host</Button>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Panel>
+              <Panel aria-labelledby="services-endpoints-title">
+                <div className="panel-head">
+                  <div>
+                    <h2 id="services-endpoints-title">Endpoint checks</h2>
+                    <p className="muted">Independent HTTP probes from {endpoints[0]?.probe_location ?? "hub-local"}.</p>
+                  </div>
+                </div>
+                <ul className="overview-endpoint-list" role="list">
+                  {endpoints.map(endpoint => (
+                    <li key={endpoint.id} className="overview-endpoint-item">
+                      <div className="overview-endpoint-main">
+                        <div>
+                          <strong>{endpoint.name}</strong>
+                          <span className="overview-meta">{endpoint.target_url} · Expected HTTP {endpoint.expected_status}</span>
+                        </div>
+                        <div className="overview-endpoint-actions">
+                          <Badge tone={endpoint.last_status === "up" ? "success" : endpoint.last_status === "down" ? "danger" : "neutral"} dot>
+                            {endpoint.last_status === "up"
+                              ? `Up · HTTP ${endpoint.last_http_status ?? endpoint.expected_status}${endpoint.last_latency_ms !== null ? ` · ${endpoint.last_latency_ms} ms` : ""}`
+                              : endpoint.last_status === "down"
+                                ? `Down · ${endpoint.last_http_status !== null ? `HTTP ${endpoint.last_http_status}` : endpoint.last_error ?? "unreachable"}`
+                                : "Pending"}
+                          </Badge>
+                          <Button size="sm" loading={checkingEndpointId === endpoint.id} onClick={() => void checkEndpoint(endpoint.id)}>Check now</Button>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </Panel>
+            </div>
+          ) : (
+            <Panel className="services-unavailable" aria-labelledby="services-title">
+              <WorkspaceIcon name="services" />
+              <h2 id="services-title">Service inventory is unavailable</h2>
+              <p className="muted">This instance does not collect workload inventory or run endpoint checks. No service count or reachability result can be reported.</p>
+              <Button onClick={() => navigate("hosts")}>View host inventory <WorkspaceIcon name="arrow" /></Button>
+            </Panel>
+          )
+        )}
+        {tab === "new-monitor" && <section className="onboarding" aria-labelledby="add-service-title">
+          <Button className="onboarding-back" onClick={() => navigate("services")}><WorkspaceIcon name="back" />Back to Services</Button>
+          <header className="onboarding-header"><h1 id="add-service-title" ref={pageHeading} tabIndex={-1}>Add service</h1><p>Endpoint setup requires monitoring support on this instance.</p></header>
+          <ol className="onboarding-progress" aria-label="Service setup progress">
+            {["Choose a server", "Configure service", "Verify service"].map((step, i) => <li className="onboarding-progress-item" data-state={i === 0 ? "active" : "upcoming"} aria-current={i === 0 ? "step" : undefined} key={step}>
+              <span className="onboarding-progress-marker" aria-hidden="true">{i + 1}</span><div><span>{step}</span><span className="onboarding-step-status">{i === 0 ? "Unavailable" : "Not started"}</span></div>
+            </li>)}
+          </ol>
+          <ol className="onboarding-steps">
+            <li className="onboarding-step" data-state="active">
+              <div className="onboarding-step-header"><h2>1. Choose a server</h2></div>
+              <div className="onboarding-step-body"><p>Endpoint monitor configuration is not available on this instance. Connecting an agent enables host telemetry, not service probes.</p><div className="onboarding-actions"><Button onClick={() => navigate("hosts")}>View hosts</Button><Button onClick={() => navigate("connect")}><WorkspaceIcon name="terminal" />Connect server</Button></div></div>
+            </li>
+            <li className="onboarding-step" data-state="upcoming"><div className="onboarding-step-header"><h2>2. Configure service</h2></div></li>
+            <li className="onboarding-step" data-state="upcoming"><div className="onboarding-step-header"><h2>3. Verify service</h2></div></li>
+          </ol>
+        </section>}
         {incidentView && (
-          <>
-            <Panel role="region" aria-labelledby="incidents-title">
-              <div className="panel-head"><div><h2 id="incidents-title">{tab === "drift" ? "Recorded hash changes" : "Incidents"}</h2><p>{tab === "drift" ? "Configuration drift incidents from the latest 100 records. This is not a complete file inventory." : "Diagnostics, evidence and AI analysis · Latest 100 records"}</p></div><Badge tone={visibleIncidents.some(i => i.status === "open") ? "warning" : "neutral"}>{visibleIncidents.filter(i => i.status === "open").length} open</Badge></div>
+          <div className="incident-workspace">
+            <section className="incident-queue" aria-labelledby="incidents-title">
+              <h2 id="incidents-title">{tab === "drift" ? "Recorded hash changes" : "Needs attention"}</h2>
               <div className="list">
-                {visibleIncidents.length === 0 ? <div className="empty">{tab === "drift" ? "No configuration drift in the latest 100 incident records. This does not establish that all configurations are unchanged." : "No incidents recorded. Create one manually to test the investigation flow."}</div> : visibleIncidents.map(i => (
-                  <Button key={i.id} className={`incident ${selected === i.id ? "selected" : ""}`} aria-pressed={selected === i.id} onClick={() => { setSelected(i.id); setResolution(""); }}>
-                    <span className="incident-main"><strong>{i.title}</strong><small>{i.hostname} · {i.category} · {new Date(i.created_at).toLocaleString()}</small></span>
-                    <Badge tone={i.status === "resolved" ? "success" : "warning"}>{i.status}</Badge>
-                  </Button>
-                ))}
+                {open === null ? <p className="empty">{incidentsError ? "Incident records are unavailable. Retry the incident refresh to load them." : "Loading incident records…"}</p> : <>
+                  {visibleIncidents.filter(i => i.status === "open").length === 0 && <p className="empty">No open {tab === "drift" ? "drift records" : "incidents"} in the latest 100 records.</p>}
+                  {(["open", "resolved"] as const).map(status => {
+                    const records = visibleIncidents.filter(i => i.status === status);
+                    if (!records.length) return null;
+                    return <div className={`incident-group incident-group--${status}`} key={status}>
+                      {status === "resolved" && <h3>Recently resolved</h3>}
+                      {records.map(i => <Button key={i.id} className="incident" aria-pressed={selected === i.id} onClick={() => chooseIncident(i.id)}>
+                        <span className="incident-card-top"><span>{categoryLabel(i.category)}</span><span>{i.status}</span></span>
+                        <strong>{i.title}</strong>
+                        <small>{i.hostname} · <time dateTime={i.resolved_at ?? i.created_at}>{new Date(i.resolved_at ?? i.created_at).toLocaleString()}</time></small>
+                      </Button>)}
+                    </div>;
+                  })}
+                </>}
               </div>
-                {tab === "incidents" && <form className="panel-footer" onSubmit={e => { e.preventDefault(); void act(async () => { const x = await api("/incidents", "POST", { agentId: hostId, title }); setSelected(x.id); }); }}>
+              {tab === "incidents" && <form id="create-incident" className="panel-footer" onSubmit={e => { e.preventDefault(); void act(async () => { const x = await api("/incidents", "POST", { agentId: hostId, title }); chooseIncident(x.id); }); }}>
                   <h3>Create a test incident</h3>
                   <Field id="incident-host" label="Server" required><Select id="incident-host" value={hostId} onChange={e => setHostId(e.target.value)} required><option value="">Choose a server</option>{hosts.map(h => <option key={h.id} value={h.id}>{h.hostname}</option>)}</Select></Field>
                   <Field id="incident-title" label="Incident title" required><Input id="incident-title" value={title} onChange={e => setTitle(e.target.value)} required minLength={3} /></Field>
                   <Button type="submit" loading={busy} disabled={!hostId || title.length < 3}>Create incident</Button>
                 </form>}
-              </Panel>
-
+            </section>
+            {!detail && <Panel className="incident-placeholder"><p className="muted">{selected ? "Loading incident detail…" : "Select an incident to review measured evidence and investigation activity."}</p></Panel>}
             {detail && (
               <Panel className="detail" role="region" aria-labelledby="incident-detail-title">
-                <div className="panel-head"><div><h2 id="incident-detail-title" tabIndex={-1}>{detail.incident.title}</h2><p>{detail.incident.hostname} · {detail.incident.status}</p></div><Button variant="ghost" size="sm" onClick={() => { setDetail(null); setSelected(null); }}>Close detail</Button></div>
+                <div className="panel-head"><div><h2 id="incident-detail-title" tabIndex={-1}>{detail.incident.title}</h2><p>{detail.incident.hostname} · {categoryLabel(detail.incident.category)}</p></div><Badge tone={detail.incident.status === "open" ? "danger" : "neutral"}>{detail.incident.status}</Badge></div>
+                <div className="incident-context">
+                  <WorkspaceIcon name="hosts" />
+                  <div><h3>Host context</h3><p>{detail.incident.hostname} · {fleetError || !fleet ? "Connectivity unavailable" : detailHost?.status ?? "Not in loaded inventory"}</p>
+                    <p className="muted">A host incident does not establish endpoint impact.</p>
+                  </div>
+                </div>
+                {detailHost?.sampled_at && <section className="incident-measurements" aria-label="Latest host sample, not incident-time values">
+                  <p className="muted">Latest host sample · <time dateTime={detailHost.sampled_at}>{new Date(detailHost.sampled_at).toLocaleString()}</time>{fleetError ? " · cached" : ""}. Separate from incident evidence.</p>
+                  <dl>{resources.map(({ key, label }) => <div key={key}><dt>{label} / current limit</dt><dd>{percent(detailHost[key])} / {percent(fleet?.thresholds?.[key] ?? null)}</dd></div>)}</dl>
+                </section>}
                 <div className="detail-grid">
                   <div>
-                    <h3>Measured evidence</h3>
-                    <p className="muted small">Diagnostic records collected from the host.</p>
-                    {detail.evidence.length === 0 ? <p className="muted">No evidence yet.</p> : detail.evidence.map(e => <div className="evidence" key={e.id}><strong>{e.source}</strong><code>{e.content}</code><small>ID: {e.id}</small></div>)}
+                    <h3>Activity timeline</h3>
+                    <p className="muted small">Recorded incident activity and diagnostic evidence.</p>
+                    <ol className="incident-timeline">
+                      {detail.incident.resolved_at && <li><time dateTime={detail.incident.resolved_at}>{new Date(detail.incident.resolved_at).toLocaleString()}</time><div>Human-confirmed resolution recorded</div></li>}
+                      {detail.evidence.map(e => <li className="evidence" key={e.id}><time dateTime={e.created_at}>{new Date(e.created_at).toLocaleString()}</time><div><strong>{e.source}</strong><code>{e.content}</code><small>ID: {e.id}</small></div></li>)}
+                      <li><time dateTime={detail.incident.created_at}>{new Date(detail.incident.created_at).toLocaleString()}</time><div>Incident opened</div></li>
+                    </ol>
                   </div>
                   <div>
                     <h3>AI investigation</h3>
@@ -367,7 +579,7 @@ export default function Home() {
                 </div>
               </Panel>
             )}
-          </>
+          </div>
         )}
         {tab === "memory" && (
           <Panel role="region" aria-labelledby="memory-title">
@@ -379,6 +591,6 @@ export default function Home() {
         {tab === "providers" && <ProviderSettings providers={providers} encryptionConfigured={encryptionConfigured} loading={providersLoading} error={providersError} onRefresh={refreshProviders} />}
         <footer>OpsPilot starter · No automatic remediation · Read-only diagnostics only</footer>
       </main>
-    </div>
+    </WorkspaceShell>
   );
 }

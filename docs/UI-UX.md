@@ -15,32 +15,22 @@ Color tokens, typography, radii, quarter-rem spacing steps, and layout dimension
 
 ### Public component catalog
 
-`/design-system` is available without signing in, including while the Hub is unavailable. Links appear on the loading/login surfaces and in dashboard navigation. It is a self-contained reference with synthetic evidence, semantic swatches, actual shared primitives, a keyboard-operated meter slider, local form validation, disabled/loading examples and an evidence disclosure. It makes no API calls and does not persist settings or expose production telemetry. The local form explicitly reports that no settings were saved.
+`/design-system` is available without signing in, including while the Hub is unavailable. Links appear on the loading and login surfaces. Its native controls, swatches, meter slider, form and evidence disclosure use only synthetic examples; the catalog makes no API calls and saves no settings.
 
-Shared controls use native labels and inputs, visible 2px mint keyboard focus, explicit error descriptions and invalid states, disabled/busy feedback, and reduced-motion overrides. The catalog adds a skip link and section anchors; its sticky index becomes wrapping inline links at 720px, while its four-column palette becomes three columns at 1000px and two at 720px. These implemented provisions do not claim a completed screen-reader audit.
+Shared controls use native labels and inputs, visible 2px keyboard focus, attributed errors, disabled/busy feedback and reduced-motion overrides. The catalog has a skip link; its section index wraps at 720px and the palette reflows at 1000px and 720px.
 
 The catalog and dashboard preserve the distinction between measured records, advisory AI hypotheses and human-confirmed resolution. A missing/non-finite measurement is unavailable, not a zero-value bar. Status text accompanies semantic color.
 
 <a id="fleet-services-dashboard-contract-target"></a>
 
-## Fleet & services dashboard contract (target)
+## Monochrome workspace and service monitoring boundary
 
-**Status:** approved design direction from the supplied reference. Fleet & services composition, host table/inspector, in-page navigation and read-only provider availability are implemented. The selected-host service section explicitly reports unavailable collection; workload inventory, HTTP monitoring and their metadata remain planned. The palette, shared primitives and evidence-first rules remain unchanged.
+The supplied Pencil design replaces the earlier rail composition. Layout and typography follow [DESIGN.md](../DESIGN.md). Example devices, endpoints, probe periods and organization data from the reference are not embedded in live views.
 
-![Fleet & services dashboard reference with host and service tables beside a contextual inspector](assets/fleet-services-reference.png)
-
-The reference is authoritative for composition and information hierarchy, not its sample identities, version, date, telemetry, thresholds or probe configuration. Any reproduction with synthetic values must display `Demo data`; live views must show actual freshness. Do not copy the example's 2025 date or `v0.9.2` as product metadata.
-
-### Hierarchy and navigation
-
-1. **Left rail:** OpsPilot above Hosts, Incidents, Configuration drift and Incident memory. Hosts consolidates the former duplicate Overview view. Provider settings and Sign out sit below the main destinations; Enroll host remains in the content header. Omit deployment/account captions and the developer catalog from operational navigation. Configuration drift filters the latest 100 incidents; Provider settings shows server-reported availability, not editable keys. Never ship inert navigation.
-2. **Header:** `Fleet & services` title, “Infrastructure signals and endpoint checks. Side by side, never conflated.”, refresh/time context and a secondary `Enroll host` action.
-3. **Summary strip:** hosts online / enrolled hosts, open host incidents, endpoints up / configured endpoints, and endpoints failing. Keep the counts inline with thin separators, not four large cards. Unknown/stale checks remain in the configured total but are not counted as up or failing; expose their count when nonzero. No configured checks means `No endpoints configured`, not `0 / 0 healthy`. Counts must state whether they cover the fleet or a filtered subset; never treat the current capped API list as a complete fleet total.
-4. **Main list:** `Linux hosts` with search/filter, then columns Host, Status, CPU, Memory, Disk and Last seen. Selection uses a tonal row. Last seen is agent contact, distinct from sample age; historical samples are labeled under the host. Endpoint observations remain a separate planned capability, never inferred from connectivity.
-5. **Selected-host inventory:** `Services on {hostname}`, workload count, read-only inventory label and collection timestamp, with a secondary `Add endpoint` action. Columns are Service / runtime, Process, Resources and Endpoint. Include Docker image/tag or systemd unit when collected. No inventory capability or permission is `Inventory unavailable`, not `0 workloads`.
-6. **Context inspector:** selected host name and agent state; OS/capacity when available; CPU/memory/disk buttons selecting timestamped resource bars, initially disk; RX/TX and uptime availability; a related open host incident with `Open investigation`; expandable identity/last contact. The link opens and focuses existing evidence without calling AI. Real selected-service/runtime and independent endpoint details remain planned.
-
-Keep lists flat on the canvas and the inspector on one tonal surface. Use the root [design contract](../DESIGN.md#layout) for target sizing and responsive behavior. Sans-serif headings and labels provide hierarchy; monospace identifies hosts, runtime metadata, measurements and timestamps. Amber/coral mark the relevant measured condition, not an entire host row merely because one endpoint failed.
+1. **Overview:** threshold pressure falls into at or above limit, within 5 percentage points below it, or within measured limits. Rank by smallest resource headroom and label that counts cover the assessed subset of loaded hosts. Show the selected reading, configured limit, sample time and host history. Endpoint reachability and workload availability stay separately labeled as uncollected.
+2. **Hosts:** the summary counts connected and enrolled agents. The table supports query and status filtering, displays CPU/memory/disk and last contact, and gives a separate resource-risk status. Historical readings stay readable and do not receive live risk color. Host details retain the existing raw resource history, metadata, and related incident link.
+3. **Incident investigation:** show open and recently resolved records with an inspector containing recorded timeline and evidence. A host sample is separate from incident-time evidence. Advisory AI and human-confirmed resolutions remain distinct.
+4. **Services and setup:** use a separate Services destination and Add service capability state. No configured monitor, probe result or service process state is fabricated. Connect server guides the operator through configuration, pinned installation, and checking the selected agent's connectivity and sample freshness.
 
 ### Independent signal contract
 
@@ -59,11 +49,11 @@ The reference case must remain representable: `web-01` has high host CPU; `store
 
 ### Selection and real actions
 
-- Host selection updates services and inspector together. Keep selection by stable identity across refreshes. Changing host clears the old service; never display its service under the new hostname. If a selected host/service disappears, clear its details and explain the removal. A failed refresh retains prior data with a stale/error notice, never a fabricated empty inventory or recovered status.
-- Use a labeled link/button for host and service selection, visible focus and an accessible current/selected state. Refresh must not steal focus. Do not rely on hover-only details or make every row an implicit button.
-- Search/filter shows the query, matches and a clear action. Distinguish no matching hosts from no enrolled hosts and an API failure.
-- `Enroll host` retains the single-use enrollment flow. `Add endpoint` must associate a validated HTTP target with the selected host/service and an actual supported probe; do not invent probe availability or implicitly enable Docker access.
-- `Inspect service & endpoint` opens measured details and related incident evidence. AI investigation is a separate explicit action with configured provider and data-sharing consent; inspection never restarts a service, runs a general shell or silently calls a model.
+- Host selection updates history and metadata by stable identity. If a refresh removes the selection, clear it and explain the removal. Failed refreshes retain labeled cached values.
+- Use an accessible control for selection and an explicit current/pressed state. Refresh must not steal focus.
+- Search/filter shows matches and a clear action. Distinguish no matching hosts, no enrolled hosts and an API failure.
+- `Connect server` uses the existing single-use enrollment API. `Add service` cannot save anything without a validated target, a supported probe and persisted monitor configuration.
+- Opening host history or incident detail does not start an AI investigation or a diagnostic.
 - Provider settings report server-side configuration only; no provider keys or enrollment credentials enter public reference examples or ordinary inspector content.
 
 ### Charts, freshness and responsive states
@@ -72,7 +62,7 @@ The reference case must remain representable: `web-01` has high host CPU; `store
 - Display the actual alert rule. The starter uses two consecutive high samples and a 15-minute cooldown; the image's ≥80% for 10 minutes is an example, not an implemented policy. Metric color is not proof that an incident was opened.
 - RX/TX rates require counter deltas over an observed interval, correct units and reset handling. Current byte counters cannot be labeled MiB/s directly. OS/capacity, per-service resources and probe metadata remain unavailable until collected.
 - Show sample/check timestamps independently. A page refresh timestamp does not make old telemetry or endpoint results fresh; staleness thresholds must come from the implemented collection policy.
-- Wide screens retain list and inspector side by side; below 1280px the inspector follows the selected-host services; at 700px and below navigation moves above a one-column workspace. Preserve table headers, keyboard access, status and freshness in labeled horizontal scroll regions rather than deleting critical columns. Verify at 1440px, 1024px and 390px.
+- Wide Overview and Incidents use a contextual right pane; narrow layouts stack. Preserve host-table headers, keyboard access, status and freshness in a named horizontal scroll region. Dock destinations keep their labels on mobile.
 - Loading, no hosts, no matches, no service selected, unsupported/denied inventory, no endpoint, check pending/stale, offline agent and partial fetch failure each need explicit copy. Do not replace these with the same “All healthy” or “No data” state.
 
 ### Delivery boundary
@@ -83,47 +73,37 @@ The current starter has host telemetry and on-demand diagnostics, not continuous
 
 ```mermaid
 flowchart TD
-  A[Login] --> B[Hosts]
-  B --> H[Searchable host table]
-  H --> S[Selected host inspector and resource history]
-  B --> I[Incidents]
-  I --> D[Incident detail]
-  D --> E[Evidence list]
-  D --> F[Investigation history]
-  D --> G[Resolve incident]
-  B --> T[Generate enrollment token]
-  B --> M[Incident memory]
+  A[Login] --> O[Overview]
+  O --> H[Host inventory and resource history]
+  O --> I[Incidents and evidence timeline]
+  O --> S[Services and monitor availability]
+  H --> T[Connect server and verify telemetry]
+  I --> R[Investigation and resolution]
+  O --> M[Drift, memory and provider settings via command search]
   A --> C[Public design system]
-  C --> R[Tokens, primitives and synthetic states]
 ```
 
-### Precision Rail navigation
-
-The implemented sidebar uses the existing navy/mint tokens, a sticky desktop rail (232px expanded, 72px collapsed), 16px outline icons and targets at least 44px high. A labeled, keyboard-operable icon button beside the content heading toggles the rail with `aria-expanded` and `aria-controls`. The collapsed rail retains the brand mark, accessible destination names and native hover titles. The boolean preference persists in browser storage under `opspilot-sidebar-collapsed`; toggling still works when storage is unavailable. Hosts, Incidents, Configuration drift and Incident memory are the four primary destinations. Hosts opens Fleet & services, replacing duplicate Overview/Hosts entries. A static 3px mint marker, `aria-current="page"` and tonal selection identify the active destination. Shared reduced-motion rules disable transitions; collapse does not animate layout dimensions.
-
-Provider settings and Sign out remain in the lower utility area. Enroll host is available once in the content header. The public design catalog remains at `/design-system` and is linked from login, not the sidebar. Repeated Self-hosted and Single-admin/read-only captions are removed; diagnostic restrictions and evidence provenance remain in their existing content locations. At 700px and below, the desktop collapse toggle disappears and all four primary destinations retain visible labels in two columns, regardless of the saved desktop preference; a keyboard-operable More button controls utilities with `aria-expanded` and `aria-controls`. Collapsed utilities are not focusable. At narrow widths, labels wrap without hiding destinations.
-
-Browser verification used isolated synthetic API responses, not a live Hub/auth integration: desktop/mobile captures, 1440/1024/390/320px layout checks, navigation/current state, persisted collapse, keyboard focus, More disclosure, enrollment open/close focus and sign-out UI. Web TypeScript checks passed. Existing metric-width animation and root type-ramp detector findings are outside the sidebar change.
+The workspace header shows the local scope, command search and admin controls. `Ctrl+K` / `Cmd+K` can jump to a destination or a loaded host by name. A fixed bottom dock shows Overview, Services, Hosts and Incidents; its plus action opens Add service. Setup pages keep the global header and use back links rather than the dock.
 
 ## Implemented screens / states
 
 ### Login
 Admin password only, error feedback, warning when keys absent. Login is separate from agent enrollment.
 
-### Hosts
-`Fleet & services` header, inline scoped host/incident totals and explicitly unavailable endpoint totals, a searchable/selectable Linux-host table with last agent contact and contextual inspector. CPU/memory/disk buttons switch timestamped utilization bars; disk is selected initially. Recorded drift appears below the table with a causality disclaimer and evidence link. Unavailable service/endpoint collection is in a native disclosure, not a large empty service workspace. The inspector links related open host incidents to the existing evidence detail and focuses its heading without starting AI. The first loaded host is selected initially; valid selections persist across refreshes. Host list and selected history refresh every 10 seconds; samples older than the API's 60-second policy are stale, disconnected-host samples historical, and failed fetches retain explicit stale observations. Actual sample times, a 0–100% scale and empty collection gaps remain visible. Workload inventory, endpoint checks, RX/TX rates, uptime and OS/capacity remain unavailable. Incidents and Configuration drift have separate in-page views; counts and related records describe the latest 100 incidents, not complete fleet totals.
+### Overview and Hosts
+The Overview compares fresh online resource observations against the limits reported by the Hub. Counts of enrolled and online agents cover the fleet; threshold counts cover only the assessed subset of loaded hosts. Hosts keeps historical values and raw timestamped history, not interpolated points. Use the watchlist inspector to open history for the selected resource.
 
 ### Incident detail
-Host/category/status, timestamp, evidence source/content, provider selection, async investigation status, diagnosis and evidence IDs, resolution input. Measured records, advisory AI hypotheses and human-confirmed resolution are separately labeled. Clickable evidence-ID anchors, model/cost, safety warnings and evidence freshness remain future work.
+Open and resolved queues share an inspector with host context, a measured evidence timeline, explicit AI investigation and human-confirmed resolution. A latest host sample is not an incident-time measurement; no endpoint impact is inferred.
 
 ### Incident memory
 Simple FTS query, prior confirmed resolution list. A later UI should show which previous case was retrieved, how similar, and provenance/recency.
 
 ### Enrollment
-The header `Enroll host` control reveals and focuses the admin-only single-use token generation/instructions section; closing returns focus to that trigger. Token copy/hide, visible expiry and agent launch instructions are retained. Tokens are not persisted in browser storage and clear on sign-out/expiry. Remote deployments require HTTPS/WSS; local smoke tests do not establish production TLS readiness.
+`Connect server` reviews pinned installation configuration, generates a one-time command, then verifies real connectivity and telemetry for the operator-selected host. The host list does not link IDs to token issuance. Expiry and leaving the install step clear the visible command but do not revoke the token or erase shell history/clipboard copies.
 
 ### Provider settings
-Read-only availability for OpenAI, Anthropic and Gemini from the existing authenticated Hub endpoint. Keys are managed in the server environment, never entered or exposed here. Opening settings or inspecting hosts does not call a model.
+Manage stored provider connections and run explicit synthetic connection tests. Stored keys are never returned to Web. Opening settings or inspecting a host does not call a model.
 
 ## Core UX acceptance tests
 
@@ -148,7 +128,7 @@ OpsPilot uses the **Horizon Gauge** mark: a cockpit attitude bezel bridged by a 
 | --- | --- | --- |
 | Symbol (light / dark) | [`opspilot-symbol-color.svg`](assets/logo/opspilot-symbol-color.svg), [`opspilot-symbol-color-dark.svg`](assets/logo/opspilot-symbol-color-dark.svg) | Master standalone vector marks for light and dark surfaces |
 | Horizontal lockup (light / dark) | [`opspilot-horizontal-color.svg`](assets/logo/opspilot-horizontal-color.svg), [`opspilot-horizontal-dark.svg`](assets/logo/opspilot-horizontal-dark.svg) | Master wordmark + symbol lockups |
-| Inline UI component | [`apps/web/components/brand-mark.tsx`](../apps/web/components/brand-mark.tsx) | React SVG symbol rendered in the Precision Rail and auth surfaces |
+| Inline UI component | [`apps/web/components/brand-mark.tsx`](../apps/web/components/brand-mark.tsx) | React SVG symbol rendered in the workspace header and auth surfaces |
 | Web & PWA icons | [`apps/web/public/`](../apps/web/public/) | `favicon.ico`, `favicon.svg`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`, `maskable-512.png`, `site.webmanifest` |
 
 ### Clear space, sizing, and usage rules

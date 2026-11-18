@@ -31,24 +31,33 @@ export async function addEvidence(
 
 const history = new Map<string, number>();
 
+export function hostThresholds() {
+  const limit = (configured: string | undefined, fallback: number) => {
+    const value = Number(configured || fallback);
+    return Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
+  };
+  return {
+    cpu_percent: limit(process.env.ALERT_CPU_THRESHOLD, 95),
+    memory_percent: limit(process.env.ALERT_MEMORY_THRESHOLD, 90),
+    disk_percent: limit(process.env.ALERT_DISK_THRESHOLD, 90),
+  };
+}
+
 /** Evaluates host telemetry against alert thresholds and opens deduplicated incidents after two consecutive breaches. */
 export async function checkThresholds(
   agentId: string,
   values: { cpuPercent: number; memoryPercent: number; diskPercent: number },
 ) {
+  const thresholds = hostThresholds();
   const checks = [
-    ["cpu", values.cpuPercent, Number(process.env.ALERT_CPU_THRESHOLD || 95)],
-    [
-      "memory",
-      values.memoryPercent,
-      Number(process.env.ALERT_MEMORY_THRESHOLD || 90),
-    ],
-    ["disk", values.diskPercent, Number(process.env.ALERT_DISK_THRESHOLD || 90)],
+    ["cpu", values.cpuPercent, thresholds.cpu_percent],
+    ["memory", values.memoryPercent, thresholds.memory_percent],
+    ["disk", values.diskPercent, thresholds.disk_percent],
   ] as const;
 
   for (const [category, value, limit] of checks) {
     const key = `${agentId}:${category}`;
-    const count = value >= limit ? (history.get(key) || 0) + 1 : 0;
+    const count = limit !== null && value >= limit ? (history.get(key) || 0) + 1 : 0;
     history.set(key, count);
     if (count !== 2) {
       continue;
