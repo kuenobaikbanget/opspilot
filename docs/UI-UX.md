@@ -9,23 +9,9 @@
 
 ## Implemented visual system
 
-The canonical visual reference is [root DESIGN.md](../DESIGN.md), extracted from `apps/web/app/tokens.css` and the native React primitives in `apps/web/components/ui.tsx`. Global styling lives in `apps/web/app/globals.css`; `.impeccable/design.json` contains preview and metadata extensions, not a second runtime theme. The backend architecture remains in [docs/DESIGN.md](DESIGN.md).
+The canonical visual reference is [root DESIGN.md](../DESIGN.md), extracted from `apps/web/app/tokens.css` and the native React primitives in `apps/web/components/ui.tsx`. Global styling lives in `apps/web/app/globals.css`; `.impeccable/design.json` contains preview and metadata extensions, not a second runtime theme. The backend architecture remains in [docs/BACKEND-DESIGN.md](BACKEND-DESIGN.md).
 
-| Token | Value / use |
-|---|---|
-| Canvas | `#090f18` |
-| Surfaces | `#101824` panel, `#111e2d` raised control, `#091421` input |
-| Borders | `#233449` structural, `#526b82` interactive |
-| Accent | `#52d9b7`, hover `#79efd3`, foreground `#092521` |
-| Success | `#75dec1` on `#142e2a` |
-| Warning | `#e9ba78` on `#302719` |
-| Danger | `#ffb4a7` on `#371c22` |
-| Information | `#a5c9f5` on `#182a40` |
-| Text | `#e8edf5`, secondary `#a3b4c7` |
-| Body | system UI sans, 14px at the 16px root; monospace for code and measurements |
-| Radius | 6px controls, 10px nested surfaces, 14px panels |
-| Spacing | quarter-rem steps: 1–8, 10, 12 |
-| Layout | host slice: sticky Precision Rail above 700px, 232px expanded / 72px icon-only; table/inspector grid ≥1280px; inspector stacks below that; mobile header retains four destinations and a More disclosure |
+Color tokens, typography, radii, quarter-rem spacing steps, and layout dimensions are defined in [root DESIGN.md](../DESIGN.md) rather than duplicated here.
 
 ### Public component catalog
 
@@ -91,7 +77,7 @@ The reference case must remain representable: `web-01` has high host CPU; `store
 
 ### Delivery boundary
 
-The current starter has host telemetry and on-demand diagnostics, not continuous workload inventory, persisted endpoint configuration/results, scheduled HTTP probes or a probe-location registry. These require the staged work in [Roadmap](ROADMAP.md#fleet-services-dashboard-delivery-planned), the [technical data contract](DESIGN.md#fleet-services-data-boundary-planned), [API boundary](API.md#fleet-services-contract-boundary-planned), [security controls](SECURITY.md#planned-inventory-and-endpoint-monitoring) and [acceptance scenarios](TESTING.md#fleet-services-dashboard-acceptance-planned). Never fill missing production APIs with demo records.
+The current starter has host telemetry and on-demand diagnostics, not continuous workload inventory, persisted endpoint configuration/results, scheduled HTTP probes or a probe-location registry. These require the staged work in [Roadmap](ROADMAP.md#fleet-services-dashboard-delivery-planned), the [technical data contract](BACKEND-DESIGN.md#fleet-services-data-boundary-planned), [API boundary](API.md#fleet-services-contract-boundary-planned), [security controls](SECURITY.md#planned-inventory-and-endpoint-monitoring) and [acceptance scenarios](TESTING.md#fleet-services-dashboard-acceptance-planned). Never fill missing production APIs with demo records.
 
 ## Implemented navigation map
 
@@ -153,3 +139,21 @@ Read-only availability for OpenAI, Anthropic and Gemini from the existing authen
 ## Future UX work
 
 The complete Fleet & services target remains planned until its workload/endpoint data and safety gates are met; the implemented host-only slice is not proof of those capabilities. Other future work: incident timeline, key management, approval/consent for evidence sharing, notifications, comprehensive keyboard and screen-reader audits, timezone options and localization. Native keyboard controls, visible focus, skip links, invalid-field feedback and reduced-motion handling are already implemented; broader accessibility verification remains future work.
+
+## Brand & Logo Assets
+
+OpsPilot uses the **Horizon Gauge** mark: a cockpit attitude bezel bridged by a 45° horizon chevron representing baseline stability and deterministic system drift (*"Evidence before inference"*). Color values follow [root DESIGN.md](../DESIGN.md#colors).
+
+| Asset / Surface | Location | Purpose |
+| --- | --- | --- |
+| Symbol (light / dark) | [`opspilot-symbol-color.svg`](assets/logo/opspilot-symbol-color.svg), [`opspilot-symbol-color-dark.svg`](assets/logo/opspilot-symbol-color-dark.svg) | Master standalone vector marks for light and dark surfaces |
+| Horizontal lockup (light / dark) | [`opspilot-horizontal-color.svg`](assets/logo/opspilot-horizontal-color.svg), [`opspilot-horizontal-dark.svg`](assets/logo/opspilot-horizontal-dark.svg) | Master wordmark + symbol lockups |
+| Inline UI component | [`apps/web/components/brand-mark.tsx`](../apps/web/components/brand-mark.tsx) | React SVG symbol rendered in the Precision Rail and auth surfaces |
+| Web & PWA icons | [`apps/web/public/`](../apps/web/public/) | `favicon.ico`, `favicon.svg`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`, `maskable-512.png`, `site.webmanifest` |
+
+### Clear space, sizing, and usage rules
+
+- **Clear space:** keep a minimum clear zone of **1 × bezel wall width** (¼ of symbol width) around the logo on all sides.
+- **Minimum sizes:** **16 px** for the symbol/favicon (`favicon.ico` / `favicon.svg`), **112 px wide** for the horizontal lockup.
+- **Light-background contrast:** never place `#52D9B7` mint directly on white (`~1.75:1` contrast); use Deep Mint `#0E8A6D` (`~4.28:1`) for the light-mode/print horizon chevron while keeping the rest of the palette aligned with [root DESIGN.md](../DESIGN.md#colors).
+- **Don'ts:** do not stretch, squash, rotate, or alter the 45° horizon angle; do not recolour outside the navy/mint/monochrome palette or add shadows, glows, or gradients; do not rearrange or resize the symbol relative to the `OpsPilot` wordmark, or retype the wordmark in a stock font.

@@ -96,7 +96,7 @@ Starter wire version is implicit 0.1; add `protocolVersion` on enrollment and ev
 
 The current host list provides typed host observations and full-fleet enrolled/connected counts. It and the diagnostic messages do **not** provide structured workload inventory, per-workload resources, OS/capacity metadata, endpoint configuration/results, probe metadata, endpoint aggregate totals or configurable alert-policy metadata.
 
-Before implementing those surfaces, define validated read/write schemas for the [planned read models](DESIGN.md#fleet-services-data-boundary-planned), including stable host/workload/endpoint associations, source and collection/check timestamps, stale/unknown/unavailable reasons, units and list/aggregate coverage. Independently fresh probe results must survive an agent disconnect without becoming a fabricated host-health verdict.
+Before implementing those surfaces, define validated read/write schemas for the [planned read models](BACKEND-DESIGN.md#fleet-services-data-boundary-planned), including stable host/workload/endpoint associations, source and collection/check timestamps, stale/unknown/unavailable reasons, units and list/aggregate coverage. Independently fresh probe results must survive an agent disconnect without becoming a fabricated host-health verdict.
 
 Endpoint creation/editing must require admin authorization, same-origin mutation protection, bounded validated HTTP(S) target/expected-response/schedule inputs and audit. Probe execution is server-side and subject to the [SSRF/egress policy](SECURITY.md#planned-inventory-and-endpoint-monitoring), not a browser fetch, an arbitrary shell command or an LLM-selected URL.
 
