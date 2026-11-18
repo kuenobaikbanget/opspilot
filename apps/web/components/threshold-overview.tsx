@@ -1,13 +1,42 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { finitePercent, type Host, type HostList } from "@opspilot/contracts";
+import { finitePercent, type EndpointMonitor, type Host, type HostList, type HostService } from "@opspilot/contracts";
+import { api } from "../lib/api";
 import { hasFreshSample, percent, pressure, resources, type Pressure, type Resource } from "../lib/host-pressure";
 import { Badge, Button } from "./ui";
+
+export type OverviewIncidentSummary = {
+  id: string;
+  agent_id: string;
+  title: string;
+  category: string;
+  status: string;
+  created_at: string;
+};
+
+type InvestigationSummary = {
+  id: string;
+  status: string;
+  provider: { name: string; model: string | null };
+  result_json: {
+    probable_cause?: string;
+    confidence?: string | number;
+    recommended_checks?: string[];
+  } | null;
+  error: string | null;
+};
 
 type Props = {
   fleet: HostList | null;
   fleetError: string;
   openIncidents: number | null;
   incidentsStale: boolean;
+  incidents: OverviewIncidentSummary[];
+  services: HostService[];
+  endpoints: EndpointMonitor[];
+  servicesError: string;
+  checkingEndpointId: string | null;
+  onCheckEndpoint: (id: string) => void;
+  onOpenIncident: (id: string) => void;
   onInspectHost: (id: string, resource?: Resource) => void;
   onBrowseHosts: () => void;
 };
@@ -38,11 +67,15 @@ function SampleTime({ value }: { value: string | null }) {
     : "Not observed";
 }
 
-function headroomText(value: number) {
+function headroomMagnitude(value: number) {
   const magnitude = Math.abs(value);
-  const sign = value < 0 ? "−" : "";
-  if (magnitude > 0 && magnitude < 0.1) return value < 0 ? "−<0.1" : "<0.1";
-  return `${sign}${Number(magnitude.toFixed(1))}`;
+  if (magnitude > 0 && magnitude < 0.1) return "<0.1";
+  return `${Number(magnitude.toFixed(1))}`;
+}
+
+function marginLabel(headroom: number) {
+  if (headroom === 0) return "At limit";
+  return `${headroomMagnitude(headroom)}% ${headroom > 0 ? "below limit" : "over limit"}`;
 }
 
 function limitShare({ value, limit }: Pressure) {
@@ -68,8 +101,16 @@ function RiskBadge({ reading }: { reading: Pressure }) {
   return <Badge tone="warning">Near limit</Badge>;
 }
 
-function RiskCard({ risk, selected, inspectorId, onSelect }: {
+function serviceTone(state: HostService["state"]) {
+  if (state === "running") return "success";
+  if (state === "failed") return "danger";
+  if (state === "stopped") return "warning";
+  return "neutral";
+}
+
+function RiskCard({ risk, hostServices, selected, inspectorId, onSelect }: {
   risk: Risk;
+  hostServices: HostService[];
   selected: boolean;
   inspectorId: string;
   onSelect: () => void;
@@ -81,7 +122,9 @@ function RiskCard({ risk, selected, inspectorId, onSelect }: {
         <OverviewIcon name="server" />
         <span className="overview-identity">
           <span className="overview-hostname">{host.hostname}</span>
-          <span className="overview-meta">Device · Agent online</span>
+          <span className="overview-meta">
+            Device · Agent online · {hostServices.length ? `${hostServices.filter(s => s.state === "running").length}/${hostServices.length} services running` : "No services recorded"}
+          </span>
         </span>
         <RiskBadge reading={reading} />
       </Button>
@@ -89,15 +132,47 @@ function RiskCard({ risk, selected, inspectorId, onSelect }: {
         <dl className="overview-risk-values">
           <div><dt>{reading.label} threshold</dt><dd>{percent(reading.limit)}</dd></div>
           <div><dt>Current reading</dt><dd>{percent(reading.value)}</dd></div>
-          <div><dt>Headroom</dt><dd>{headroomText(reading.headroom)} <abbr title="percentage points">pp</abbr></dd></div>
+          <div><dt>Margin</dt><dd>{marginLabel(reading.headroom)}</dd></div>
         </dl>
         <ThresholdBar share={limitShare(reading)} />
+        <div className="overview-risk-services" aria-label={`Services on ${host.hostname}`}>
+          <span className="overview-meta">Services on server</span>
+          {hostServices.length ? (
+            <ul className="overview-service-tags" role="list">
+              {hostServices.map(service => (
+                <li key={service.id}>
+                  <Badge tone={serviceTone(service.state)} dot>
+                    {service.name} · {service.state}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="overview-meta">No workload inventory recorded for this host.</span>
+          )}
+        </div>
       </div>
     </li>
   );
 }
 
-function PressureInspector({ risk, onInspectHost }: { risk: Risk; onInspectHost: Props["onInspectHost"] }) {
+function PressureInspector({
+  risk,
+  hostServices,
+  incident,
+  investigation,
+  investigationLoading,
+  onInspectHost,
+  onOpenIncident,
+}: {
+  risk: Risk;
+  hostServices: HostService[];
+  incident: OverviewIncidentSummary | null;
+  investigation: InvestigationSummary | null;
+  investigationLoading: boolean;
+  onInspectHost: Props["onInspectHost"];
+  onOpenIncident: Props["onOpenIncident"];
+}) {
   const { host, reading } = risk;
   const share = limitShare(reading);
   return (
@@ -109,9 +184,9 @@ function PressureInspector({ risk, onInspectHost }: { risk: Risk; onInspectHost:
       </div>
       <div className="overview-inspector-body" data-pressure={reading.state}>
         <div>
-          <p className="overview-meta">{reading.label} headroom</p>
+          <p className="overview-meta">{reading.label} limit margin</p>
           <p className="overview-headroom">
-            {headroomText(reading.headroom)} <abbr title="percentage points">pp</abbr>
+            {headroomMagnitude(reading.headroom)}% <span>{reading.headroom < 0 ? "over limit" : reading.headroom === 0 ? "at limit" : "below limit"}</span>
           </p>
           <p className="overview-inspector-measurement"><strong>{percent(reading.value)}</strong> current · {percent(reading.limit)} threshold</p>
         </div>
@@ -122,10 +197,61 @@ function PressureInspector({ risk, onInspectHost }: { risk: Risk; onInspectHost:
         <dl className="overview-evidence">
           <div><dt>Measured sample</dt><dd><SampleTime value={host.sampled_at} /></dd></div>
           <div><dt>Agent connection</dt><dd>Online</dd></div>
+          <div>
+            <dt>Running services</dt>
+            <dd>{hostServices.length ? hostServices.map(s => `${s.name} (${s.state})`).join(", ") : "None recorded"}</dd>
+          </div>
         </dl>
-        <Button variant="primary" size="sm" onClick={() => onInspectHost(host.id, reading.key)}>
-          Open host history <OverviewIcon name="arrow" />
-        </Button>
+        <section className="overview-ai-card" aria-label="Advisory AI analysis">
+          <div className="overview-ai-head">
+            <span className="overview-meta">AI hypothesis (advisory)</span>
+            {investigation ? (
+              <Badge tone={investigation.status === "failed" ? "danger" : investigation.status === "completed" ? "info" : "warning"}>
+                {investigation.status}
+              </Badge>
+            ) : (
+              <Badge>Not run</Badge>
+            )}
+          </div>
+          {investigationLoading ? (
+            <p className="overview-meta" role="status">Loading recorded AI analysis…</p>
+          ) : investigation?.result_json?.probable_cause ? (
+            <>
+              <p className="overview-ai-cause">{investigation.result_json.probable_cause}</p>
+              <p className="overview-meta">
+                Confidence: {investigation.result_json.confidence ?? "unknown"} · {investigation.provider.name}
+                {investigation.provider.model ? ` · ${investigation.provider.model}` : ""}
+              </p>
+              {!!investigation.result_json.recommended_checks?.length && (
+                <ul className="overview-ai-checks">
+                  {investigation.result_json.recommended_checks.slice(0, 2).map((check, i) => (
+                    <li key={i}>{check}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : investigation?.error ? (
+            <p className="overview-meta">{investigation.error}</p>
+          ) : investigation ? (
+            <p className="overview-meta">Investigation is {investigation.status}. Open the incident to inspect progress.</p>
+          ) : (
+            <p className="overview-meta">
+              {incident
+                ? "No AI investigation has been run for this host’s open incident yet."
+                : "No recorded incident or AI analysis for this host."}
+            </p>
+          )}
+        </section>
+        <div className="overview-inspector-actions">
+          <Button variant="primary" size="sm" onClick={() => onInspectHost(host.id, reading.key)}>
+            Open host history <OverviewIcon name="arrow" />
+          </Button>
+          {incident && (
+            <Button size="sm" onClick={() => onOpenIncident(incident.id)}>
+              Open incident <OverviewIcon name="arrow" />
+            </Button>
+          )}
+        </div>
       </div>
     </>
   );
@@ -140,8 +266,9 @@ function SummaryReading({ label, value, state }: { label: string; value: number 
   );
 }
 
-function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
+function InventoryRow({ host, hostServices, fresh, cached, thresholds, onInspectHost }: {
   host: Host;
+  hostServices: HostService[];
   fresh: boolean;
   cached: boolean;
   thresholds: HostList["thresholds"] | undefined;
@@ -153,7 +280,10 @@ function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
         <OverviewIcon name="server" />
         <span className="overview-identity">
           <span className="overview-hostname">{host.hostname}</span>
-          <span className="overview-meta">{host.version ? `Agent ${host.version}` : "Device"}</span>
+          <span className="overview-meta">
+            {host.version ? `Agent ${host.version}` : "Device"}
+            {hostServices.length ? ` · ${hostServices.map(s => `${s.name} (${s.state})`).join(", ")}` : ""}
+          </span>
         </span>
       </div>
       <div className="overview-inventory-status">
@@ -184,9 +314,25 @@ function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
   );
 }
 
-export function ThresholdOverview({ fleet, fleetError, openIncidents, incidentsStale, onInspectHost, onBrowseHosts }: Props) {
+export function ThresholdOverview({
+  fleet,
+  fleetError,
+  openIncidents,
+  incidentsStale,
+  incidents,
+  services,
+  endpoints,
+  servicesError,
+  checkingEndpointId,
+  onCheckEndpoint,
+  onOpenIncident,
+  onInspectHost,
+  onBrowseHosts,
+}: Props) {
   const [clock, setClock] = useState(Date.now);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [incidentDetails, setIncidentDetails] = useState<Record<string, InvestigationSummary | null>>({});
+  const [loadingIncidentId, setLoadingIncidentId] = useState<string | null>(null);
   const inspectorId = useId();
   const inspector = useRef<HTMLElement>(null);
   const loaded = fleet?.hosts.length ?? 0;
@@ -224,6 +370,32 @@ export function ThresholdOverview({ fleet, fleetError, openIncidents, incidentsS
   }, [nextExpiry]);
   risks.sort((a, b) => a.reading.headroom - b.reading.headroom || a.host.hostname.localeCompare(b.host.hostname));
   const selected = risks.find(({ host }) => host.id === selectedId) ?? risks[0];
+  const selectedIncident = selected
+    ? incidents.find(i => i.agent_id === selected.host.id && i.status === "open")
+      ?? incidents.find(i => i.agent_id === selected.host.id)
+      ?? null
+    : null;
+
+  useEffect(() => {
+    const id = selectedIncident?.id;
+    if (!id) return;
+    let active = true;
+    setLoadingIncidentId(id);
+    void api(`/incidents/${id}`)
+      .then((data: { investigations?: InvestigationSummary[] }) => {
+        if (!active) return;
+        setIncidentDetails(prev => ({ ...prev, [id]: data.investigations?.[0] ?? null }));
+      })
+      .catch(() => {
+        if (!active) return;
+        setIncidentDetails(prev => ({ ...prev, [id]: prev[id] ?? null }));
+      })
+      .finally(() => {
+        if (active) setLoadingIncidentId(current => (current === id ? null : current));
+      });
+    return () => { active = false; };
+  }, [selectedIncident?.id]);
+
   const thresholds = fleet?.thresholds;
   const hasThreshold = resources.some(({ key }) => finitePercent(thresholds?.[key]));
   const scope = fleet ? `${loaded} of ${fleet.total} devices loaded` : "Fleet scope unavailable";
@@ -263,16 +435,23 @@ export function ThresholdOverview({ fleet, fleetError, openIncidents, incidentsS
       <div className="overview-pressure-workspace">
         <section className="overview-watchlist" aria-labelledby="overview-watchlist-heading">
           <div className="overview-section-head">
-            <h2 id="overview-watchlist-heading">Device &amp; endpoint watchlist</h2>
+            <h2 id="overview-watchlist-heading">Device &amp; services</h2>
             <span className="overview-meta overview-sort"><OverviewIcon name="sort" /> Risk first</span>
           </div>
           {risks.length ? (
             <ul className="overview-risk-list" role="list">
               {risks.map((risk) => (
-                <RiskCard key={risk.host.id} risk={risk} selected={selected?.host.id === risk.host.id} inspectorId={inspectorId} onSelect={() => {
-                  setSelectedId(risk.host.id);
-                  inspector.current?.focus();
-                }} />
+                <RiskCard
+                  key={risk.host.id}
+                  risk={risk}
+                  hostServices={services.filter(s => s.agent_id === risk.host.id)}
+                  selected={selected?.host.id === risk.host.id}
+                  inspectorId={inspectorId}
+                  onSelect={() => {
+                    setSelectedId(risk.host.id);
+                    inspector.current?.focus();
+                  }}
+                />
               ))}
             </ul>
           ) : <p className="overview-empty">{emptyWatchlist}</p>}
@@ -280,17 +459,72 @@ export function ThresholdOverview({ fleet, fleetError, openIncidents, incidentsS
             <div className="overview-endpoint-heading">
               <OverviewIcon name="globe" />
               <h3>Endpoint reachability</h3>
-              <Badge>Not measured</Badge>
+              {servicesError ? (
+                <Badge tone="warning">Unavailable</Badge>
+              ) : endpoints.length ? (
+                <Badge tone={endpoints.some(e => e.last_status === "down") ? "danger" : endpoints.some(e => e.last_status === "up") ? "success" : "neutral"}>
+                  {endpoints.filter(e => e.last_status === "up").length} / {endpoints.length} up
+                </Badge>
+              ) : (
+                <Badge>Not measured</Badge>
+              )}
             </div>
-            <p>Endpoint checks are not collected. Device readings do not establish endpoint availability.</p>
+            {servicesError ? (
+              <p>{servicesError}</p>
+            ) : endpoints.length ? (
+              <ul className="overview-endpoint-list" role="list">
+                {endpoints.map(endpoint => (
+                  <li key={endpoint.id} className="overview-endpoint-item">
+                    <div className="overview-endpoint-main">
+                      <div>
+                        <strong>{endpoint.name}</strong>
+                        <span className="overview-meta">
+                          {endpoint.target_url} · Probe: {endpoint.probe_location}
+                          {endpoint.last_checked_at ? <> · Checked <SampleTime value={endpoint.last_checked_at} /></> : " · Not checked yet"}
+                        </span>
+                      </div>
+                      <div className="overview-endpoint-actions">
+                        <Badge tone={endpoint.last_status === "up" ? "success" : endpoint.last_status === "down" ? "danger" : "neutral"} dot>
+                          {endpoint.last_status === "up"
+                            ? `Up · HTTP ${endpoint.last_http_status ?? endpoint.expected_status}${endpoint.last_latency_ms !== null ? ` · ${endpoint.last_latency_ms} ms` : ""}`
+                            : endpoint.last_status === "down"
+                              ? `Down · ${endpoint.last_http_status !== null ? `HTTP ${endpoint.last_http_status}` : endpoint.last_error ?? "unreachable"}`
+                              : "Pending"}
+                        </Badge>
+                        <Button
+                          size="sm"
+                          loading={checkingEndpointId === endpoint.id}
+                          onClick={() => onCheckEndpoint(endpoint.id)}
+                        >
+                          Check now
+                        </Button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>Endpoint checks are not collected. Device readings do not establish endpoint availability.</p>
+            )}
+            <p className="overview-meta">Endpoint reachability is probed independently from host resource metrics.</p>
           </div>
-          <p className="overview-rule">Devices are ranked by least headroom. Near limit means within 5 percentage points below the configured limit; readings at or above it count toward the exceeded total.</p>
+          <p className="overview-rule">Devices are ranked by least margin below limit. Near limit means within 5% below the configured limit; readings at or above it count toward the exceeded total.</p>
         </section>
 
         <aside id={inspectorId} className="overview-inspector" aria-labelledby="overview-inspector-heading" ref={inspector} tabIndex={-1}>
           <h2 id="overview-inspector-heading" className={selected ? "sr-only" : undefined}>Pressure inspector</h2>
-          {selected ? <PressureInspector risk={selected} onInspectHost={onInspectHost} /> : (
-            <p>A near-limit or exceeded device will show its current reading, threshold, and sample time here.</p>
+          {selected ? (
+            <PressureInspector
+              risk={selected}
+              hostServices={services.filter(s => s.agent_id === selected.host.id)}
+              incident={selectedIncident}
+              investigation={selectedIncident ? (incidentDetails[selectedIncident.id] ?? null) : null}
+              investigationLoading={Boolean(selectedIncident && loadingIncidentId === selectedIncident.id && !(selectedIncident.id in incidentDetails))}
+              onInspectHost={onInspectHost}
+              onOpenIncident={onOpenIncident}
+            />
+          ) : (
+            <p>A near-limit or exceeded device will show its current reading, threshold, sample time, and AI analysis here.</p>
           )}
         </aside>
       </div>
@@ -298,7 +532,7 @@ export function ThresholdOverview({ fleet, fleetError, openIncidents, incidentsS
       <section className="overview-inventory" aria-labelledby="overview-inventory-heading">
         <div className="overview-section-head">
           <div>
-            <h2 id="overview-inventory-heading">Device &amp; service</h2>
+            <h2 id="overview-inventory-heading">All devices</h2>
             {fleet && <p className="overview-meta">{scope} · Reading / configured threshold</p>}
           </div>
           <Button size="sm" onClick={onBrowseHosts}>Browse hosts <OverviewIcon name="arrow" /></Button>
@@ -306,14 +540,24 @@ export function ThresholdOverview({ fleet, fleetError, openIncidents, incidentsS
         {devices?.length ? (
           <ul className="overview-inventory-list" role="list">
             {devices.map(({ host, fresh }) => (
-              <InventoryRow key={host.id} host={host} fresh={fresh} cached={cached} thresholds={thresholds} onInspectHost={onInspectHost} />
+              <InventoryRow
+                key={host.id}
+                host={host}
+                hostServices={services.filter(s => s.agent_id === host.id)}
+                fresh={fresh}
+                cached={cached}
+                thresholds={thresholds}
+                onInspectHost={onInspectHost}
+              />
             ))}
           </ul>
         ) : <p className="overview-inventory-empty">{fleetError ? "Device inventory unavailable." : fleet ? "No devices to show." : "Loading device inventory…"}</p>}
         <div className="overview-services-scope">
           <h3>Service availability</h3>
-          <Badge>Not collected</Badge>
-          <p>Service status is independent of agent connectivity.</p>
+          <Badge tone="neutral">
+            {services.length ? `${services.filter(s => s.state === "running").length} / ${services.length} recorded running` : "Not collected"}
+          </Badge>
+          <p>Service status is tracked independently of agent connectivity.</p>
         </div>
       </section>
     </div>

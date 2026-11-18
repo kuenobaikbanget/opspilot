@@ -214,3 +214,79 @@ export type HostMetric = {
   network_rx_bytes: number;
   network_tx_bytes: number;
 };
+
+export type HostService = {
+  id: string;
+  agent_id: string;
+  name: string;
+  runtime: "systemd" | "docker" | "process";
+  state: "running" | "stopped" | "failed" | "unknown";
+  source: string;
+  observed_at: string;
+};
+
+export type EndpointMonitor = {
+  id: string;
+  agent_id: string | null;
+  service_name: string | null;
+  name: string;
+  target_url: string;
+  expected_status: number;
+  probe_location: string;
+  last_status: "up" | "down" | "unknown";
+  last_http_status: number | null;
+  last_latency_ms: number | null;
+  last_error: string | null;
+  last_checked_at: string | null;
+};
+
+export type ServicesPayload = {
+  services: HostService[];
+  endpoints: EndpointMonitor[];
+};
+
+const PRIVATE_OR_METADATA_HOSTS = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "metadata.google.internal",
+  "metadata",
+]);
+
+function isLoopbackOrPrivateHost(hostname: string): boolean {
+  const lower = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (PRIVATE_OR_METADATA_HOSTS.has(lower) || lower === "::1" || lower === "::") return true;
+  if (/^127\./.test(lower) || /^10\./.test(lower) || /^169\.254\./.test(lower) || /^0\./.test(lower)) return true;
+  const m172 = lower.match(/^172\.(\d+)\./);
+  if (m172 && Number(m172[1]) >= 16 && Number(m172[1]) <= 31) return true;
+  if (/^192\.168\./.test(lower)) return true;
+  if (/^(fc|fd|fe80)/i.test(lower)) return true;
+  return false;
+}
+
+/** Validates an operator-supplied HTTP(S) endpoint check URL against SSRF/egress policy. */
+export function validateEndpointTargetUrl(
+  raw: string,
+  options: { allowLoopbackMock?: boolean } = {},
+): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 2048) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (parsed.username || parsed.password || parsed.hash) return null;
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host) return null;
+  if (host === "169.254.169.254" || host === "metadata.google.internal") return null;
+  const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  if (isLoopback && options.allowLoopbackMock) {
+    return parsed.toString();
+  }
+  if (isLoopbackOrPrivateHost(host)) return null;
+  if (parsed.protocol !== "https:") return null;
+  return parsed.toString();
+}

@@ -420,7 +420,7 @@ export function HostWorkspace({
                       const limit = fleet?.thresholds?.[key] ?? null;
                       return <td key={key}>
                         <span className={pressureClass(reading?.state)} aria-label={h[key] == null ? "No measurement" : undefined}>{percent(h[key])}{key !== "disk_percent" && ` / ${percent(limit)}`}</span>
-                        {reading && key === "cpu_percent" && <small>{reading.headroom > 0 ? `${Number(reading.headroom.toFixed(1))} pp headroom` : reading.headroom < 0 ? `${Number((-reading.headroom).toFixed(1))} pp over` : "At limit"}</small>}
+                        {reading && key === "cpu_percent" && <small>{reading.headroom > 0 ? `${Number(reading.headroom.toFixed(1))}% below limit` : reading.headroom < 0 ? `${Number((-reading.headroom).toFixed(1))}% over limit` : "At limit"}</small>}
                       </td>;
                     })}
                     <td><span className={pressureClass(risk?.state)}>{risk ? pressureLabel[risk.state] : failure ? "Cached" : h.status === "offline" ? "Historical" : stale(h) ? "No fresh sample" : "Unavailable"}</span></td>

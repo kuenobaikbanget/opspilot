@@ -50,6 +50,9 @@ const fixtureFetch = async (input: RequestInfo | URL) => {
     case "/api/ai/providers":
       value = { providers: [], encryptionConfigured: false };
       break;
+    case "/api/services":
+      value = { services: [], endpoints: [] };
+      break;
     case "/api/auth/logout":
       status = 503;
       value = { error: "Fixture sign-out failure" };

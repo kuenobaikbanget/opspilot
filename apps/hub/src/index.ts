@@ -31,6 +31,7 @@ import { createIncident, hostThresholds } from "./incidents";
 import { readAgentInstallConfig } from "./agent-install";
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
+import { serviceRoutes } from "./services";
 
 const agentInstallerUrl = new URL("../../../infra/install/agent.sh", import.meta.url);
 
@@ -99,6 +100,8 @@ async function router(req: Request): Promise<Response> {
   }
   const providerResponse = await providerRoutes(req, path, method);
   if (providerResponse) return providerResponse;
+  const serviceResponse = await serviceRoutes(req, path, method);
+  if (serviceResponse) return serviceResponse;
 
 
   if (path === "/api/auth/me" && method === "GET") {

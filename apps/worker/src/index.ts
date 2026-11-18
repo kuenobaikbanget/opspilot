@@ -1,6 +1,6 @@
 import { SQL } from "bun";
 import { readProviderMasterKey } from "@opspilot/ai/credentials";
-import { runOneInvestigation, runOneProviderTest } from "./jobs";
+import { runOneEndpointProbe, runOneInvestigation, runOneProviderTest } from "./jobs";
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL missing");
@@ -28,6 +28,7 @@ while (true) {
   try {
     await runOneInvestigation(db, masterKey);
     await runOneProviderTest(db, masterKey);
+    await runOneEndpointProbe(db);
   } catch {
     console.error("Worker poll failed");
   }
