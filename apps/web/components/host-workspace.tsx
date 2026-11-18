@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { Host, HostList, HostMetric } from "@opspilot/contracts";
-import { Badge, Button, Field, Input, Notice, Panel } from "./ui";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { AgentInstallConfig, Host, HostList, HostMetric } from "@opspilot/contracts";
+import { Badge, Button, Input, Notice, Panel } from "./ui";
+import { buildAgentInstallCommand } from "../lib/agent-install";
 
 type FleetIncident = {
   id: string;
@@ -161,14 +162,65 @@ export function HostWorkspace({
   const [historyError, setHistoryError] = useState("");
   const [resource, setResource] = useState<Resource>("disk_percent");
   const [now, setNow] = useState(Date.now());
-  const [token, setToken] = useState<{ value: string; expires: number } | null>(null);
+  const [token, setToken] = useState<{ command: string; expires: number } | null>(null);
+  const tokenRef = useRef(token);
+  const generation = useRef(0);
+  const tokenController = useRef<AbortController | null>(null);
+  const enrollmentVisible = useRef(enrollmentOpen);
+  enrollmentVisible.current = enrollmentOpen;
   const [enrolling, setEnrolling] = useState(false);
   const enrollmentPanel = useRef<HTMLElement>(null);
   const [enrollError, setEnrollError] = useState("");
   const [copied, setCopied] = useState(false);
-  const [hubUrl, setHubUrl] = useState("");
+  const [copyError, setCopyError] = useState("");
+  const [installConfig, setInstallConfig] = useState<AgentInstallConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configError, setConfigError] = useState("");
   const callbacks = useRef({ onHosts, onUnauthorized });
   callbacks.current = { onHosts, onUnauthorized };
+
+  const clearSecret = useCallback(() => {
+    generation.current++;
+    tokenController.current?.abort();
+    tokenController.current = null;
+    tokenRef.current = null;
+    setToken(null);
+    setCopied(false);
+    setCopyError("");
+    setEnrollError("");
+    setEnrolling(false);
+  }, []);
+
+  const unauthorized = useCallback(() => {
+    enrollmentVisible.current = false;
+    clearSecret();
+    callbacks.current.onUnauthorized();
+  }, [clearSecret]);
+
+  useEffect(() => {
+    clearSecret();
+    setInstallConfig(null);
+    setConfigError("");
+    setConfigLoading(enrollmentOpen);
+    if (!enrollmentOpen) return;
+    let active = true;
+    const controller = new AbortController();
+    void request("/agents/install-config", controller.signal).then((config: AgentInstallConfig) => {
+      if (active && enrollmentVisible.current) setInstallConfig(config);
+    }).catch((e: unknown) => {
+      if (!active || !enrollmentVisible.current) return;
+      const message = e instanceof Error ? e.message : String(e);
+      if (message === "Unauthorized") unauthorized();
+      else setConfigError(message);
+    }).finally(() => {
+      if (active) setConfigLoading(false);
+    });
+    return () => {
+      active = false;
+      controller.abort();
+      clearSecret();
+    };
+  }, [enrollmentOpen, clearSecret, unauthorized]);
 
   useEffect(() => {
     let active = true;
@@ -195,7 +247,7 @@ export function HostWorkspace({
       } catch (e) {
         if (!active) return;
         const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") callbacks.current.onUnauthorized();
+        if (message === "Unauthorized") unauthorized();
         else setFailure(message);
       } finally {
         pending = false;
@@ -211,7 +263,7 @@ export function HostWorkspace({
       clearInterval(poll);
       clearInterval(clock);
     };
-  }, [refreshKey]);
+  }, [refreshKey, unauthorized]);
 
   useEffect(() => {
     setHistory(null);
@@ -233,7 +285,7 @@ export function HostWorkspace({
       } catch (e) {
         if (!active) return;
         const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") callbacks.current.onUnauthorized();
+        if (message === "Unauthorized") unauthorized();
         else setHistoryError(message);
       } finally {
         pending = false;
@@ -247,11 +299,11 @@ export function HostWorkspace({
       controller.abort();
       clearInterval(poll);
     };
-  }, [selected]);
+  }, [selected, unauthorized]);
 
   useEffect(() => {
-    if (token && now >= token.expires) setToken(null);
-  }, [now, token]);
+    if (token && now >= token.expires) clearSecret();
+  }, [now, token, clearSecret]);
 
   useEffect(() => {
     if (enrollmentOpen) {
@@ -268,20 +320,56 @@ export function HostWorkspace({
   const drift = incidents.find(i => i.category === "config_drift");
 
   async function enroll() {
+    if (!enrollmentVisible.current || !installConfig) return;
+    clearSecret();
+    const current = generation.current;
+    const controller = new AbortController();
+    tokenController.current = controller;
     setEnrolling(true);
-    setEnrollError("");
-    setCopied(false);
-    setToken(null);
     try {
-      const result = await request("/agents/enrollment-token", undefined, "POST");
-      setToken({ value: result.token, expires: Date.now() + result.expiresInSeconds * 1000 });
+      const result = await request("/agents/enrollment-token", controller.signal, "POST");
+      if (current !== generation.current || !enrollmentVisible.current) return;
+      const next = {
+        command: buildAgentInstallCommand(installConfig, result.token),
+        expires: Date.now() + result.expiresInSeconds * 1000,
+      };
+      tokenRef.current = next;
+      setToken(next);
     } catch (e) {
+      if (current !== generation.current || !enrollmentVisible.current) return;
       const message = e instanceof Error ? e.message : String(e);
-      if (message === "Unauthorized") onUnauthorized();
+      if (message === "Unauthorized") unauthorized();
       else setEnrollError(message);
     } finally {
-      setEnrolling(false);
+      if (current === generation.current) setEnrolling(false);
     }
+  }
+
+  async function copyCommand() {
+    const secret = tokenRef.current;
+    if (!secret || !enrollmentVisible.current) return;
+    if (Date.now() >= secret.expires) {
+      clearSecret();
+      return;
+    }
+    const current = generation.current;
+    setCopied(false);
+    setCopyError("");
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(secret.command);
+      if (current === generation.current && enrollmentVisible.current && Date.now() < secret.expires) setCopied(true);
+    } catch {
+      if (current === generation.current && enrollmentVisible.current && Date.now() < secret.expires) {
+        setCopyError("Clipboard unavailable. Select and copy the install command manually.");
+      }
+    }
+  }
+
+  function closeEnrollment() {
+    enrollmentVisible.current = false;
+    clearSecret();
+    onCloseEnrollment();
   }
 
   return (
@@ -644,15 +732,27 @@ export function HostWorkspace({
         <div className="panel-head">
           <div>
             <h2 id="enroll-host-title">Enroll a Linux host</h2>
-            <p>Admin-only, one-time secret. Expires in 10 minutes; never stored in this browser.</p>
+            <p>Copy one command, SSH to the intended host, and paste it there.</p>
           </div>
-          <Button size="sm" variant="ghost" onClick={onCloseEnrollment}>
+          <Button size="sm" variant="ghost" onClick={closeEnrollment}>
             Close enrollment
           </Button>
         </div>
 
-        <Button loading={enrolling} onClick={() => void enroll()}>
-          Generate enrollment token
+        <p className="small">
+          Requires Linux with running systemd, amd64 or arm64, curl and CA certificates.
+          {" "}Run as root or with sudo (which may prompt for your password). No Go toolchain or repository checkout needed.
+        </p>
+        {configLoading && <p role="status">Loading installation configuration…</p>}
+        {configError && <Notice tone="warning" role="alert">{configError}. Monitoring and manual enrollment remain available.</Notice>}
+        {installConfig && (
+          <p className="small">
+            Hub: <code>{installConfig.hubUrl}</code><br />
+            Pinned release: <code>{installConfig.version}</code> from <code>{installConfig.repository}</code>
+          </p>
+        )}
+        <Button loading={enrolling} disabled={!installConfig || configLoading} onClick={() => void enroll()}>
+          Generate install command
         </Button>
 
         {enrollError && (
@@ -661,53 +761,30 @@ export function HostWorkspace({
           </Notice>
         )}
 
-        {token && (
+        {token && now < token.expires && (
           <div className="enrollment-secret">
+            <Notice tone="warning">
+              This command contains a one-time token and may remain in shell history and the clipboard. It expires after 10 minutes; use it only on the intended host.
+            </Notice>
             <p>
               Expires {new Date(token.expires).toLocaleTimeString()} ·{" "}
-              {Math.max(0, Math.ceil((token.expires - now) / 1000))}s remaining. Usable once; creating another does not revoke earlier tokens.
+              {Math.max(0, Math.ceil((token.expires - now) / 1000))}s remaining.
+              {" "}Usable once; creating another does not revoke earlier tokens.
             </p>
+            <pre className="agent-command" tabIndex={0} aria-label="Install command"><code>{token.command}</code></pre>
             <div className="token">
-              <code>{token.value}</code>
-              <Button
-                size="sm"
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(token.value)
-                    .then(() => setCopied(true))
-                    .catch(() => setEnrollError("Clipboard unavailable. Select and copy the token manually."))
-                }
-              >
-                {copied ? "Copied" : "Copy token"}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setToken(null)}>
-                Hide secret
-              </Button>
+              <Button size="sm" onClick={() => void copyCommand()}>Copy install command</Button>
+              <Button size="sm" variant="ghost" onClick={clearSecret}>Hide command</Button>
+              {copied && <span role="status">Install command copied.</span>}
             </div>
+            {copyError && <Notice tone="warning" role="alert">{copyError}</Notice>}
           </div>
         )}
 
-        <Field
-          id="agent-hub-url"
-          label="Hub URL reachable from the Linux host"
-          hint="Use HTTPS for remote hosts. The hub must accept agent HTTP/WebSocket connections."
-        >
-          <Input
-            id="agent-hub-url"
-            type="url"
-            value={hubUrl}
-            onChange={e => setHubUrl(e.target.value)}
-            placeholder="https://your-hub.example.com"
-            aria-describedby="agent-hub-url-hint"
-          />
-        </Field>
-
-        <p className="small">On the Linux host, install Go and obtain this OpsPilot repository. From its root, run:</p>
-        <pre className="agent-command">
-          <code>{`cd agent\ngo mod download\nOPSPILOT_HUB_URL='${(hubUrl || "https://YOUR-HUB-HOST").replaceAll("'", "'\\''")}' \\\nOPSPILOT_ENROLL_TOKEN='<paste the one-time token>' \\\ngo run ./cmd/opspilot-agent`}</code>
-        </pre>
         <p className="tiny">
-          Identity is saved at ~/.local/share/opspilot-agent/identity.json (0600). Later starts reuse it without an enrollment token. Keep the agent running; this table refreshes every 10 seconds.
+          The installer verifies the pinned binary and enables a nonroot systemd service.
+          {" "}Hiding a command does not clear clipboard/history or revoke its token.
+          {" "}Verify the host’s Online status and fresh measurements in the fleet table; it refreshes every 10 seconds.
         </p>
       </section>
     </section>

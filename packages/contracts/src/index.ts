@@ -16,6 +16,14 @@ export type DiagnosticTool = (typeof ALLOWED_TOOLS)[number];
 /** Supported LLM investigation providers. */
 export type Provider = "openai" | "anthropic" | "gemini";
 
+/** Explicit server-configured metadata for pinned Linux agent installation. */
+export type AgentInstallConfig = {
+  hubUrl: string;
+  installerUrl: string;
+  version: string;
+  repository: string;
+};
+
 /** Periodic host telemetry message emitted by an enrolled agent. */
 export type AgentTelemetry = {
   type: "telemetry";
