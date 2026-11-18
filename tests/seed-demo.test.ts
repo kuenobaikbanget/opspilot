@@ -13,8 +13,8 @@ for (const scenario of [
   },
 ]) {
   test(`demo seed refuses ${scenario.name} before connecting`, async () => {
-    const child = Bun.spawn([process.execPath, new URL("../tools/seed-demo.ts", import.meta.url).pathname], {
-      env: { ...process.env, ...scenario.env },
+    const child = Bun.spawn([process.execPath, "--no-env-file", new URL("../tools/seed-demo.ts", import.meta.url).pathname], {
+      env: { PATH: process.env.PATH || "", ...scenario.env },
       stdout: "pipe",
       stderr: "pipe",
     });

@@ -3,12 +3,32 @@
 ## Current repo tests
 
 ```bash
-bun test
+bun --no-env-file test
 bun run typecheck
 (cd agent && go test ./...)
 ```
 
-`tests/contracts.test.ts` tests tool enum, metric bounds, and redaction smoke tests. `tests/agent-install.test.ts` covers installation metadata and command quoting; `tests/agent-installer.test.ts` covers pre-mutation shell rejection with isolated fixtures, never successful privileged installation on the developer host. Go agent tests cover parsing/redaction/WS URL plus finite enrollment, response/redirect rejection and identity preservation. These tests are **not** a substitute for integration, security, and AI evaluation.
+`tests/contracts.test.ts` covers tool/metric bounds, provider input contracts and redaction. The BYOK suites below cover credential, transport, migration and real API/Worker boundaries. `tests/agent-install.test.ts` covers installation metadata and command quoting; `tests/agent-installer.test.ts` covers pre-mutation shell rejection with isolated fixtures, never successful privileged installation on the developer host. Go agent tests cover parsing/redaction/WS URL plus finite enrollment, response/redirect rejection and identity preservation. These tests are **not** a substitute for broader agent security, integration, and AI evaluation.
+
+## BYOK provider management verification — 2026-11-18
+
+- Approved seven-file command passed: **62 tests, 0 failures, 2771 assertions** using Bun 1.4.2 and PostgreSQL 16 disposable child databases. Hub, Worker and Web typechecks passed. Compose full-profile configuration parsed successfully.
+- Crypto checks cover canonical master encoding, fresh nonces, wrong master/AAD and tampered envelopes. Native HTTPS checks cover conservative IP/URL policy, all-answer DNS rejection/pinning, redirects, wrong-host/untrusted TLS, header/body/chunk limits, DNS/connect/body deadlines, late DNS and unsafe runtime flags. Three real HTTPS protocol fixtures exercise authentication, explicit models, token limits, diagnosis parsing and citation filtering.
+- Real Hub subprocess/SQL/Worker integration covers admin cookie/Origin/body/UUID/input negatives, CRUD/revision/key replacement, missing/malformed master and unreadable credentials, disabled/deleted/stale connections, concurrent claims, expired/replaced/late test results, transactional allowlisted audits and snapshot retention. A native Worker subprocess fails private-target requests safely without a paid provider.
+- Migration/import checks cover empty and legacy schemas, terminal preservation, pending legacy failure, ledger reruns/checksum mismatch/file rollback, all three legacy imports, identical reruns, collisions, invalid master/no-key early exits and the 100-connection limit.
+- Browser proof used real Next → Hub → PostgreSQL on disposable ports 3101/3301 because the user's existing 3100 server was left untouched. Web ran from an isolated source copy to avoid its Next development lock. Login, add/edit, blank replacement-key input, metadata-only save, changed-destination key requirement, enable/disable selection, native DNS test failure and stored synthetic HTTPS test success were observed through the page.
+- A browser-submitted investigation completed using an explicit `browser-fixture-model` with the actual persisted evidence citation. Renaming/changing the default model did not change its report; deleting the connection through inline confirmation removed it from selection while preserving the readable snapshot with null connection ID.
+- Keyboard focus/editor cancel/delete restoration, mobile controls, field error, master-missing notice, key-draft clearing on tab change/logout/unauthorized, empty state and independent provider-load failure were checked. Provider-load failure and unauthorized responses were deliberately simulated at the browser network boundary; master-missing used a real Hub restart. GET responses and local/session storage contained no dummy provider keys.
+- Captured actual management/editor surfaces at 1440/1024/390px: document width matched each viewport, table remained in a named horizontal-scroll region and mobile form used one column. Mechanical detector returned no findings. A scoped visual review found an Enabled-column wrap defect; local nowrap CSS and recaptures resolved that single finding.
+- Screenshots: [desktop](../.impeccable/review/byok-desktop.png), [tablet](../.impeccable/review/byok-tablet.png), [mobile](../.impeccable/review/byok-mobile.png).
+
+No live OpenAI/Anthropic/Gemini request, full Compose boot/image build, production deployment, new agent wire behavior or master-key rotation was tested. Test-only HTTPS code asserts the production pinning/TLS options then maps a validated public fixture address to a loopback listener with a dummy CA; it does not prove public network reachability. Only disposable resources created for this verification are removed.
+
+### BYOK review regression verification
+
+- Ran the focused adapter, migration/import and Hub/Worker suites against PostgreSQL 16 in an isolated loopback-only Docker namespace: 43 cases, initially 42 passed and one exposed uppercase audit IDs. After normalizing route IDs, the targeted CRUD regression passed (1 passed, 12 filtered out).
+- Regressions cover the actual package-script importer ignoring a retained dummy `.env`, replacement-key decryption through an uppercase UUID, a forced concurrent DELETE/Worker claim, and Gemini 2.5 thinking consumption with parsed diagnosis output while legacy/image models receive no unsupported thinking configuration.
+- Hub, Worker and Web TypeScript checks passed. Source/toolchain mounts were read-only, environments allowlisted, and containers used bounded memory/CPU/process/tmpfs limits. No user database, provider credentials, paid API request or browser session was used.
 
 ## Curl onboarding verification — 2026-11-18
 

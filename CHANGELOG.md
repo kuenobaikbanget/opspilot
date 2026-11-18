@@ -2,6 +2,11 @@
 
 ## Unreleased — 2026-11-18
 
+- Added stored BYOK AI connections with encrypted credentials, manual protocol/model selection, revision-checked investigation snapshots, and explicit asynchronous synthetic connection tests.
+- Added public-only DNS-pinned HTTPS transport with verified TLS, bounded responses/deadlines and sanitized failures; no OAuth, automatic fallback, model discovery or 9Router dependency.
+- Added checksummed transactional migrations, explicit legacy credential importer and ordered Compose schema bootstrap. Existing deployments must stop old Hub/Worker before migration; see the cutover guide.
+- Fixed review findings in the BYOK importer, canonical UUID-bound credential replacement/audits, provider-first Worker claim locking, and Gemini 2.5 thinking budgets with reserved answer headroom.
+- Verified 62 Bun tests with disposable PostgreSQL/native HTTPS fixtures, all workspace typechecks and the real management UI at 1440/1024/390px. Fixed JSONB double encoding in audit/report persistence exposed by integration tests. No paid-provider calls or production deployment.
 - Added curl-based headless Linux/systemd onboarding: explicit HTTPS Hub metadata, pinned release/repository configuration, authenticated install-config API and public static installer. The dashboard now offers a single token-bearing command with copy/hide/expiry and late-response cleanup.
 - Added finite `opspilot-agent enroll`, redirect refusal and atomic 0600 identity persistence. The installer verifies archive checksums/members, enrolls as nonroot, keeps tokens out of env/unit files, and supports only byte-identical same-version reruns; conflicting installations are never upgraded or overwritten.
 - Set systemd `StateDirectoryMode=0700` after real VM acceptance exposed the default resetting the installer’s private state directory to 0755.

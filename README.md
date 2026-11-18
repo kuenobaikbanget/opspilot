@@ -74,11 +74,11 @@ The agent atomically saves credentials with mode 0600 at `~/.local/share/opspilo
 
 ### Run first investigation
 
-1. Set one or more AI API keys in `.env` (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). **Bring Your Own Key is server-side environment configuration** in this scaffold; there is no web-based secret manager yet.
-2. Restart Hub and Worker after `.env` changes.
-3. In dashboard, create a manual incident on a connected host.
-4. Select a configured provider → **Investigate**. The Hub requests safe diagnostic evidence from agent, enqueues a job, Worker generates validated JSON diagnosis.
-5. Add a human-verified resolution → **Mark resolved**. The resolution becomes searchable under **Incident memory** and can be retrieved by subsequent investigations.
+1. Generate `AI_PROVIDER_ENCRYPTION_KEY` with `openssl rand -base64 32`, securely back it up separately from the database, and supply the same value only to Hub/Worker.
+2. Start Hub/Worker, then open **Provider settings**. Add a named connection with its public HTTPS API root, protocol, API key and explicit default model.
+3. Save, then explicitly **Test connection** if desired; this sends a synthetic prompt and may incur charges. Saving alone sends nothing upstream.
+4. Create/open an incident, select an enabled connection and model, review the destination/evidence disclosure, then **Investigate**. Worker generates a validated advisory hypothesis with evidence citations.
+5. Add a human-verified resolution → **Mark resolved**. Existing deployments must follow the [migration/import cutover](docs/DEPLOYMENT.md#ai-provider-cutover); provider environment keys are no longer runtime configuration.
 
 ### Try config drift
 
@@ -86,7 +86,7 @@ If `OPSPILOT_CONFIG_FILES` includes a readable, regular file, the agent sends it
 
 ## Run all backend services in Compose (experimental template)
 
-Set `ADMIN_PASSWORD_HASH` and a long `SESSION_SECRET` in `.env`, then:
+Set `ADMIN_PASSWORD_HASH`, a long `SESSION_SECRET` and `AI_PROVIDER_ENCRYPTION_KEY` in `.env`, then:
 
 ```bash
 docker compose --profile full up --build -d

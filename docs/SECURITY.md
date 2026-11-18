@@ -6,7 +6,7 @@
 
 | Boundary | Risks | Current baseline | Required hardening |
 |---|---|---|---|
-| Browser → Hub | password guessing, CSRF, session theft | signed 8-hour HttpOnly SameSite=Strict cookie; checks Origin for POST | rate limit, CSRF token, login lockout, security headers, TLS proxy |
+| Browser → Hub | password guessing, CSRF, session theft | signed 8-hour HttpOnly SameSite=Strict cookie; Origin checks on POST/PATCH/DELETE, exact required Origin for AI mutations | rate limit, CSRF token, login lockout, security headers, TLS proxy |
 | First agent enrollment | token interception / reuse | 256-bit random token, SHA256 hash, 10min TTL, atomic consume | visibility/audit, abuse throttling, approval UI |
 | Agent WSS | impersonation, replay, exfiltration | 256-bit bearer secret hashed in DB; auth before upgrade; no token in URL | cert trust, key rotation/revocation, versioning, mTLS option |
 | Agent diagnostics | remote command abuse | enumerated safe tools, local service allowlist, fixed executable, 5s timeout, output cap | per-agent capabilities, policy engine, security testing |
@@ -21,11 +21,11 @@
 - Use `bun run password:hash -- "..."` to generate Argon2id admin password hash. Never store clear admin password in production `.env`.
 - Use a strong `SESSION_SECRET` (>=32 random characters), rotate on compromise.
 - Use environment files with restrictive modes and protect backups.
-- API keys belong **only to Hub/Worker environment**; no client-side key storage.
+- Provider API keys are entered only through authenticated same-origin settings and stored as AES-256-GCM envelopes in PostgreSQL. Only Hub/Worker/importer read `AI_PROVIDER_ENCRYPTION_KEY`; Web receives neither master key nor DB credentials, saved keys, or ciphertext. No runtime provider-key environment fallback.
 - Agent identity secret stored 0600 on host or in protected Docker volume; remote use HTTPS/WSS.
 - Host lists/history remain behind the existing admin cookie; enrollment token creation retains the existing Origin check, one-use token and audit path. The live inspector performs no diagnostics, outbound probe, LLM call or remediation. Workload/endpoint unavailability never implicitly enables Docker or shell access.
 - The host dashboard's 60-second telemetry freshness label is a display policy, not a transport heartbeat or replay defense. `Online` means a socket is currently registered in this single Hub; silent network partitions still require transport TTL hardening. Enrollment tokens must not enter persistent browser storage, URLs, screenshots or logs; the admin-only enrollment view clears them on sign-out/expiry.
-- Dashboard Provider settings is a read-only view of the existing authenticated provider-availability response; it accepts no keys. In-page navigation and unavailable service/endpoint sections add no API routes, diagnostics, Docker access, outbound checks or automatic AI calls. Enrollment remains behind an explicit reveal/generate flow with the same expiry and non-persistent secret handling.
+- Provider settings accepts one key per connection in a password input, never retrieves/reveals a stored key, and clears drafts on save/cancel/unmount/sign-out/unauthorized. No credential-derived masks or browser persistence. Save does not call a model; tests and investigations require explicit admin actions.
 - The opt-in `db:seed:demo` command is restricted to non-production, loopback database connections and uses a transaction with reserved fixture identities; it does not delete or overwrite existing rows. All hostnames, evidence, authored AI examples and resolution examples identify `Demo data`. Agent credentials are randomly generated and discarded, hosts remain offline, and investigation fixtures are completed/failed rather than runnable queue entries. Seeding starts no diagnostics, probes or provider calls; it must not be treated as collected evidence or a real confirmed resolution.
 - An agent with Docker group membership often has root-equivalent power; never assume `docker.sock:ro` is safe just because the mount says `ro`.
 
@@ -41,6 +41,22 @@ Enrollment runs as the dedicated nonroot account and atomically saves a 0600 ide
 The unit explicitly sets `StateDirectoryMode=0700`; relying only on installer chmod is insufficient because systemd otherwise resets `StateDirectory` to its default 0755 at startup.
 
 Same-version reruns require byte-identical binary/unit/env; conflicting files and symlink targets are refused, not overwritten. No upgrades, identity deletion or privilege-group grants are performed. A lost accepted enrollment response requires a fresh token, not invented recovery. Local service-active does not prove WSS connectivity or fresh telemetry. GitHub currently has no published releases: publish a reviewed compatible release after merge before enabling this path; an old binary without `enroll` is not compatible.
+
+## AI connection credentials and egress
+
+Generate the master with `openssl rand -base64 32`; canonical base64 must decode to exactly 32 bytes. Back it up separately from PostgreSQL and share the same value only with Hub/Worker. Missing/malformed configuration leaves monitoring available; wrong key/tampered envelope fails `credential_unavailable`. There is no automatic master rotation or credential deletion/recovery. Restore the original master, or replace each provider key under a new master.
+
+Each encryption uses a random 12-byte nonce, 16-byte tag and AAD `opspilot:ai-provider:v1:<uuid>`; storage is `v1.<nonce-base64url>.<ciphertext-base64url>.<tag-base64url>`. UUID is created before encryption. Endpoint/protocol changes require a newly entered key so an existing credential cannot silently move to another destination.
+
+Worker transport uses native HTTPS with public-address classification and DNS pinning, original Host/SNI/certificate verification, `agent:false`, no proxy/global agent, no redirects or retries. It resolves every A/AAAA answer and rejects the entire target if any is nonpublic. IPv4 special-purpose ranges are blocked; IPv6 allows only 2000::/3 minus the documented special-purpose exclusions. This deliberately conservative policy may reject globally reachable special addresses. Private gateways, loopback, metadata and localhost are unsupported, without an override flag.
+
+Every final operation URL is validated: HTTPS only, valid port, no userinfo/query/fragment/zone identifier. Total deadline is 30 seconds including DNS/body; TCP/TLS deadline 5 seconds, headers at most 16 KiB, body at most 1 MiB, identity encoding only. Late DNS cannot open a socket. `NODE_TLS_REJECT_UNAUTHORIZED=0` or active `BUN_CONFIG_VERBOSE_FETCH=1/curl` is rejected before requests. TLS verification cannot be disabled through the provider API.
+
+Provider failures expose/persist/log only fixed categories and optional HTTP status, never upstream body, Location, raw URL/exception, auth headers or request body. Mutation/test-result audits are transactional and allowlist only protocol, revision, changedFields, testId, httpStatus, errorCode. Each provider retains one test slot, not unbounded test history. Credential deletion leaves non-secret investigation snapshots and audit events intact; general report/audit retention remains operator-managed.
+
+Browser revision, queue snapshot and Worker claim checks prevent sending evidence to a configuration changed before execution. Once Worker captures configuration, an in-flight HTTPS request is not cancellable by edit/delete. A synthetic connection test can incur charges and validates generation/schema, not endpoint uptime or diagnosis quality. No model discovery, OAuth, fallback, automatic scheduling or remote execution is added.
+
+Address policy references: [IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/) and [IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/). Enforce independent network egress controls as defense in depth.
 
 ## Agent tool policy
 
@@ -112,4 +128,4 @@ GHCR visibility/access is a separate package setting; new packages default to pr
 
 ## Privacy principle
 
-Self-hosting Hub does not imply that data stays local after an LLM request. When admin clicks Investigate and uses OpenAI/Gemini/Anthropic, selected evidence is sent to that external provider. Document provider retention and data processing before using non-synthetic production incident data.
+Self-hosting Hub does not imply that data stays local after an LLM request. Clicking Investigate sends bounded selected incident evidence and retrieved resolution context to the explicitly selected connection endpoint/model. Review that destination and its retention/data-processing policy before sending non-synthetic data. Connection tests send only a synthetic prompt without incident evidence.

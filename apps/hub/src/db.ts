@@ -17,8 +17,9 @@ export const audit = async (
   action: string,
   targetId: string | null,
   data: object = {},
-) => {
-  await db`INSERT INTO audit_events(action,target_id,data) VALUES(${action},${targetId},${JSON.stringify(data)}::jsonb)`;
+  executor: SQL = db,
+): Promise<void> => {
+  await executor`INSERT INTO audit_events(action,target_id,data) VALUES(${action},${targetId},${data}::jsonb)`;
 };
 
 /** Returns a lowercase hex SHA-256 digest for storing or comparing tokens/secrets. */

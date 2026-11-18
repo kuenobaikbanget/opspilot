@@ -6,23 +6,29 @@ LLM is **not a monitoring agent and not an executor**. It receives bounded evide
 
 ## Provider interface (BYOK)
 
-Available adapters in `packages/ai`:
+Stored connections use a UUID identity and one of three protocols:
 
-| Provider | Key env | Model env | API path |
-|---|---|---|---|
-| OpenAI | `OPENAI_API_KEY` | `OPENAI_MODEL` | Chat Completions, JSON mode |
-| Anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | Messages API, prompt for JSON |
-| Google Gemini | `GEMINI_API_KEY` | `GEMINI_MODEL` | generateContent, JSON MIME type |
+| Protocol | API suffix | Authentication |
+|---|---|---|
+| `openai-compatible` | `/chat/completions` | Bearer |
+| `anthropic` | `/messages` | x-api-key, anthropic-version 2023-06-01 |
+| `gemini` | `/models/<encoded-model>:generateContent` | x-goog-api-key |
 
-Model strings are configuration, **not promises of perpetual model availability**. Verify current provider APIs, billing limits and model availability before deployment. Each provider key is supplied to Hub/Worker via environment (BYOK). No user key upload or browser-side LLM call.
+Admin chooses connection and explicit model manually; there is no OAuth, discovery, retry, downgrade or fallback. OpenAI Responses-only endpoints are not Chat Completions-compatible. Presets in contracts are editable defaults, not promises of vendor/model availability.
+
+Keys are encrypted in PostgreSQL using the server-only master environment key, never read from legacy provider environment variables at runtime. See [credential and egress controls](SECURITY.md#ai-connection-credentials-and-egress) and [cutover](DEPLOYMENT.md#ai-provider-cutover).
+
+Gemini 2.5 text-thinking families (`gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro`, including `-preview[-<date>]` and three-digit version suffixes) receive an explicit 1024-token thinking budget and a 2224-token combined generation cap, leaving 1200 tokens of answer headroom when the thinking budget is consumed. This modest reasoning allowance is a cost/quality tradeoff, not a guarantee of diagnosis quality or complete JSON. [Google's thinking guide](https://ai.google.dev/gemini-api/docs/generate-content/thinking#thinking-budget) documents Flash's 0–24576, Flash-Lite's 512–24576 and Pro's 128–32768 thinking ranges, dynamic thinking defaults for Flash/Pro, and that thinking plus answer tokens share `maxOutputTokens` and are billed as output. A 1200-token combined cap alone can therefore starve the answer.
+
+This is a conservative text-model family policy, not model discovery or substitution: the selected model is sent unchanged. Image/audio/live variants, legacy models, future generations and unrecognized custom names retain the 1200-token generation cap without `thinkingConfig`; the [API rejects thinking configuration on non-thinking models](https://ai.google.dev/api/generate-content#ThinkingConfig). Unsupported endpoints/models fail without retry or fallback. Other model families need an explicit reviewed budget policy before assuming they offer the same reasoning/answer allocation.
 
 ## Workflow
 
-1. Admin chooses a provider and incident.
-2. Hub dispatches fixed agent operations (bounded, optional when offline) and stores results as `evidence`.
-3. Hub inserts a `queued` investigation.
-4. Worker leases one job, queries evidence + prior human-verified resolutions via Postgres FTS.
-5. Worker redacts common credential patterns, caps context, calls provider over HTTPS with 30s timeout.
+1. Admin reviews the enabled connection destination, revision and explicit model before submitting the incident.
+2. Hub validates credentials/revision before dispatching existing fixed agent operations, then rechecks configuration and incident state under lock.
+3. Hub queues an investigation with an immutable non-secret provider snapshot.
+4. Worker reads a queued candidate without locking it, locks its provider row first, then conditionally claims that exact still-queued job with FOR UPDATE SKIP LOCKED before checking revision/decrypting credentials. Provider-first row locking matches connection deletion's foreign-key lock order and avoids a delete/claim deadlock; unavailable/changed connections fail without outbound calls.
+5. Worker redacts common credential patterns, caps context, then uses public DNS-pinned HTTPS with a 30-second total deadline and finite generation budget (1200 tokens, or 2224 combined thinking/answer tokens for the Gemini 2.5 text families above).
 6. Strict post-processor validates result fields and removes every `evidence_id` absent from database input; forces low confidence when no valid evidence IDs remain.
 7. UI displays hypothesis, confidence and next checks; human chooses what to do.
 8. Human-supplied resolution is stored for future retrieval.
@@ -72,4 +78,4 @@ Metrics:
 
 ## Cost guardrails (release blockers)
 
-Current: provider call only after explicit admin click; one query per investigation; time and context length caps. Future: daily/monthly budgets, per-provider rate limits, idempotency and retry policy, spend reporting, provider failover policy (opt-in), and encrypted secret storage if BYOK UI is introduced.
+Current: external generation only after explicit investigation/test actions; one query per job with no retry/fallback, bounded context, time, response and output tokens. A connection test uses the same adapter/parser with synthetic title/category and empty evidence/memory; HTTP 200 alone cannot pass it. Tests have one 90-second queue-inclusive slot; timeout may mean Worker/queue delay, not endpoint failure. Future: daily/monthly budgets, rate limits, idempotency and spend reporting.
