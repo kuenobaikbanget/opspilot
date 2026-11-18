@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
-  <title id="title">OpsPilot concept C — Horizon</title>
-  <g id="symbol">
-    <path fill="#111111" fill-rule="evenodd" d="M 68 24 H 188 A 44 44 0 0 1 232 68 V 188 A 44 44 0 0 1 188 232 H 68 A 44 44 0 0 1 24 188 V 68 A 44 44 0 0 1 68 24 Z M 70 52 A 18 18 0 0 0 52 70 V 126 H 86 L 128 84 L 170 126 H 204 V 70 A 18 18 0 0 0 186 52 Z M 52 150 V 186 A 18 18 0 0 0 70 204 H 186 A 18 18 0 0 0 204 186 V 150 H 160 L 128 118 L 96 150 Z"/>
-  </g>
-</svg>

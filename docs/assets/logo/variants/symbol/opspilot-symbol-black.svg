@@ -1,6 +1,0 @@
-<svg fill="#000000" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title"><title>OpsPilot logo</title>
-  <title id="title">OpsPilot symbol</title>
-  <g id="symbol">
-    <path fill="#000000" fill-rule="evenodd" d="M 68 24 H 188 A 44 44 0 0 1 232 68 V 188 A 44 44 0 0 1 188 232 H 68 A 44 44 0 0 1 24 188 V 68 A 44 44 0 0 1 68 24 Z M 69.0 50 A 17.0 17.0 0 0 0 52 67.0 V 126 H 86 L 128 84 L 170 126 H 204 V 67.0 A 17.0 17.0 0 0 0 187.0 50 Z M 52 150 V 189.0 A 17.0 17.0 0 0 0 69.0 206 H 187.0 A 17.0 17.0 0 0 0 204 189.0 V 150 H 160 L 128 118 L 96 150 Z"/>
-  </g>
-</svg>

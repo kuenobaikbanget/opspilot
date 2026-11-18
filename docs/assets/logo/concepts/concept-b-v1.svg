@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
-  <title id="title">OpsPilot concept B — Avionics OP</title>
-  <g id="symbol">
-    <path fill="#111111" fill-rule="evenodd" d="M 40 44 H 94 L 118 68 V 188 L 94 212 H 40 L 16 188 V 68 Z M 58 74 L 48 84 V 172 L 58 182 H 76 L 86 172 V 84 L 76 74 Z"/>
-    <path fill="#111111" fill-rule="evenodd" d="M 138 44 H 216 L 240 68 V 124 L 216 148 H 170 V 212 H 138 Z M 170 74 V 118 H 198 L 208 108 V 84 L 198 74 Z"/>
-  </g>
-</svg>

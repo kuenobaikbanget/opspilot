@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
-  <title id="title">OpsPilot concept A — Bearing</title>
-  <g id="symbol">
-    <path fill="#111111" fill-rule="evenodd" d="M 128 24 A 104 104 0 1 0 232 128 H 190 A 62 62 0 1 1 128 66 Z"/>
-    <path fill="#111111" fill-rule="evenodd" d="M 222 34 L 110 90 L 150 106 L 166 146 Z"/>
-  </g>
-</svg>
