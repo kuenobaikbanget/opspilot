@@ -25,6 +25,9 @@ import {
 } from "./auth";
 import { audit, db } from "./db";
 import { createIncident } from "./incidents";
+import { readAgentInstallConfig } from "./agent-install";
+
+const agentInstallerUrl = new URL("../../../infra/install/agent.sh", import.meta.url);
 
 const port = Number(process.env.PORT || 3001);
 if (process.env.NODE_ENV === "production" && !process.env.ADMIN_PASSWORD_HASH) {
@@ -146,6 +149,11 @@ async function router(req: Request): Promise<Response> {
 
   if (path === "/api/agents/enrollment-token" && method === "POST") {
     return j(await createEnrollmentToken(), 201);
+  }
+
+  if (path === "/api/agents/install-config" && method === "GET") {
+    const config = readAgentInstallConfig(process.env);
+    return config ? j(config) : invalid("Agent installation is not configured", 503);
   }
 
   if (path === "/api/hosts" && method === "GET") {
@@ -339,6 +347,22 @@ const server = Bun.serve<SocketData>({
   async fetch(req, server) {
     const url = new URL(req.url);
     try {
+      if (url.pathname === "/api/agents/install.sh") {
+        if (req.method !== "GET") {
+          return j({ error: "Method not allowed" }, 405, { Allow: "GET" });
+        }
+        const agentInstaller = Bun.file(agentInstallerUrl);
+        if (!(await agentInstaller.exists()) || agentInstaller.size === 0) {
+          return invalid("Agent installer is unavailable", 500);
+        }
+        return new Response(agentInstaller, {
+          headers: {
+            "Content-Type": "text/x-shellscript; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+          },
+        });
+      }
       if (url.pathname === "/api/agents/enroll" && req.method === "POST") {
         const origin = req.headers.get("origin");
         if (origin) {

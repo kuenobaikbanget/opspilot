@@ -115,7 +115,7 @@ func readIdentity(path string) (identity, error) {
 		return id, err
 	}
 	err = json.Unmarshal(b, &id)
-	if id.AgentID == "" || id.AgentSecret == "" {
+	if !validIdentity(id) {
 		return id, errors.New("invalid agent identity")
 	}
 	return id, err
@@ -128,7 +128,25 @@ func saveIdentity(path string, id identity) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0600)
+	f, err := os.CreateTemp(filepath.Dir(path), ".identity-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}
+
+var agentIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func validIdentity(id identity) bool {
+	return agentIDPattern.MatchString(id.AgentID) && strings.TrimSpace(id.AgentSecret) != ""
 }
 func enroll(cfg config) (identity, error) {
 	var id identity
@@ -142,19 +160,24 @@ func enroll(cfg config) (identity, error) {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.HubURL+"/api/agents/enroll", bytes.NewReader(payload))
 	if err != nil {
-		return id, err
+		return id, errors.New("invalid enrollment request")
 	}
 	req.Header.Set("content-type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Do(req)
 	if err != nil {
-		return id, err
+		return id, errors.New("enrollment request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		return id, fmt.Errorf("enrollment rejected: HTTP %d", resp.StatusCode)
 	}
-	err = json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&id)
-	return id, err
+	if err = json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&id); err != nil || !validIdentity(id) {
+		return identity{}, errors.New("invalid enrollment response")
+	}
+	return id, nil
 }
 func wsAddress(base string) (string, error) {
 	parsed, err := url.Parse(base)
@@ -173,19 +196,37 @@ func wsAddress(base string) (string, error) {
 	parsed.RawQuery = ""
 	return parsed.String(), nil
 }
-func Run() error {
-	cfg := readConfig()
+func loadOrEnroll(cfg config) (identity, error) {
 	id, err := readIdentity(cfg.StatePath)
 	if os.IsNotExist(err) {
 		id, err = enroll(cfg)
 		if err != nil {
-			return err
+			return id, err
 		}
 		if err = saveIdentity(cfg.StatePath, id); err != nil {
-			return err
+			return id, err
 		}
 		log.Printf("Agent enrolled; identity saved at %s", cfg.StatePath)
 	}
+	return id, err
+}
+
+// EnrollOnly persists an identity without starting the reconnect loop.
+func EnrollOnly() error {
+	raw := os.Getenv("OPSPILOT_HUB_URL")
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery ||
+		u.Fragment != "" || strings.ContainsAny(raw, "?#\\\r\n\t ") {
+		return errors.New("enroll requires an HTTPS Hub origin without credentials, path, query or fragment")
+	}
+	_, err = loadOrEnroll(readConfig())
+	return err
+}
+
+func Run() error {
+	cfg := readConfig()
+	id, err := loadOrEnroll(cfg)
 	if err != nil {
 		return err
 	}

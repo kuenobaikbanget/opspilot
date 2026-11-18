@@ -29,6 +29,19 @@
 - The opt-in `db:seed:demo` command is restricted to non-production, loopback database connections and uses a transaction with reserved fixture identities; it does not delete or overwrite existing rows. All hostnames, evidence, authored AI examples and resolution examples identify `Demo data`. Agent credentials are randomly generated and discarded, hosts remain offline, and investigation fixtures are completed/failed rather than runnable queue entries. Seeding starts no diagnostics, probes or provider calls; it must not be treated as collected evidence or a real confirmed resolution.
 - An agent with Docker group membership often has root-equivalent power; never assume `docker.sock:ro` is safe just because the mount says `ro`.
 
+### Curl onboarding trust and secret handling
+
+Installation metadata is admin-only, explicitly configured on the Hub and never inferred from browser/internal addresses or request headers. Missing/invalid metadata disables this onboarding surface with 503, not monitoring or manual enrollment. The public `GET /api/agents/install.sh` serves only static, token-free Bash with `no-store`, `nosniff` and shell-script content type; other methods return 405. It adds no unauthenticated enrollment authority.
+
+The one-paste command deliberately exposes its 10-minute, one-use token to shell history, clipboard and process arguments. Hiding/closing/expiry clears the dashboard's secret, not external copies; generating another does not revoke earlier tokens. Clipboard denial leaves selectable text rather than claiming success. Tokens must never enter URLs, persistent browser storage, env/unit files, logs or screenshots.
+
+The installer downloads only pinned GitHub release assets over verified HTTPS with bounded timeouts, checks one exact archive checksum and rejects unsafe/extra archive members before mutation. Unsigned `SHA256SUMS` establishes archive integrity under the same HTTPS/GitHub trust, **not independent publisher authentication**. Public script delivery is also part of the trusted Hub/TLS deployment. No `latest`, arbitrary download-host override, tracing, eval or curl-to-root pipe is used.
+
+Enrollment runs as the dedicated nonroot account and atomically saves a 0600 identity in its 0700 state directory. The finite command requires an HTTPS origin, refuses enrollment redirects and does not print response bodies/secrets. Valid identities are reused without token consumption; corrupt identities are preserved and rejected. No-argument monitoring retains HTTP only for local development compatibility. Tokens stay transient and are absent from the installed env and unit.
+The unit explicitly sets `StateDirectoryMode=0700`; relying only on installer chmod is insufficient because systemd otherwise resets `StateDirectory` to its default 0755 at startup.
+
+Same-version reruns require byte-identical binary/unit/env; conflicting files and symlink targets are refused, not overwritten. No upgrades, identity deletion or privilege-group grants are performed. A lost accepted enrollment response requires a fresh token, not invented recovery. Local service-active does not prove WSS connectivity or fresh telemetry. GitHub currently has no published releases: publish a reviewed compatible release after merge before enabling this path; an old binary without `enroll` is not compatible.
+
 ## Agent tool policy
 
 Tools are fixed in source code:
