@@ -25,7 +25,7 @@ The canonical visual reference is [root DESIGN.md](../DESIGN.md), extracted from
 | Body | system UI sans, 14px at the 16px root; monospace for code and measurements |
 | Radius | 6px controls, 10px nested surfaces, 14px panels |
 | Spacing | quarter-rem steps: 1–8, 10, 12 |
-| Layout | host slice: sticky Precision Rail above 700px, 232px expanded / 72px icon-only; table/inspector grid ≥1280px; inspector stacks below that; mobile header retains both destinations and a Utilities disclosure |
+| Layout | host slice: sticky Precision Rail above 700px, 232px expanded / 72px icon-only; table/inspector grid ≥1280px; inspector stacks below that; mobile header retains four destinations and a More disclosure |
 
 ### Public component catalog
 
@@ -47,7 +47,7 @@ The reference is authoritative for composition and information hierarchy, not it
 
 ### Hierarchy and navigation
 
-1. **Left rail:** OpsPilot and a `Self-hosted` context label; Overview, Hosts, Incidents, Configuration drift and Incident memory. Place Enroll host and Provider settings below the main destinations. These now work as in-page destinations. Configuration drift filters the latest 100 incidents; Provider settings shows server-reported availability, not editable keys. Never ship inert navigation.
+1. **Left rail:** OpsPilot above Hosts, Incidents, Configuration drift and Incident memory. Hosts consolidates the former duplicate Overview view. Provider settings and Sign out sit below the main destinations; Enroll host remains in the content header. Omit deployment/account captions and the developer catalog from operational navigation. Configuration drift filters the latest 100 incidents; Provider settings shows server-reported availability, not editable keys. Never ship inert navigation.
 2. **Header:** `Fleet & services` title, “Infrastructure signals and endpoint checks. Side by side, never conflated.”, refresh/time context and a secondary `Enroll host` action.
 3. **Summary strip:** hosts online / enrolled hosts, open host incidents, endpoints up / configured endpoints, and endpoints failing. Keep the counts inline with thin separators, not four large cards. Unknown/stale checks remain in the configured total but are not counted as up or failing; expose their count when nonzero. No configured checks means `No endpoints configured`, not `0 / 0 healthy`. Counts must state whether they cover the fleet or a filtered subset; never treat the current capped API list as a complete fleet total.
 4. **Main list:** `Linux hosts` with search/filter, then columns Host, Status, CPU, Memory, Disk and Last seen. Selection uses a tonal row. Last seen is agent contact, distinct from sample age; historical samples are labeled under the host. Endpoint observations remain a separate planned capability, never inferred from connectivity.
@@ -97,7 +97,7 @@ The current starter has host telemetry and on-demand diagnostics, not continuous
 
 ```mermaid
 flowchart TD
-  A[Login] --> B[Overview]
+  A[Login] --> B[Hosts]
   B --> H[Searchable host table]
   H --> S[Selected host inspector and resource history]
   B --> I[Incidents]
@@ -108,24 +108,23 @@ flowchart TD
   B --> T[Generate enrollment token]
   B --> M[Incident memory]
   A --> C[Public design system]
-  B --> C
   C --> R[Tokens, primitives and synthetic states]
 ```
 
 ### Precision Rail navigation
 
-The implemented sidebar uses the existing navy/mint tokens, a sticky desktop rail (232px expanded, 72px collapsed), 16px outline icons and targets at least 44px high. A labeled, keyboard-operable icon button beside the content heading toggles the rail with `aria-expanded` and `aria-controls`. The collapsed rail retains the mint OP abbreviation, accessible destination names and native hover titles. The boolean preference persists in browser storage under `opspilot-sidebar-collapsed`; toggling still works when storage is unavailable. Overview and Incident memory remain the only primary destinations. A 3px mint marker translates between them in 150ms; `aria-current="page"` and tonal selection identify the active destination independently of motion. Shared reduced-motion rules disable transitions; collapse does not animate layout dimensions.
+The implemented sidebar uses the existing navy/mint tokens, a sticky desktop rail (232px expanded, 72px collapsed), 16px outline icons and targets at least 44px high. A labeled, keyboard-operable icon button beside the content heading toggles the rail with `aria-expanded` and `aria-controls`. The collapsed rail retains the brand mark, accessible destination names and native hover titles. The boolean preference persists in browser storage under `opspilot-sidebar-collapsed`; toggling still works when storage is unavailable. Hosts, Incidents, Configuration drift and Incident memory are the four primary destinations. Hosts opens Fleet & services, replacing duplicate Overview/Hosts entries. A static 3px mint marker, `aria-current="page"` and tonal selection identify the active destination. Shared reduced-motion rules disable transitions; collapse does not animate layout dimensions.
 
-Design system is a lower-priority utility above Single-admin mode and Sign out. At 700px and below, the desktop collapse toggle disappears and both primary destinations retain visible labels above content, regardless of the saved desktop preference; a keyboard-operable Utilities button controls the utility area with `aria-expanded` and `aria-controls`. Collapsed utilities are not focusable. At narrow widths, labels wrap without hiding destinations. No planned route, provider-settings control, health indicator or aggregate badge is introduced.
+Provider settings and Sign out remain in the lower utility area. Enroll host is available once in the content header. The public design catalog remains at `/design-system` and is linked from login, not the sidebar. Repeated Self-hosted and Single-admin/read-only captions are removed; diagnostic restrictions and evidence provenance remain in their existing content locations. At 700px and below, the desktop collapse toggle disappears and all four primary destinations retain visible labels in two columns, regardless of the saved desktop preference; a keyboard-operable More button controls utilities with `aria-expanded` and `aria-controls`. Collapsed utilities are not focusable. At narrow widths, labels wrap without hiding destinations.
 
-Browser verification used an isolated synthetic API fixture, not a live Hub/auth integration: desktop and mobile captures, 1440/1024/390/320px layout geometry, keyboard navigation/current state, Utilities disclosure and catalog navigation. Web TypeScript checks passed. Existing metric-width animation and root type-ramp detector findings are outside the sidebar change.
+Browser verification used isolated synthetic API responses, not a live Hub/auth integration: desktop/mobile captures, 1440/1024/390/320px layout checks, navigation/current state, persisted collapse, keyboard focus, More disclosure, enrollment open/close focus and sign-out UI. Web TypeScript checks passed. Existing metric-width animation and root type-ramp detector findings are outside the sidebar change.
 
 ## Implemented screens / states
 
 ### Login
 Admin password only, error feedback, warning when keys absent. Login is separate from agent enrollment.
 
-### Overview
+### Hosts
 `Fleet & services` header, inline scoped host/incident totals and explicitly unavailable endpoint totals, a searchable/selectable Linux-host table with last agent contact and contextual inspector. CPU/memory/disk buttons switch timestamped utilization bars; disk is selected initially. Recorded drift appears below the table with a causality disclaimer and evidence link. Unavailable service/endpoint collection is in a native disclosure, not a large empty service workspace. The inspector links related open host incidents to the existing evidence detail and focuses its heading without starting AI. The first loaded host is selected initially; valid selections persist across refreshes. Host list and selected history refresh every 10 seconds; samples older than the API's 60-second policy are stale, disconnected-host samples historical, and failed fetches retain explicit stale observations. Actual sample times, a 0–100% scale and empty collection gaps remain visible. Workload inventory, endpoint checks, RX/TX rates, uptime and OS/capacity remain unavailable. Incidents and Configuration drift have separate in-page views; counts and related records describe the latest 100 incidents, not complete fleet totals.
 
 ### Incident detail
@@ -135,7 +134,7 @@ Host/category/status, timestamp, evidence source/content, provider selection, as
 Simple FTS query, prior confirmed resolution list. A later UI should show which previous case was retrieved, how similar, and provenance/recency.
 
 ### Enrollment
-Header and rail `Enroll host` controls reveal and focus the admin-only single-use token generation/instructions section; closing returns focus to the header trigger. Token copy/hide, visible expiry and agent launch instructions are retained. Tokens are not persisted in browser storage and clear on sign-out/expiry. Remote deployments require HTTPS/WSS; local smoke tests do not establish production TLS readiness.
+The header `Enroll host` control reveals and focuses the admin-only single-use token generation/instructions section; closing returns focus to that trigger. Token copy/hide, visible expiry and agent launch instructions are retained. Tokens are not persisted in browser storage and clear on sign-out/expiry. Remote deployments require HTTPS/WSS; local smoke tests do not establish production TLS readiness.
 
 ### Provider settings
 Read-only availability for OpenAI, Anthropic and Gemini from the existing authenticated Hub endpoint. Keys are managed in the server environment, never entered or exposed here. Opening settings or inspecting hosts does not call a model.

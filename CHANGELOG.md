@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — 2026-11-18
+
+- Simplified the sidebar to Hosts, Incidents, Configuration drift and Incident memory. Merged the duplicate Overview/Hosts views; removed sidebar enrollment (still in the header), the developer catalog link and repeated deployment/account captions. Provider settings and Sign out remain below; mobile exposes them through More.
+- Replaced the count-dependent moving navigation marker with a marker on the active item. Preserved icon-only mode, accessible names, keyboard focus and the stored collapse preference.
+- Web typecheck passed. Browser checks with synthetic API responses covered desktop/mobile navigation at 1440/1024/390/320px, collapse persistence, keyboard access, More, enrollment focus and sign-out UI. No live authentication or diagnostics integration was tested; the detector only reported existing meter-width/root-font findings.
+
 ## Unreleased — 2026-11-17
 
 - Changed the default Web development port to 3100; production remains on port 3000.
