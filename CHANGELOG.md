@@ -3,6 +3,7 @@
 ## Unreleased — 2026-11-19
 
 - Added opt-in, read-only status for one locally configured systemd service. Hosts and Services show the selected agent's measured state and observation time, including stale/offline, explicitly disabled and unavailable/unsupported states. Existing host telemetry and endpoint check behavior are unchanged. Apply migration 004 before deploying the new Hub.
+- Fixed the Web release image build by excluding the Home regression fixtures from the Docker build context. Local Web typechecking and the Home regression suite keep their existing scope.
 
 ## Unreleased — 2026-11-18
 

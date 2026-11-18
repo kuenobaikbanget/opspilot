@@ -10,3 +10,4 @@
 **/coverage
 agent/bin
 **/*.zip
+apps/web/test-fixtures/
