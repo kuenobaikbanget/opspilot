@@ -83,6 +83,12 @@
 .loadingExample .buttonRow { margin-top: var(--space-4); }
 .emptyExample { margin-top: var(--space-6); padding-top: var(--space-6); border-top: 1px solid var(--color-border); }
 .emptyExample button { margin-top: var(--space-4); }
+.asciiExample { margin-top: var(--space-6); padding-top: var(--space-6); border-top: 1px solid var(--color-border); }
+.asciiExample h4 { margin-bottom: var(--space-2); }
+.asciiExample .buttonRow { margin-top: var(--space-4); }
+.asciiPreviewCard { margin-top: var(--space-4); padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-input); --ascii-surface: var(--color-input); }
+.asciiPreviewBody, .asciiPreviewSkeleton { display: grid; gap: var(--space-2); }
+.asciiPreviewHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .incidentPanel { padding: var(--space-6); }
 .incidentHeader { display: flex; align-items: start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
 .incidentHeader h3 { margin-bottom: var(--space-2); }

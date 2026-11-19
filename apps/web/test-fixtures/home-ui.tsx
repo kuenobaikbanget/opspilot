@@ -7,8 +7,12 @@ const scenario = process.argv[2];
 let sessionStatus = scenario === "unauthorized" ? 401 : scenario === "session-recovery" ? 503 : 200;
 let incidentStatus = scenario === "cold-failure" || scenario === "recovery" ? 503 : 200;
 const requests: string[] = [];
-const hostOnline = scenario === "overview-services" || scenario === "overview-services-error";
+const hostOnline = scenario === "overview-services" || scenario === "overview-services-error" || scenario === "ascii-loading-transition";
 const currentSample = hostOnline || scenario === "investigation-unavailable" || scenario === "unrelated-investigation";
+const deferredHosts = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
+const deferredServices = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
+const deferredHostServices = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
+const deferredInvestigation = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
 const timestamp = "2026-11-18T00:00:00.000Z";
 const sampleTime = currentSample ? new Date().toISOString() : timestamp;
 let historyAborted = false;
@@ -42,6 +46,7 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       value = status === 200 ? [incident] : { error: "Fixture incident failure" };
       break;
     case `/api/incidents/${incident.id}`:
+      if (deferredInvestigation) return deferredInvestigation.promise;
       if (scenario === "investigation-unavailable") {
         status = 503;
         value = { error: "Fixture investigation detail failure" };
@@ -50,6 +55,12 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       }
       break;
     case "/api/hosts":
+      if (deferredHosts) return deferredHosts.promise;
+      if (scenario === "ascii-error-safety") {
+        status = 503;
+        value = { error: "Fixture fleet outage" };
+        break;
+      }
       value = {
         hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: currentSample ? "online" : "offline", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: currentSample ? 94 : 82, memory_percent: 40, disk_percent: 25 }],
         total: 1, online: currentSample ? 1 : 0, limit: 100, observed_at: sampleTime, stale_after_seconds: 60,
@@ -68,6 +79,7 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       value = [];
       break;
     case `/api/hosts/${hostId}/services`:
+      if (deferredHostServices) return deferredHostServices.promise.then(response => response.clone());
       if (scenario === "overview-services-error") {
         status = 503;
         value = { error: "Fixture systemd outage" };
@@ -96,6 +108,12 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       value = { providers: [], encryptionConfigured: false };
       break;
     case "/api/services":
+      if (deferredServices) return deferredServices.promise;
+      if (scenario === "ascii-error-safety") {
+        status = 503;
+        value = { error: "Fixture endpoints outage" };
+        break;
+      }
       value = { endpoints: [] };
       break;
     case "/api/auth/logout":
@@ -196,6 +214,82 @@ try {
       const onHosts = historyRequests();
       await click("Overview");
       console.log(JSON.stringify({ onOverview, onHosts, afterLeaving: historyRequests(), historyAborted }));
+      break;
+    }
+    case "ascii-loading-transition": {
+      const loadingState = {
+        summarySkeletons: document.querySelectorAll(".overview-summary [data-ascii-skeleton]").length,
+        riskSkeletons: document.querySelectorAll(".overview-watchlist [data-ascii-skeleton]").length,
+        endpointSkeletons: document.querySelectorAll(".overview-endpoint-scope [data-ascii-skeleton]").length,
+        inventorySkeletons: document.querySelectorAll(".overview-inventory [data-ascii-skeleton]").length,
+        animatedSkeletons: document.querySelectorAll("[data-ars-animate]").length,
+        overlays: document.querySelectorAll(".ar-overlay").length,
+      };
+      await act(async () => {
+        deferredHosts?.resolve(Response.json({
+          hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: "online", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: 94, memory_percent: 40, disk_percent: 25 }],
+          total: 1, online: 1, limit: 100, observed_at: sampleTime, stale_after_seconds: 60,
+          thresholds: { cpu_percent: 85, memory_percent: 90, disk_percent: 90 },
+        }));
+        deferredServices?.resolve(Response.json({ endpoints: [] }));
+      });
+      const midState = {
+        summarySkeletons: document.querySelectorAll(".overview-summary [data-ascii-skeleton]").length,
+        endpointSkeletons: document.querySelectorAll(".overview-endpoint-scope [data-ascii-skeleton]").length,
+        inventorySkeletons: document.querySelectorAll(".overview-inventory [data-ascii-skeleton]").length,
+        serviceSkeletons: document.querySelectorAll(".overview-risk-services [data-ascii-skeleton]").length,
+        serviceStatus: document.querySelector(".overview-risk-services")?.textContent,
+        advisoryBrailleSkeletons: document.querySelectorAll('[aria-label="Advisory AI analysis"] [data-ascii-skeleton].ars-braille').length,
+        advisoryStatus: document.querySelector('[aria-label="Advisory AI analysis"]')?.textContent,
+      };
+      await act(async () => {
+        deferredHostServices?.resolve(Response.json({
+          agent_id: hostId,
+          online: true,
+          checked_at: sampleTime,
+          report: { status: "observed", observed_at: sampleTime, current: true },
+          service: {
+            id: "d0000000-0000-4000-8000-000000000003",
+            agent_id: hostId,
+            name: "mock-edge-proxy.service",
+            runtime: "systemd",
+            source: "agent_systemd",
+            state: "running",
+            observed_at: sampleTime,
+            freshness: "fresh",
+          },
+        }));
+        deferredInvestigation?.resolve(Response.json({
+          incident,
+          evidence: [],
+          investigations: [{
+            status: "completed",
+            provider: { name: "fixture-ai", model: "mock-1" },
+            result_json: {
+              probable_cause: "Sustained worker load saturated CPU.",
+              confidence: "medium",
+              recommended_checks: ["Inspect top CPU processes"],
+            },
+            error: null,
+          }],
+        }));
+      });
+      const loadedState = {
+        remainingSkeletons: document.querySelectorAll("[data-ascii-skeleton]").length,
+        riskServices: document.querySelector(".overview-risk-services")?.textContent,
+        advisory: document.querySelector('[aria-label="Advisory AI analysis"]')?.textContent,
+      };
+      console.log(JSON.stringify({ loadingState, midState, loadedState }));
+      break;
+    }
+    case "ascii-error-safety": {
+      console.log(JSON.stringify({
+        remainingSkeletons: document.querySelectorAll("[data-ascii-skeleton]").length,
+        overlays: document.querySelectorAll(".ar-overlay").length,
+        summaryText: document.querySelector(".overview-summary")?.textContent,
+        endpointText: document.querySelector(".overview-endpoint-scope")?.textContent,
+        inventoryText: document.querySelector(".overview-inventory")?.textContent,
+      }));
       break;
     }
     default:

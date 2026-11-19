@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRef, useState, type FormEvent } from "react";
+import { AsciiCardReveal, AsciiCardSkeleton, type AsciiRevealHandle } from "@/components/ascii-card-reveal";
 import { BrandMark } from "@/components/brand-mark";
 import { Badge, Button, Field, Input, MetricMeter, Notice, Panel, Select, Textarea } from "@/components/ui";
 import styles from "./design-system.module.css";
@@ -30,6 +31,8 @@ const sections = [
 
 export default function DesignCatalog() {
   const [loading, setLoading] = useState(false);
+  const [asciiLoading, setAsciiLoading] = useState(false);
+  const [asciiFeedback, setAsciiFeedback] = useState("Decoded synthetic card ready. Toggle loading or replay the reveal.");
   const [buttonFeedback, setButtonFeedback] = useState("Choose a button to preview its feedback.");
   const [cpu, setCpu] = useState(68);
   const [server, setServer] = useState("");
@@ -40,6 +43,7 @@ export default function DesignCatalog() {
   const [resetFeedback, setResetFeedback] = useState("");
   const serverRef = useRef<HTMLInputElement>(null);
   const serviceRef = useRef<HTMLSelectElement>(null);
+  const asciiPreviewRef = useRef<AsciiRevealHandle>(null);
 
   function validatePreview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,6 +61,8 @@ export default function DesignCatalog() {
 
   function resetPreview() {
     setLoading(false);
+    setAsciiLoading(false);
+    setAsciiFeedback("Decoded synthetic card ready. Toggle loading or replay the reveal.");
     setCpu(68);
     setServer("");
     setService("");
@@ -226,6 +232,58 @@ export default function DesignCatalog() {
                     <p className={styles.guidance}>An empty state should explain what is missing and offer an honest next step. Resetting this preview will not enroll a host.</p>
                     <Button size="sm" onClick={resetPreview}>Reset preview</Button>
                     <p className={styles.feedback} role="status">{resetFeedback}</p>
+                  </div>
+                  <div className={styles.asciiExample}>
+                    <h4>ASCII card reveal</h4>
+                    <p className={styles.guidance}>Fast monochrome decode for dashboard cards on initial load and selection changes. Respects reduced motion.</p>
+                    <div className={styles.buttonRow}>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setAsciiLoading((prev) => {
+                            const next = !prev;
+                            setAsciiFeedback(next ? "Showing ASCII skeleton placeholders." : "Decoded synthetic card into place.");
+                            return next;
+                          });
+                        }}
+                      >
+                        {asciiLoading ? "Show loaded card" : "Preview ASCII skeleton"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={asciiLoading}
+                        onClick={() => {
+                          void asciiPreviewRef.current?.reveal();
+                          setAsciiFeedback("Replayed fast ASCII decode on synthetic card.");
+                        }}
+                      >
+                        Replay decode
+                      </Button>
+                    </div>
+                    <div className={styles.asciiPreviewCard}>
+                      <AsciiCardReveal
+                        ref={asciiPreviewRef}
+                        loading={asciiLoading}
+                      >
+                        {asciiLoading ? (
+                          <div className={styles.asciiPreviewSkeleton} role="status">
+                            <span className="sr-only" data-ascii="skip">Loading synthetic host card…</span>
+                            <AsciiCardSkeleton variant="scan" lines={2} widths={["58%", "38%"]} seed={51} />
+                            <AsciiCardSkeleton variant="braille" lines={2} widths={["92%", "74%"]} seed={53} />
+                          </div>
+                        ) : (
+                          <div className={styles.asciiPreviewBody}>
+                            <div className={styles.asciiPreviewHead}>
+                              <strong className={styles.measurement}>staging-api-02</strong>
+                              <Badge tone="warning">Near limit</Badge>
+                            </div>
+                            <p className={styles.guidance}>Measured signal: CPU <span className={styles.measurement}>83%</span> · Threshold <span className={styles.measurement}>85%</span> · Service <code className={styles.measurement}>nginx.service</code></p>
+                          </div>
+                        )}
+                      </AsciiCardReveal>
+                    </div>
+                    <p className={styles.feedback} role="status">{asciiFeedback}</p>
                   </div>
                 </div>
               </div>
