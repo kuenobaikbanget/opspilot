@@ -5,7 +5,7 @@
 - Package manager / runtime: **Bun** for TypeScript code; Go modules for agent.
 - TypeScript: strict mode, shared contracts in `packages/contracts`; do not add global `any` for new API routes.
 - Go: simple standard library collectors; no shell invocation; validate all server-provided values locally.
-- Git: short commits by vertical slice; PRs with test evidence and user-facing changelog.
+- Git: short commits by vertical slice; include test evidence and user-facing changes in the PR description.
 - Feature branches: `feat/agent-enrollment`, `feat/config-drift`, etc.
 
 ## Running services

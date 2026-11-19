@@ -46,7 +46,6 @@ Run these isolated UI regressions with `bun --no-env-file test tests/home-ui.tes
 - A browser-submitted investigation completed using an explicit `browser-fixture-model` with the actual persisted evidence citation. Renaming/changing the default model did not change its report; deleting the connection through inline confirmation removed it from selection while preserving the readable snapshot with null connection ID.
 - Keyboard focus/editor cancel/delete restoration, mobile controls, field error, master-missing notice, key-draft clearing on tab change/logout/unauthorized, empty state and independent provider-load failure were checked. Provider-load failure and unauthorized responses were deliberately simulated at the browser network boundary; master-missing used a real Hub restart. GET responses and local/session storage contained no dummy provider keys.
 - Captured actual management/editor surfaces at 1440/1024/390px: document width matched each viewport, table remained in a named horizontal-scroll region and mobile form used one column. Mechanical detector returned no findings. A scoped visual review found an Enabled-column wrap defect; local nowrap CSS and recaptures resolved that single finding.
-- Screenshots: [desktop](../.impeccable/review/byok-desktop.png), [tablet](../.impeccable/review/byok-tablet.png), [mobile](../.impeccable/review/byok-mobile.png).
 
 No live OpenAI/Anthropic/Gemini request, full Compose boot/image build, production deployment, new agent wire behavior or master-key rotation was tested. Test-only HTTPS code asserts the production pinning/TLS options then maps a validated public fixture address to a loopback listener with a dummy CA; it does not prove public network reachability. Only disposable resources created for this verification are removed.
 
@@ -99,7 +98,7 @@ Executed against a separate PostgreSQL 16 database, real Bun Hub, Next.js browse
 - A simulated 503 on the host read request retained the real cached host with explicit stale/error context. This verifies UI failure handling, not an actual DB outage.
 - Visual checks at 1440px, 1024px and 390px showed side-by-side/stacked layouts and a contained horizontal table scroll region; the 390px document remained 390px wide. Keyboard selection retained visible focus. Sign-out removed the enrollment secret and protected view; local/session storage remained empty.
 
-These checks do not establish production TLS/WSS, ARM64 builds, full Docker images, 24-hour stability, retention bounds, LLM investigations, workload inventory or HTTP monitoring. The original generated-archive limitations below are historical, not the scope of this executed host smoke.
+These checks do not establish production TLS/WSS, ARM64 builds, full Docker images, 24-hour stability, retention bounds, LLM investigations, workload inventory or HTTP monitoring.
 
 ## Dashboard contract alignment verification — 2026-11-17
 
@@ -171,7 +170,7 @@ bun --no-env-file run --filter @opspilot/hub --filter @opspilot/web typecheck
 
 ## Fleet & services dashboard acceptance (planned)
 
-These scenarios gate the [target screen](UI-UX.md#fleet-services-dashboard-contract-target) and FR-13–FR-16; they are not executed-test claims. Use deterministic synthetic records for isolated UI state coverage, then real authorized inventory and an allowlisted HTTP fixture for end-to-end collection. Synthetic UI checks do not prove authentication, network safety or agent interoperability.
+These scenarios gate the [target screen](UI-UX.md#fleet-services-dashboard-contract-target); they are not executed-test claims. Use deterministic synthetic records for isolated UI state coverage, then real authorized inventory and an allowlisted HTTP fixture for end-to-end collection. Synthetic UI checks do not prove authentication, network safety or agent interoperability.
 
 | Scenario | Required observable result |
 |---|---|
@@ -195,7 +194,7 @@ Capture browser evidence for the real surface and separate backend/security/inte
 
 `tests/incident-fixtures/` contains **synthetic, annotated JSON research fixtures** (currently `config-drift-unrelated.json`, `nginx-bad-upstream.json`, and `prompt-injection-log.json`), not tests that automatically deploy an outage. None includes real credentials or confidential logs. Run a real local test environment and collect actual evidence IDs before comparing a model response to the labels; do not fabricate an LLM success score from these fixtures.
 
-1. `nginx_bad_upstream`: wrong localhost upstream port; expect listening port evidence.
+1. [`nginx_bad_upstream`](../tests/incident-fixtures/nginx-bad-upstream.json): wrong localhost upstream port; expect listening port evidence.
 2. `backend_stopped`: app process missing; avoid blaming Nginx config without evidence.
 3. `docker_crashloop`: container restarting; Docker tooling only if explicitly enabled.
 4. `disk_full`: server disk near 100% and write errors.
@@ -222,7 +221,3 @@ Capture per fixture: expected cause, required evidence, allowed checks, unallowe
 ### GitHub CI verification — 2026-11-16
 
 The [Checks run for commit `5d6b178`](https://github.com/kuenobaikbanget/opspilot/actions/runs/43803885453) completed successfully on Ubuntu runners: frozen Bun installation, Bun tests, all workspace typechecks, the Web production build, and `go test -mod=readonly ./...` in the Linux Go job. Linux Go unit-test success is not live agent enrollment, WSS interoperability, or an AMD64/ARM64 release-binary validation.
-
-## Environment limitation of generated archive (2026-11-15)
-
-The initial ZIP archive (2026-11-15) was generated in an environment without Bun/Docker and with no outbound package registry access. Static checks verified folder/file consistency, parseable JSON configs/fixtures, TypeScript/TSX syntax transpilation, Go `gofmt`, Compose YAML parsing, and ZIP integrity, while **Bun install, Next build, full Compose boot, Go module download, and live LLM calls could not be executed there.** Treat those original archive checks as historical static validation, replaced by the subsequent development-host, CI, and host-slice runs above.
