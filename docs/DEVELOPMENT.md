@@ -142,7 +142,7 @@ GHCR publishes `ghcr.io/kuenobaikbanget/opspilot-{hub,worker,web,agent}` (forks 
 
 Only image-publishing jobs get `packages: write`; only the final GitHub Release job gets `contents: write`. Both use the built-in `GITHUB_TOKEN`, not a PAT or production credentials. GitHub Release creation waits for both archives and all images, but publishing is not transactional: failed runs can leave images/aliases already pushed. Inspect a failure before rerunning; already-published releases must not be overwritten.
 
-After first publication, check each package's **Package settings → Manage Actions access** and visibility. GHCR packages default to private, even for public repositories; make them public only deliberately and after selecting a distribution license. Private pulls require package access. See [deployment instructions](DEPLOYMENT.md#published-release-assets-and-container-images) and the [publishing trust boundary](SECURITY.md#release-and-package-publishing).
+After first publication, check each package's **Package settings → Manage Actions access** and visibility. GHCR packages default to private, even for public repositories; make them public only deliberately, from a reviewed commit that includes the [MIT license](../LICENSE), and retain applicable third-party notices. Private pulls require package access. See [deployment instructions](DEPLOYMENT.md#published-release-assets-and-container-images) and the [publishing trust boundary](SECURITY.md#release-and-package-publishing).
 
 Nothing deploys automatically. A green release is build/publication evidence, not proof of live DB/auth/WSS/provider integration or production security.
 
