@@ -50,7 +50,7 @@ export default function Home() {
   const [incidentsError, setIncidentsError] = useState("");
   const [fleet, setFleet] = useState<HostList | null>(null);
   const [fleetError, setFleetError] = useState("");
-  const [endpoints, setEndpoints] = useState<EndpointMonitor[]>([]);
+  const [endpoints, setEndpoints] = useState<EndpointMonitor[] | null>(null);
   const [servicesError, setServicesError] = useState("");
   const [checkingEndpointId, setCheckingEndpointId] = useState<string | null>(null);
   const [inspectHost, setInspectHost] = useState<{ id: string; resource?: Resource } | null>(null);
@@ -89,7 +89,7 @@ export default function Home() {
     setDetail(null); setSelected(null); selectedIncident.current = null;
     setTab("overview");
     setIncidents([]); setIncidentsError(""); setRefreshedAt(null);
-    setServiceHostId(""); setEndpoints([]); setServicesError(""); setCheckingEndpointId(null);
+    setServiceHostId(""); setEndpoints(null); setServicesError(""); setCheckingEndpointId(null);
     setProviders([]); setEncryptionConfigured(false); setProviderId(""); setModel("");
     selectedProviderId.current = "";
   }, []);
@@ -192,7 +192,7 @@ export default function Home() {
     setCheckingEndpointId(id);
     try {
       const res: { endpoint: EndpointMonitor } = await api(`/endpoints/${id}/check`, "POST", {});
-      setEndpoints(prev => prev.map(item => (item.id === id ? res.endpoint : item)));
+      setEndpoints(prev => prev?.map(item => (item.id === id ? res.endpoint : item)) ?? null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Endpoint check failed.");
     } finally {
@@ -394,7 +394,7 @@ export default function Home() {
         {error && <Notice tone="danger" role="alert" className="dashboard-alert"><span>{error}</span><Button variant="ghost" size="sm" onClick={() => setError("")}>Dismiss</Button></Notice>}
         {incidentsError && <Notice tone="warning" role="alert" className="dashboard-alert"><span>Incident refresh failed: {incidentsError}. {refreshedAt ? `Showing cached incident records from ${new Date(refreshedAt).toLocaleString()}.` : "Incident data is unavailable, not zero open incidents."}</span><Button size="sm" onClick={() => void refreshIncidents()}>Retry incidents</Button></Notice>}
 
-        <div hidden={tab !== "hosts"}><HostWorkspace refreshKey={hostRefresh} showServices={tab === "hosts"} onFleet={setFleet} onFleetError={setFleetError} onUnauthorized={endSession} openIncidents={open} incidentsStale={!!incidentsError} incidents={incidents} onOpenIncident={openIncident} inspectHost={inspectHost} onConnect={() => navigate("connect")} /></div>
+        <HostWorkspace refreshKey={hostRefresh} isVisible={tab === "hosts"} onFleet={setFleet} onFleetError={setFleetError} onUnauthorized={endSession} openIncidents={open} incidentsStale={!!incidentsError} incidents={incidents} onOpenIncident={openIncident} inspectHost={inspectHost} onConnect={() => navigate("connect")} />
         {tab === "overview" && (
           <ThresholdOverview
             fleet={fleet}
@@ -439,12 +439,12 @@ export default function Home() {
                 <div className="panel-head">
                   <div>
                     <h2 id="services-endpoints-title">Endpoint checks</h2>
-                    <p className="muted">Independent HTTP probes from {endpoints[0]?.probe_location ?? "hub-local"}.</p>
+                    <p className="muted">Independent HTTP probes from {endpoints?.[0]?.probe_location ?? "hub-local"}.</p>
                   </div>
                 </div>
-                {servicesError ? <p className="muted" role="status">{servicesError}</p> : !endpoints.length && <p className="muted">No endpoint check results recorded.</p>}
+                {servicesError ? <p className="muted" role="status">{servicesError}</p> : !endpoints ? <p className="muted" role="status">Loading endpoint monitors…</p> : !endpoints.length && <p className="muted">No endpoint monitors configured.</p>}
                 <ul className="overview-endpoint-list" role="list">
-                  {endpoints.map(endpoint => (
+                  {endpoints?.map(endpoint => (
                     <li key={endpoint.id} className="overview-endpoint-item">
                       <div className="overview-endpoint-main">
                         <div>

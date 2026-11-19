@@ -7,23 +7,24 @@ const scenario = process.argv[2];
 let sessionStatus = scenario === "unauthorized" ? 401 : scenario === "session-recovery" ? 503 : 200;
 let incidentStatus = scenario === "cold-failure" || scenario === "recovery" ? 503 : 200;
 const requests: string[] = [];
-const hostId = "d0000000-0000-4000-8000-000000000001";
-const timestamp = scenario === "overview-services" || scenario === "overview-services-error"
-  ? new Date().toISOString()
-  : "2026-11-18T00:00:00.000Z";
 const hostOnline = scenario === "overview-services" || scenario === "overview-services-error";
+const currentSample = hostOnline || scenario === "investigation-unavailable" || scenario === "unrelated-investigation";
+const timestamp = "2026-11-18T00:00:00.000Z";
+const sampleTime = currentSample ? new Date().toISOString() : timestamp;
+let historyAborted = false;
+const hostId = "d0000000-0000-4000-8000-000000000001";
 const incident = {
   id: "d0000000-0000-4000-8000-000000000002",
   title: "Fixture CPU incident",
   agent_id: hostId,
   hostname: "Fixture host",
-  category: "cpu",
+  category: scenario === "unrelated-investigation" ? "config_drift" : "cpu",
   status: "open",
   created_at: timestamp,
   resolution: null,
 };
 
-const fixtureFetch = async (input: RequestInfo | URL) => {
+const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const path = new URL(String(input), window.location.href).pathname;
   requests.push(path);
   let value: unknown;
@@ -40,14 +41,30 @@ const fixtureFetch = async (input: RequestInfo | URL) => {
       status = incidentStatus;
       value = status === 200 ? [incident] : { error: "Fixture incident failure" };
       break;
+    case `/api/incidents/${incident.id}`:
+      if (scenario === "investigation-unavailable") {
+        status = 503;
+        value = { error: "Fixture investigation detail failure" };
+      } else {
+        value = { incident, evidence: [], investigations: [] };
+      }
+      break;
     case "/api/hosts":
       value = {
-        hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: hostOnline ? "online" : "offline", created_at: timestamp, last_seen_at: timestamp, sampled_at: timestamp, cpu_percent: hostOnline ? 94 : 82, memory_percent: 40, disk_percent: 25 }],
-        total: 1, online: hostOnline ? 1 : 0, limit: 100, observed_at: timestamp, stale_after_seconds: 60,
-        thresholds: { cpu_percent: 90, memory_percent: 90, disk_percent: 90 },
+        hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: currentSample ? "online" : "offline", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: currentSample ? 94 : 82, memory_percent: 40, disk_percent: 25 }],
+        total: 1, online: currentSample ? 1 : 0, limit: 100, observed_at: sampleTime, stale_after_seconds: 60,
+        thresholds: { cpu_percent: 85, memory_percent: 90, disk_percent: 90 },
       };
       break;
     case `/api/hosts/${hostId}/metrics`:
+      if (scenario === "host-history-visibility") {
+        const { promise, reject } = Promise.withResolvers<Response>();
+        init?.signal?.addEventListener("abort", () => {
+          historyAborted = true;
+          reject(init.signal?.reason);
+        }, { once: true });
+        return promise;
+      }
       value = [];
       break;
     case `/api/hosts/${hostId}/services`:
@@ -60,8 +77,8 @@ const fixtureFetch = async (input: RequestInfo | URL) => {
         ? {
             agent_id: hostId,
             online: true,
-            checked_at: timestamp,
-            report: { status: "observed", observed_at: timestamp, current: true },
+            checked_at: sampleTime,
+            report: { status: "observed", observed_at: sampleTime, current: true },
             service: {
               id: "d0000000-0000-4000-8000-000000000003",
               agent_id: hostId,
@@ -69,14 +86,11 @@ const fixtureFetch = async (input: RequestInfo | URL) => {
               runtime: "systemd",
               source: "agent_systemd",
               state: "running",
-              observed_at: timestamp,
+              observed_at: sampleTime,
               freshness: "fresh",
             },
           }
         : { agent_id: hostId, online: false, checked_at: timestamp, report: null, service: null };
-      break;
-    case `/api/incidents/${incident.id}`:
-      value = { incident, evidence: [], investigations: [] };
       break;
     case "/api/ai/providers":
       value = { providers: [], encryptionConfigured: false };
@@ -107,8 +121,8 @@ const snapshot = () => {
     loginVisible: !!document.getElementById("admin-password"),
     signOutVisible: [...document.querySelectorAll("button")].some(element => element.textContent?.trim() === "Sign out"),
     incidentCount: incidentReading?.nextElementSibling?.textContent,
-    incidentContext: incidentReading?.textContent,
     relatedIncident: document.querySelector(".inspector-incident")?.textContent,
+    incidentContext: incidentReading?.textContent,
     alerts: [...document.querySelectorAll('[role="alert"]')].map(element => element.textContent),
   };
 };
@@ -122,10 +136,13 @@ try {
   await act(async () => { root.render(createElement(Home)); });
   const initial = snapshot();
   switch (scenario) {
-    case "cold-failure":
+    case "cold-failure": {
+      await click("Hosts");
+      const { relatedIncident: related } = snapshot();
       await click("Incidents");
-      console.log(JSON.stringify({ initial, incidentList: document.querySelector(".list")?.textContent }));
+      console.log(JSON.stringify({ initial, related, incidentList: document.querySelector(".list")?.textContent }));
       break;
+    }
     case "recovery":
       await click("Sign out");
       const failed = snapshot();
@@ -137,9 +154,12 @@ try {
       incidentStatus = 503;
       await click("Refresh");
       const cached = snapshot();
+      await click("Hosts");
+      const { relatedIncident: related } = snapshot();
+      await click("Overview");
       incidentStatus = 200;
       await click("Retry incidents");
-      console.log(JSON.stringify({ initial, cached, recovered: snapshot() }));
+      console.log(JSON.stringify({ initial, cached, related, recovered: snapshot() }));
       break;
     case "unauthorized":
       console.log(JSON.stringify({ initial, requests }));
@@ -165,6 +185,19 @@ try {
         inspectorSystemd: document.querySelector(".overview-inspector .host-systemd")?.textContent,
       }));
       break;
+    case "investigation-unavailable":
+    case "unrelated-investigation":
+      console.log(JSON.stringify({ advisory: document.querySelector('[aria-label="Advisory AI analysis"]')?.textContent, requests }));
+      break;
+    case "host-history-visibility": {
+      const historyRequests = () => requests.filter(path => path === `/api/hosts/${hostId}/metrics`).length;
+      const onOverview = historyRequests();
+      await click("Hosts");
+      const onHosts = historyRequests();
+      await click("Overview");
+      console.log(JSON.stringify({ onOverview, onHosts, afterLeaving: historyRequests(), historyAborted }));
+      break;
+    }
     default:
       throw new Error(`Unknown scenario: ${scenario}`);
   }

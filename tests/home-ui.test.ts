@@ -16,12 +16,12 @@ async function scenario(name: string) {
 }
 
 test("an authenticated host dashboard stays usable when the initial incident read fails", async () => {
-  const { initial, incidentList } = await scenario("cold-failure");
+  const { initial, related, incidentList } = await scenario("cold-failure");
   expect(initial.protectedVisible).toBe(true);
   expect(initial.loginVisible).toBe(false);
   expect(initial.incidentCount).toContain("Unavailable");
   expect(initial.alerts.join(" ")).toContain("Fixture incident failure");
-  expect(initial.relatedIncident).not.toContain("No open incident");
+  expect(related).toContain("Related incident data is unavailable.");
   expect(incidentList).not.toContain("No incidents recorded");
 });
 
@@ -36,11 +36,11 @@ test("incident recovery removes its own error without hiding an unrelated action
 });
 
 test("a failed incident refresh retains labeled cached observations until recovery", async () => {
-  const { initial, cached, recovered } = await scenario("cached-failure");
+  const { initial, cached, related, recovered } = await scenario("cached-failure");
   expect(initial.incidentCount).toBe("1");
   expect(cached.incidentCount).toBe("1");
   expect(cached.incidentContext).toContain("cached");
-  expect(cached.relatedIncident).toContain("Fixture CPU incident");
+  expect(related).toContain("Fixture CPU incident");
   expect(recovered.incidentCount).toBe("1");
   expect(recovered.incidentContext).not.toContain("cached");
   expect(recovered.alerts).toEqual([]);
@@ -91,4 +91,25 @@ test("overview risk card and pressure inspector display the host systemd service
   expect(failed.riskServices).toContain("Unavailable");
   expect(failed.riskServices).not.toContain("Running");
   expect(failed.inspectorSystemd).toContain("Service status is unavailable.");
+});
+
+test("a matching incident whose investigation detail fails is unavailable, not never run", async () => {
+  const { advisory, requests } = await scenario("investigation-unavailable");
+  expect(requests).toContain("/api/incidents/d0000000-0000-4000-8000-000000000002");
+  expect(advisory).toContain("Could not load the incident’s investigation record.");
+  expect(advisory).not.toContain("Not run");
+});
+
+test("a same-host configuration drift incident is not attached to CPU pressure", async () => {
+  const { advisory, requests } = await scenario("unrelated-investigation");
+  expect(advisory).toContain("No incident for this resource on this device");
+  expect(requests).not.toContain("/api/incidents/d0000000-0000-4000-8000-000000000002");
+});
+
+test("host history fetches only in Hosts and aborts when leaving", async () => {
+  const { onOverview, onHosts, afterLeaving, historyAborted } = await scenario("host-history-visibility");
+  expect(onOverview).toBe(0);
+  expect(onHosts).toBe(1);
+  expect(afterLeaving).toBe(1);
+  expect(historyAborted).toBe(true);
 });

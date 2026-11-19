@@ -5,7 +5,7 @@ import { hasFreshSample, percent, pressure, resources, type Pressure, type Resou
 import { HostSystemd, isSystemdReportCurrent, systemdCollection, systemdStates } from "./host-systemd";
 import { Badge, Button } from "./ui";
 
-export type OverviewIncidentSummary = {
+type OverviewIncidentSummary = {
   id: string;
   agent_id: string;
   title: string;
@@ -15,7 +15,6 @@ export type OverviewIncidentSummary = {
 };
 
 type InvestigationSummary = {
-  id: string;
   status: string;
   provider: { name: string; model: string | null };
   result_json: {
@@ -26,13 +25,23 @@ type InvestigationSummary = {
   error: string | null;
 };
 
+type InvestigationRead =
+  | { state: "loading" | "unavailable" }
+  | { state: "loaded"; investigation: InvestigationSummary | null };
+
+const categoryByResource: Record<Resource, string> = {
+  cpu_percent: "cpu",
+  memory_percent: "memory",
+  disk_percent: "disk",
+};
+
 type Props = {
   fleet: HostList | null;
   fleetError: string;
   openIncidents: number | null;
   incidentsStale: boolean;
   incidents: OverviewIncidentSummary[];
-  endpoints: EndpointMonitor[];
+  endpoints: EndpointMonitor[] | null;
   servicesError: string;
   checkingEndpointId: string | null;
   onCheckEndpoint: (id: string) => void;
@@ -51,6 +60,8 @@ const icons = {
   globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z"/></>,
   sort: <path d="M4 4v16m-3-3 3 3 3-3M10 5h11M10 10h8m-8 5h5"/>,
   arrow: <path d="M4 12h15m-6-6 6 6-6 6"/>,
+  online: <><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></>,
+  offline: <><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></>,
 };
 
 function OverviewIcon({ name }: { name: keyof typeof icons }) {
@@ -70,15 +81,18 @@ function SampleTime({ value }: { value: string | null }) {
     : "Not observed";
 }
 
-function headroomMagnitude(value: number) {
-  const magnitude = Math.abs(value);
-  if (magnitude > 0 && magnitude < 0.1) return "<0.1";
-  return `${Number(magnitude.toFixed(1))}`;
-}
-
-function marginLabel(headroom: number) {
-  if (headroom === 0) return "At limit";
-  return `${headroomMagnitude(headroom)}% ${headroom > 0 ? "below limit" : "over limit"}`;
+function MarginAmount({ value }: { value: number }) {
+  const magnitude = Number(Math.abs(value).toPrecision(12));
+  const tiny = magnitude > 0 && magnitude < 0.1;
+  const amount = Number(magnitude.toFixed(1));
+  return (
+    <>
+      <span aria-hidden="true">{tiny ? "<0.1" : amount} pp</span>
+      <span className="sr-only">
+        {tiny ? "Less than 0.1 percentage points" : `${amount} ${amount === 1 ? "percentage point" : "percentage points"}`}
+      </span>
+    </>
+  );
 }
 
 function limitShare({ value, limit }: Pressure) {
@@ -136,7 +150,10 @@ function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
         <dl className="overview-risk-values">
           <div><dt>{reading.label} threshold</dt><dd>{percent(reading.limit)}</dd></div>
           <div><dt>Current reading</dt><dd>{percent(reading.value)}</dd></div>
-          <div><dt>Margin</dt><dd>{marginLabel(reading.headroom)}</dd></div>
+          <div>
+            <dt>Margin</dt>
+            <dd>{reading.headroom === 0 ? "At limit" : <><MarginAmount value={reading.headroom} /> {reading.headroom > 0 ? "below" : "over"} limit</>}</dd>
+          </div>
         </dl>
         <ThresholdBar share={limitShare(reading)} />
         <div className="overview-risk-services">
@@ -163,20 +180,97 @@ function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
   );
 }
 
+function AdvisoryAnalysis({ incident, incidentsStale, incidentsLoading }: {
+  incident: OverviewIncidentSummary | null;
+  incidentsStale: boolean;
+  incidentsLoading: boolean;
+}) {
+  const [read, setRead] = useState<InvestigationRead>({ state: "loading" });
+  const incidentId = incident?.id;
+
+  useEffect(() => {
+    if (!incidentId) return;
+    let active = true;
+    void api(`/incidents/${incidentId}`)
+      .then((data: { investigations: InvestigationSummary[] }) => {
+        if (active) setRead({ state: "loaded", investigation: data.investigations[0] ?? null });
+      })
+      .catch(() => {
+        if (active) setRead({ state: "unavailable" });
+      });
+    return () => { active = false; };
+  }, [incidentId]);
+
+  const investigation = read.state === "loaded" ? read.investigation : null;
+  return (
+    <section className="overview-ai-card" aria-label="Advisory AI analysis">
+      <div className="overview-ai-head">
+        <span className="overview-meta">AI hypothesis (advisory)</span>
+        {incident && (investigation ? (
+          <Badge tone={investigation.status === "failed" ? "danger" : investigation.status === "completed" ? "info" : "warning"}>
+            {investigation.status}
+          </Badge>
+        ) : (
+          <Badge tone={read.state === "unavailable" ? "warning" : "neutral"}>
+            {read.state === "loading" ? "Loading" : read.state === "unavailable" ? "Unavailable" : "Not run"}
+          </Badge>
+        ))}
+      </div>
+      {incident && (
+        <p className="overview-meta">
+          Source incident{incidentsStale ? " (cached record)" : ""}: {incident.title} · Opened <SampleTime value={incident.created_at} />.
+          {investigation && " This investigation does not assess the current sample."}
+        </p>
+      )}
+      {!incident ? (
+        <p className="overview-meta" role="status">
+          {incidentsStale ? "Cannot confirm a matching incident: incident records are unavailable or cached."
+            : incidentsLoading ? "Loading incident records…"
+              : "No incident for this resource on this device in the loaded records."}
+        </p>
+      ) : read.state === "loading" ? (
+        <p className="overview-meta" role="status">Loading recorded AI analysis…</p>
+      ) : read.state === "unavailable" ? (
+        <p className="overview-meta" role="status">Could not load the incident’s investigation record.</p>
+      ) : investigation?.result_json?.probable_cause ? (
+        <>
+          <p className="overview-ai-cause">{investigation.result_json.probable_cause}</p>
+          <p className="overview-meta">
+            Confidence: {investigation.result_json.confidence ?? "unknown"} · {investigation.provider.name}
+            {investigation.provider.model ? ` · ${investigation.provider.model}` : ""}
+          </p>
+          {!!investigation.result_json.recommended_checks?.length && (
+            <ul className="overview-ai-checks">
+              {investigation.result_json.recommended_checks.slice(0, 2).map((check, i) => (
+                <li key={i}>{check}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : (
+        <p className="overview-meta">
+          {investigation ? investigation.error ?? "Open the incident to see the investigation record."
+            : "No AI investigation recorded for this incident."}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function PressureInspector({
   risk,
   refreshKey,
   incident,
-  investigation,
-  investigationLoading,
+  incidentsStale,
+  incidentsLoading,
   onInspectHost,
   onOpenIncident,
 }: {
   risk: Risk;
   refreshKey: number;
   incident: OverviewIncidentSummary | null;
-  investigation: InvestigationSummary | null;
-  investigationLoading: boolean;
+  incidentsStale: boolean;
+  incidentsLoading: boolean;
   onInspectHost: Props["onInspectHost"];
   onOpenIncident: Props["onOpenIncident"];
 }) {
@@ -193,7 +287,9 @@ function PressureInspector({
         <div>
           <p className="overview-meta">{reading.label} limit margin</p>
           <p className="overview-headroom">
-            {headroomMagnitude(reading.headroom)}% <span>{reading.headroom < 0 ? "over limit" : reading.headroom === 0 ? "at limit" : "below limit"}</span>
+            {reading.headroom === 0 ? "At limit" : (
+              <><MarginAmount value={reading.headroom} /> <span className="overview-headroom-direction">{reading.headroom < 0 ? "over limit" : "below limit"}</span></>
+            )}
           </p>
           <p className="overview-inspector-measurement"><strong>{percent(reading.value)}</strong> current · {percent(reading.limit)} threshold</p>
         </div>
@@ -206,46 +302,7 @@ function PressureInspector({
           <div><dt>Agent connection</dt><dd>Online</dd></div>
         </dl>
         <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />
-        <section className="overview-ai-card" aria-label="Advisory AI analysis">
-          <div className="overview-ai-head">
-            <span className="overview-meta">AI hypothesis (advisory)</span>
-            {investigation ? (
-              <Badge tone={investigation.status === "failed" ? "danger" : investigation.status === "completed" ? "info" : "warning"}>
-                {investigation.status}
-              </Badge>
-            ) : (
-              <Badge>Not run</Badge>
-            )}
-          </div>
-          {investigationLoading ? (
-            <p className="overview-meta" role="status">Loading recorded AI analysis…</p>
-          ) : investigation?.result_json?.probable_cause ? (
-            <>
-              <p className="overview-ai-cause">{investigation.result_json.probable_cause}</p>
-              <p className="overview-meta">
-                Confidence: {investigation.result_json.confidence ?? "unknown"} · {investigation.provider.name}
-                {investigation.provider.model ? ` · ${investigation.provider.model}` : ""}
-              </p>
-              {!!investigation.result_json.recommended_checks?.length && (
-                <ul className="overview-ai-checks">
-                  {investigation.result_json.recommended_checks.slice(0, 2).map((check, i) => (
-                    <li key={i}>{check}</li>
-                  ))}
-                </ul>
-              )}
-            </>
-          ) : investigation?.error ? (
-            <p className="overview-meta">{investigation.error}</p>
-          ) : investigation ? (
-            <p className="overview-meta">Investigation is {investigation.status}. Open the incident to inspect progress.</p>
-          ) : (
-            <p className="overview-meta">
-              {incident
-                ? "No AI investigation has been run for this host’s open incident yet."
-                : "No recorded incident or AI analysis for this host."}
-            </p>
-          )}
-        </section>
+        <AdvisoryAnalysis key={incident?.id} incident={incident} incidentsStale={incidentsStale} incidentsLoading={incidentsLoading} />
         <div className="overview-inspector-actions">
           <Button variant="primary" size="sm" onClick={() => onInspectHost(host.id, reading.key)}>
             Open host history <OverviewIcon name="arrow" />
@@ -289,8 +346,16 @@ function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
         </span>
       </div>
       <div className="overview-inventory-status">
-        <Badge dot>{host.status === "online" ? "Agent online" : "Agent offline"}{cached ? " · cached" : ""}</Badge>
-        <span className="overview-meta">{fresh ? <SampleTime value={host.sampled_at} /> : cached ? "No current reading" : host.sampled_at ? "No fresh online sample" : "No sample received"}</span>
+        <Badge><OverviewIcon name={host.status === "online" ? "online" : "offline"} />{host.status === "online" ? "Agent online" : "Agent offline"}{cached ? " · cached" : ""}</Badge>
+        {host.status === "offline" && host.last_seen_at && (
+          <span className="overview-meta">Last seen <SampleTime value={host.last_seen_at} /></span>
+        )}
+        <span className="overview-meta">
+          {cached ? "Cached snapshot · No current reading"
+            : host.status === "offline" ? "Disconnected · No current reading"
+              : fresh ? <SampleTime value={host.sampled_at} />
+                : host.sampled_at ? <>Stale sample · <SampleTime value={host.sampled_at} /></> : "No sample received"}
+        </span>
       </div>
       <dl className="overview-inventory-metrics" aria-label="Current readings and configured thresholds">
         {resources.map(({ key, label }) => {
@@ -316,6 +381,82 @@ function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
   );
 }
 
+// Worker probes become eligible after 15s; allow 60s for polling and queue delays.
+const endpointFreshnessMs = 60_000;
+
+function endpointResult(endpoint: EndpointMonitor) {
+  if (endpoint.last_status === "up") {
+    return `Up${endpoint.last_http_status !== null ? ` · HTTP ${endpoint.last_http_status}` : ""}${endpoint.last_latency_ms !== null ? ` · ${endpoint.last_latency_ms} ms` : ""}`;
+  }
+  return `Down · ${endpoint.last_http_status !== null ? `HTTP ${endpoint.last_http_status}` : endpoint.last_error ?? "unreachable"}`;
+}
+
+function EndpointReachability({ endpoints, servicesError, checkingEndpointId, onCheckEndpoint }: Pick<Props, "endpoints" | "servicesError" | "checkingEndpointId" | "onCheckEndpoint">) {
+  const [, setClock] = useState(Date.now);
+  const now = Date.now();
+  const counts = { up: 0, down: 0, pending: 0, stale: 0 };
+  let nextExpiry = Infinity;
+  const rows = servicesError ? null : endpoints?.map(endpoint => {
+    const expiry = Date.parse(endpoint.last_checked_at ?? "") + endpointFreshnessMs;
+    const status = endpoint.last_status === "unknown" || !Number.isFinite(expiry) ? "pending"
+      : now >= expiry ? "stale" : endpoint.last_status;
+    counts[status]++;
+    if (status === "up" || status === "down") nextExpiry = Math.min(nextExpiry, expiry);
+    return { endpoint, status };
+  });
+
+  useEffect(() => {
+    if (!Number.isFinite(nextExpiry)) return;
+    const timer = window.setTimeout(() => setClock(Date.now()), Math.max(1, nextExpiry - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [nextExpiry]);
+
+  return (
+    <section className="overview-endpoint-scope" aria-labelledby="overview-endpoint-heading">
+      <div className="overview-endpoint-heading">
+        <OverviewIcon name="globe" />
+        <h2 id="overview-endpoint-heading">Endpoint reachability</h2>
+      </div>
+      {servicesError ? (
+        <p role="status">Endpoint reachability unavailable. {servicesError}</p>
+      ) : !rows ? (
+        <p role="status">Loading endpoint monitors…</p>
+      ) : !rows.length ? (
+        <p role="status">No endpoint monitors configured.</p>
+      ) : (
+        <>
+          <p role="status">{counts.up} up · {counts.down} down · {counts.pending} pending · {counts.stale} stale</p>
+          <ul className="overview-endpoint-list" role="list">
+            {rows.map(({ endpoint, status }) => (
+              <li key={endpoint.id} className="overview-endpoint-item">
+                <div className="overview-endpoint-main">
+                  <div>
+                    <strong>{endpoint.name}</strong>
+                    <span className="overview-meta">
+                      {endpoint.target_url} · Probe: {endpoint.probe_location}
+                      {endpoint.last_checked_at ? <> · Checked <SampleTime value={endpoint.last_checked_at} /></> : " · Not checked yet"}
+                    </span>
+                    {status === "stale" && <span className="overview-meta">Last result: {endpointResult(endpoint)}</span>}
+                  </div>
+                  <div className="overview-endpoint-actions">
+                    <Badge tone={status === "up" ? "success" : status === "down" ? "danger" : "neutral"} dot>
+                      {status === "stale" ? "Stale" : status === "pending" ? "Pending" : endpointResult(endpoint)}
+                    </Badge>
+                    <Button size="sm" loading={checkingEndpointId === endpoint.id} onClick={() => onCheckEndpoint(endpoint.id)}>
+                      Check now
+                    </Button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p>Probed independently of host metrics. A result becomes stale 60 seconds after its last check.</p>
+    </section>
+  );
+}
+
 export function ThresholdOverview({
   fleet,
   fleetError,
@@ -334,10 +475,10 @@ export function ThresholdOverview({
   const [clock, setClock] = useState(Date.now);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hostServices, setHostServices] = useState<Record<string, HostServiceEntry>>({});
-  const [incidentDetails, setIncidentDetails] = useState<Record<string, InvestigationSummary | null>>({});
-  const [loadingIncidentId, setLoadingIncidentId] = useState<string | null>(null);
+  const [offlineOnly, setOfflineOnly] = useState(false);
   const inspectorId = useId();
   const inspector = useRef<HTMLElement>(null);
+  const inventoryHeading = useRef<HTMLHeadingElement>(null);
   const loaded = fleet?.hosts.length ?? 0;
   const cached = Boolean(fleet && fleetError);
 
@@ -409,31 +550,12 @@ export function ThresholdOverview({
   }, [riskHostKeys, refreshKey]);
 
   const selected = risks.find(({ host }) => host.id === selectedId) ?? risks[0];
-  const selectedIncident = selected
-    ? incidents.find(i => i.agent_id === selected.host.id && i.status === "open")
-      ?? incidents.find(i => i.agent_id === selected.host.id)
-      ?? null
-    : null;
-
-  useEffect(() => {
-    const id = selectedIncident?.id;
-    if (!id) return;
-    let active = true;
-    setLoadingIncidentId(id);
-    void api(`/incidents/${id}`)
-      .then((data: { investigations?: InvestigationSummary[] }) => {
-        if (!active) return;
-        setIncidentDetails(prev => ({ ...prev, [id]: data.investigations?.[0] ?? null }));
-      })
-      .catch(() => {
-        if (!active) return;
-        setIncidentDetails(prev => ({ ...prev, [id]: prev[id] ?? null }));
-      })
-      .finally(() => {
-        if (active) setLoadingIncidentId(current => (current === id ? null : current));
-      });
-    return () => { active = false; };
-  }, [selectedIncident?.id]);
+  const matchingIncidents = selected ? incidents.filter(i =>
+    i.agent_id === selected.host.id && i.category === categoryByResource[selected.reading.key],
+  ) : [];
+  const selectedIncident = matchingIncidents.find(i => i.status === "open") ?? matchingIncidents[0] ?? null;
+  const visibleDevices = offlineOnly ? devices?.filter(({ host }) => host.status === "offline") : devices;
+  const offline = fleet ? fleet.total - fleet.online : null;
 
   const thresholds = fleet?.thresholds;
   const hasThreshold = resources.some(({ key }) => finitePercent(thresholds?.[key]));
@@ -463,6 +585,21 @@ export function ThresholdOverview({
           {fleetError && (
             <p role="status">{cached && <>Cached inventory from <SampleTime value={fleet?.observed_at ?? null} />. </>}{fleetError}</p>
           )}
+          <div className="overview-fleet-connectivity">
+            {fleet ? (
+              <dl aria-label={cached ? "Fleet agent connectivity, cached" : "Fleet agent connectivity"}>
+                <div><dt>Agent online</dt><dd>{fleet.online}</dd></div>
+                <div><dt>Agent offline</dt><dd>{offline}</dd></div>
+              </dl>
+            ) : <p role="status">{fleetError ? "Agent connectivity counts unavailable." : "Loading agent connectivity counts…"}</p>}
+            {cached && <p>Agent counts are cached.</p>}
+            {offline !== null && offline > 0 && (
+              <Button size="sm" onClick={() => {
+                setOfflineOnly(true);
+                inventoryHeading.current?.focus();
+              }}>Show offline devices <OverviewIcon name="arrow" /></Button>
+            )}
+          </div>
         </div>
         <dl className="overview-summary-readings">
           <SummaryReading label="At or above limit" value={assessed ? exceeded : null} state="exceeded" />
@@ -495,60 +632,7 @@ export function ThresholdOverview({
               ))}
             </ul>
           ) : <p className="overview-empty">{emptyWatchlist}</p>}
-          <div className="overview-endpoint-scope">
-            <div className="overview-endpoint-heading">
-              <OverviewIcon name="globe" />
-              <h3>Endpoint reachability</h3>
-              {servicesError ? (
-                <Badge tone="warning">Unavailable</Badge>
-              ) : endpoints.length ? (
-                <Badge tone={endpoints.some(e => e.last_status === "down") ? "danger" : endpoints.some(e => e.last_status === "up") ? "success" : "neutral"}>
-                  {endpoints.filter(e => e.last_status === "up").length} / {endpoints.length} up
-                </Badge>
-              ) : (
-                <Badge>Not measured</Badge>
-              )}
-            </div>
-            {servicesError ? (
-              <p>{servicesError}</p>
-            ) : endpoints.length ? (
-              <ul className="overview-endpoint-list" role="list">
-                {endpoints.map(endpoint => (
-                  <li key={endpoint.id} className="overview-endpoint-item">
-                    <div className="overview-endpoint-main">
-                      <div>
-                        <strong>{endpoint.name}</strong>
-                        <span className="overview-meta">
-                          {endpoint.target_url} · Probe: {endpoint.probe_location}
-                          {endpoint.last_checked_at ? <> · Checked <SampleTime value={endpoint.last_checked_at} /></> : " · Not checked yet"}
-                        </span>
-                      </div>
-                      <div className="overview-endpoint-actions">
-                        <Badge tone={endpoint.last_status === "up" ? "success" : endpoint.last_status === "down" ? "danger" : "neutral"} dot>
-                          {endpoint.last_status === "up"
-                            ? `Up · HTTP ${endpoint.last_http_status ?? endpoint.expected_status}${endpoint.last_latency_ms !== null ? ` · ${endpoint.last_latency_ms} ms` : ""}`
-                            : endpoint.last_status === "down"
-                              ? `Down · ${endpoint.last_http_status !== null ? `HTTP ${endpoint.last_http_status}` : endpoint.last_error ?? "unreachable"}`
-                              : "Pending"}
-                        </Badge>
-                        <Button
-                          size="sm"
-                          loading={checkingEndpointId === endpoint.id}
-                          onClick={() => onCheckEndpoint(endpoint.id)}
-                        >
-                          Check now
-                        </Button>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>Endpoint checks are not collected. Device readings do not establish endpoint availability.</p>
-            )}
-            <p className="overview-meta">Endpoint reachability is probed independently from host resource metrics.</p>
-          </div>
-          <p className="overview-rule">Devices are ranked by least margin below limit. Near limit means within 5% below the configured limit; readings at or above it count toward the exceeded total.</p>
+          <p className="overview-rule">Devices are ranked by smallest limit margin. Near limit means no more than 5 percentage points below the configured limit. Readings at or above it count toward the exceeded total.</p>
         </section>
 
         <aside id={inspectorId} className="overview-inspector" aria-labelledby="overview-inspector-heading" ref={inspector} tabIndex={-1}>
@@ -559,8 +643,8 @@ export function ThresholdOverview({
               risk={selected}
               refreshKey={refreshKey}
               incident={selectedIncident}
-              investigation={selectedIncident ? (incidentDetails[selectedIncident.id] ?? null) : null}
-              investigationLoading={Boolean(selectedIncident && loadingIncidentId === selectedIncident.id && !(selectedIncident.id in incidentDetails))}
+              incidentsStale={incidentsStale}
+              incidentsLoading={openIncidents === null && !incidentsStale}
               onInspectHost={onInspectHost}
               onOpenIncident={onOpenIncident}
             />
@@ -570,17 +654,21 @@ export function ThresholdOverview({
         </aside>
       </div>
 
+      <EndpointReachability endpoints={endpoints} servicesError={servicesError} checkingEndpointId={checkingEndpointId} onCheckEndpoint={onCheckEndpoint} />
+
       <section className="overview-inventory" aria-labelledby="overview-inventory-heading">
         <div className="overview-section-head">
           <div>
-            <h2 id="overview-inventory-heading">All devices</h2>
-            {fleet && <p className="overview-meta">{scope} · Reading / configured threshold</p>}
+            <h2 id="overview-inventory-heading" ref={inventoryHeading} tabIndex={-1}>{offlineOnly ? "Offline devices" : "All devices"}</h2>
+            {fleet && <p className="overview-meta">{scope} · {offlineOnly ? "Offline filter applies to loaded devices only" : "Reading / configured threshold"}{cached ? " · Cached" : ""}</p>}
           </div>
-          <Button size="sm" onClick={onBrowseHosts}>Browse hosts <OverviewIcon name="arrow" /></Button>
+          {offlineOnly
+            ? <Button size="sm" onClick={() => { setOfflineOnly(false); inventoryHeading.current?.focus(); }}>Show all devices</Button>
+            : <Button size="sm" onClick={onBrowseHosts}>Browse hosts <OverviewIcon name="arrow" /></Button>}
         </div>
-        {devices?.length ? (
+        {visibleDevices?.length ? (
           <ul className="overview-inventory-list" role="list">
-            {devices.map(({ host, fresh }) => (
+            {visibleDevices.map(({ host, fresh }) => (
               <InventoryRow
                 key={host.id}
                 host={host}
@@ -591,7 +679,7 @@ export function ThresholdOverview({
               />
             ))}
           </ul>
-        ) : <p className="overview-inventory-empty">{fleetError ? "Device inventory unavailable." : fleet ? "No devices to show." : "Loading device inventory…"}</p>}
+        ) : <p className="overview-inventory-empty">{fleetError && !fleet ? "Device inventory unavailable." : !fleet ? "Loading device inventory…" : offlineOnly ? "No offline devices in the loaded inventory." : "No devices to show."}</p>}
       </section>
     </div>
   );

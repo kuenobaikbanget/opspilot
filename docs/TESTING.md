@@ -10,6 +10,18 @@ bun run typecheck
 
 `tests/contracts.test.ts` covers tool/metric bounds, provider input contracts and redaction. The BYOK suites below cover credential, transport, migration and real API/Worker boundaries. `tests/agent-install.test.ts` covers installation metadata and command quoting; `tests/agent-installer.test.ts` covers pre-mutation shell rejection with isolated fixtures, never successful privileged installation on the developer host. Go agent tests cover parsing/redaction/WS URL plus finite enrollment, response/redirect rejection and identity preservation. These tests are **not** a substitute for broader agent security, integration, and AI evaluation.
 
+## Overview triage verification — 2026-11-19
+
+- Web typecheck and the focused Home DOM suite passed: 10 tests, 46 assertions. New cases cover 503 on matched investigation detail, same-host configuration drift excluded from CPU pressure, and cancellation of pending history when leaving Hosts.
+- Chromium used isolated Next.js webpack and a read-only loopback dashboard fixture. At 1440, 1024, 390 and 320px the document matched viewport width. Watchlist and inspector shared the top edge on desktop; mobile stacked watchlist, inspector, reachability. Keyboard selection focused the inspector, then Tab reached history, incident, and endpoint actions in that order. The offline shortcut focused the filtered inventory and reset restored all seven rows.
+- The base fixture showed 6 online, 1 offline and 4 assessed; offline showed last seen, and stale/no-sample rows remained distinct. A synthetic cap showed 198 online and 2 offline with only six online rows loaded; loading and initial 503 showed no counts, and a later 503 retained those counts as cached with no current readings.
+- Matched detail loading, 503 and successful empty remained distinct; a same-host disk selection never read its configuration-drift incident. Recorded AI showed source incident title and time. Margins were 9 pp (94% vs 85%), less than 0.1 pp, or At limit; 110.6% of limit was a separate ratio. Inspecting did not submit an AI request.
+- Endpoint fixtures covered delayed read, successful empty, 503, pending, stale and fresh up/down; counts changed from 1 up/1 down/1 pending/1 stale to 0 up/1 down/1 pending/2 stale without another successful read. Stale kept the original timestamp and historical HTTP result. An intercepted Check now POST showed busy/disabled, surfaced the synthetic failure and reenabled the control; no probe ran.
+- Browser network: 2 initial/periodic fleet reads and 0 metric reads on Overview. Opening disk history made 2 reads for the selected host (200, then a held poll aborted with `net::ERR_ABORTED` on exit). Over the next poll interval there was 1 fleet read and 0 metric reads; inspecting the offline row reopened Hosts and loaded its CPU history with a 200.
+- The Impeccable mechanical detector reported no findings across the four changed runtime UI files.
+
+This verifies rendered Web behavior with synthetic records and failures, not live Hub, agent, endpoint reachability, AI, authentication, or physical-device behavior.
+
 ## Home audit fixes — 2026-11-18
 
 - `bun --no-env-file test tests/home-ui.test.ts`: six regressions passed (33 assertions). Each mounts the actual Home component in its own Bun subprocess with Happy DOM and synthetic API responses; no DOM globals or fetch replacements enter the shared test runner. Cases cover a failed initial incident read with usable hosts/unavailable counts, recovery preserving a separate sign-out error, labeled cached records, rejected startup sessions, retriable session-check outages and expiry clearing the protected surface.
