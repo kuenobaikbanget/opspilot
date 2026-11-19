@@ -102,6 +102,8 @@ Admin password only, error feedback, warning when keys absent. Login is separate
 ### Overview and Hosts
 The Overview compares fresh online resource observations against the limits reported by the Hub. Agent online and offline counts cover the fleet; threshold counts cover only the assessed subset of loaded hosts. Offline rows show last agent contact when known; disconnected, online with a stale sample, online without a sample, and cached do not imply current readings. Hosts keeps historical values and raw timestamped history, not interpolated points. The watchlist inspector opens history for the selected resource. Fleet polling continues outside Hosts, but selected host history fetches and polls only while Hosts is open; leaving aborts any pending history read.
 
+While fleet data is pending, the **Devices at risk** watchlist and the empty inspector show card-shaped ASCII skeletons. When data arrives, host identity and measured readings decode into place; service rows load and reveal independently. The inspector uses the same reveal when the selected host or endpoint changes. Decodes play at half the library’s default speed without delaying data fetches. With reduced motion, skeletons stay still and loaded content appears without a decode.
+
 ### Incident detail
 Open and resolved queues share an inspector with host context, a measured evidence timeline, explicit AI investigation and human-confirmed resolution. A latest host sample is not an incident-time measurement; no endpoint impact is inferred.
 

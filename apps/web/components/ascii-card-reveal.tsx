@@ -97,7 +97,7 @@ export const AsciiCardReveal = forwardRef<AsciiRevealHandle, AsciiCardRevealProp
     {
       as = "div",
       preset = "decode",
-      speed,
+      speed = 0.5,
       duration = "fast",
       origin,
       selector,

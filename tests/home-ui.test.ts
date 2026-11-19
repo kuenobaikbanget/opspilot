@@ -118,12 +118,16 @@ test("overview dashboard cards show ASCII skeletons while loading and clear clea
   const { loadingState, midState, loadedState } = await scenario("ascii-loading-transition");
   expect(loadingState.summarySkeletons).toBeGreaterThan(0);
   expect(loadingState.riskSkeletons).toBeGreaterThan(0);
+  expect(loadingState.inspectorSkeletons).toBeGreaterThan(0);
+  expect(loadingState.inspectorLoading).toContain("Loading device details…");
   expect(loadingState.endpointSkeletons).toBeGreaterThan(0);
   expect(loadingState.inventorySkeletons).toBeGreaterThan(0);
   expect(loadingState.animatedSkeletons).toBe(0);
   expect(loadingState.overlays).toBe(0);
 
   expect(midState.summarySkeletons).toBe(0);
+  expect(midState.inspectorHost).toBe("Fixture host");
+  expect(midState.inspectorLoading).toBeUndefined();
   expect(midState.endpointSkeletons).toBe(0);
   expect(midState.inventorySkeletons).toBe(0);
   expect(midState.serviceSkeletons).toBeGreaterThan(0);

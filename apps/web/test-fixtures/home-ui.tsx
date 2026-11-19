@@ -220,6 +220,8 @@ try {
       const loadingState = {
         summarySkeletons: document.querySelectorAll(".overview-summary [data-ascii-skeleton]").length,
         riskSkeletons: document.querySelectorAll(".overview-watchlist [data-ascii-skeleton]").length,
+        inspectorLoading: document.querySelector(".overview-inspector > [role=status]")?.textContent,
+        inspectorSkeletons: document.querySelectorAll(".overview-inspector > [role=status] [data-ascii-skeleton]").length,
         endpointSkeletons: document.querySelectorAll(".overview-endpoint-scope [data-ascii-skeleton]").length,
         inventorySkeletons: document.querySelectorAll(".overview-inventory [data-ascii-skeleton]").length,
         animatedSkeletons: document.querySelectorAll("[data-ars-animate]").length,
@@ -235,6 +237,8 @@ try {
       });
       const midState = {
         summarySkeletons: document.querySelectorAll(".overview-summary [data-ascii-skeleton]").length,
+        inspectorHost: document.querySelector(".overview-inspector .overview-hostname")?.textContent,
+        inspectorLoading: document.querySelector(".overview-inspector > [role=status]")?.textContent,
         endpointSkeletons: document.querySelectorAll(".overview-endpoint-scope [data-ascii-skeleton]").length,
         inventorySkeletons: document.querySelectorAll(".overview-inventory [data-ascii-skeleton]").length,
         serviceSkeletons: document.querySelectorAll(".overview-risk-services [data-ascii-skeleton]").length,
