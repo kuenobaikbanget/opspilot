@@ -261,28 +261,28 @@ export default function DesignCatalog() {
                         Replay decode
                       </Button>
                     </div>
-                    <AsciiCardReveal
-                      ref={asciiPreviewRef}
-                      loading={asciiLoading}
-                      className={styles.asciiPreviewCard}
-                      data-ascii="surface"
-                    >
-                      {asciiLoading ? (
-                        <div className={styles.asciiPreviewSkeleton} role="status">
-                          <span className="sr-only" data-ascii="skip">Loading synthetic host card…</span>
-                          <AsciiCardSkeleton variant="scan" lines={2} widths={["58%", "38%"]} seed={51} />
-                          <AsciiCardSkeleton variant="braille" lines={2} widths={["92%", "74%"]} seed={53} />
-                        </div>
-                      ) : (
-                        <div className={styles.asciiPreviewBody}>
-                          <div className={styles.asciiPreviewHead}>
-                            <strong className={styles.measurement}>staging-api-02</strong>
-                            <Badge tone="warning">Near limit</Badge>
+                    <div className={styles.asciiPreviewCard}>
+                      <AsciiCardReveal
+                        ref={asciiPreviewRef}
+                        loading={asciiLoading}
+                      >
+                        {asciiLoading ? (
+                          <div className={styles.asciiPreviewSkeleton} role="status">
+                            <span className="sr-only" data-ascii="skip">Loading synthetic host card…</span>
+                            <AsciiCardSkeleton variant="scan" lines={2} widths={["58%", "38%"]} seed={51} />
+                            <AsciiCardSkeleton variant="braille" lines={2} widths={["92%", "74%"]} seed={53} />
                           </div>
-                          <p className={styles.guidance}>Measured signal: CPU <span className={styles.measurement}>83%</span> · Threshold <span className={styles.measurement}>85%</span> · Service <code className={styles.measurement}>nginx.service</code></p>
-                        </div>
-                      )}
-                    </AsciiCardReveal>
+                        ) : (
+                          <div className={styles.asciiPreviewBody}>
+                            <div className={styles.asciiPreviewHead}>
+                              <strong className={styles.measurement}>staging-api-02</strong>
+                              <Badge tone="warning">Near limit</Badge>
+                            </div>
+                            <p className={styles.guidance}>Measured signal: CPU <span className={styles.measurement}>83%</span> · Threshold <span className={styles.measurement}>85%</span> · Service <code className={styles.measurement}>nginx.service</code></p>
+                          </div>
+                        )}
+                      </AsciiCardReveal>
+                    </div>
                     <p className={styles.feedback} role="status">{asciiFeedback}</p>
                   </div>
                 </div>

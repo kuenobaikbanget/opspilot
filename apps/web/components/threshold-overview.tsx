@@ -620,12 +620,12 @@ export function ThresholdOverview({
 
   return (
     <div className="threshold-overview">
-      <AsciiCardReveal loading={fleetLoading} revealOnMount={true}>
-        <section className="overview-summary" aria-labelledby="overview-pressure-heading" data-ascii="surface">
-          <div className="overview-summary-statement">
-            <h2 id="overview-pressure-heading">
-              {assessed ? `${risks.length} ${risks.length === 1 ? "device" : "devices"} at risk` : "Device threshold pressure"}
-            </h2>
+      <section className="overview-summary" aria-labelledby="overview-pressure-heading">
+        <div className="overview-summary-statement">
+          <h2 id="overview-pressure-heading">
+            {assessed ? `${risks.length} ${risks.length === 1 ? "device" : "devices"} at risk` : "Device threshold pressure"}
+          </h2>
+          <AsciiCardReveal loading={fleetLoading} revealOnMount={true}>
             {fleetLoading ? (
               <div className="overview-ascii-loading" role="status">
                 <span className="sr-only" data-ascii="skip">Loading fleet scope… Loading agent connectivity counts…</span>
@@ -654,7 +654,9 @@ export function ThresholdOverview({
                 </div>
               </>
             )}
-          </div>
+          </AsciiCardReveal>
+        </div>
+        <AsciiCardReveal loading={fleetLoading} revealOnMount={true}>
           {fleetLoading ? (
             <div className="overview-summary-skeleton" role="status">
               <span className="sr-only" data-ascii="skip">Loading threshold readings…</span>
@@ -667,8 +669,8 @@ export function ThresholdOverview({
               <SummaryReading label={incidentsStale && openIncidents !== null ? "Open incidents · cached" : "Open incidents"} value={openIncidents} />
             </dl>
           )}
-        </section>
-      </AsciiCardReveal>
+        </AsciiCardReveal>
+      </section>
 
       <div className="overview-pressure-workspace">
         <div className="overview-pressure-sources">
