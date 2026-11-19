@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { Host, HostList, HostMetric } from "@opspilot/contracts";
+import { AsciiLoading } from "./ascii-card-reveal";
 import { Badge, Button, Input, Notice, Panel } from "./ui";
 import { hasFreshSample, percent, pressure, resourcePressure, resources, type Resource } from "../lib/host-pressure";
 import { WorkspaceIcon } from "./workspace-shell";
@@ -313,6 +314,7 @@ export function HostWorkspace({
   if (!isVisible) return null;
 
   const hosts = fleet?.hosts ?? [];
+  const fleetLoading = !fleet && !failure;
   const rows = hosts.map(host => ({ host, risk: fleet && !failure ? pressure(host, fleet, now) : null }));
   rows.sort((a, b) => (a.risk?.headroom ?? Infinity) - (b.risk?.headroom ?? Infinity));
   const term = query.trim().toLowerCase();
@@ -347,7 +349,7 @@ export function HostWorkspace({
         </div>
       </div>
       <div className="host-inventory-summary">
-        <div><h2 id="fleet-title">{fleet ? `${fleet.online} of ${fleet.total} hosts online${failure ? " · cached" : ""}` : failure ? "Host inventory unavailable" : "Loading host inventory…"}</h2>
+        <div><h2 id="fleet-title">{fleet ? `${fleet.online} of ${fleet.total} hosts online${failure ? " · cached" : ""}` : failure ? "Host inventory unavailable" : "Host inventory"}</h2>
           <p>Agent connectivity and resource limits are measured independently of endpoint health.</p>
         </div>
         {fleet && !failure && <Badge tone={rows.some(({ risk }) => risk?.state === "exceeded") ? "danger" : attention ? "warning" : "neutral"}>{assessed ? `${attention} of ${assessed} assessed near or at limit` : "No hosts assessed"}</Badge>}
@@ -385,6 +387,7 @@ export function HostWorkspace({
                 </tr>
               </thead>
               <tbody>
+                {fleetLoading && <tr><td colSpan={6}><AsciiLoading label="Loading host inventory…" lines={3} widths={["85%", "77%", "82%"]} /></td></tr>}
                 {visible.map(({ host: h, risk }) => (
                   <tr key={h.id} className={selected === h.id ? "host-selected" : ""}>
                     <th scope="row">
@@ -489,7 +492,8 @@ export function HostWorkspace({
             )}
           </div>
 
-          {!host ? (
+          {fleetLoading ? <AsciiLoading label="Loading host details…" />
+            : !host ? (
             <p className="muted" role="status">
               {selectionNotice || "Select a host to inspect its observations and resource history."}
             </p>
@@ -540,7 +544,7 @@ export function HostWorkspace({
                 {history && history.id === host.id ? (
                   <ResourceHistory key={host.id} samples={history.samples} resource={resource} />
                 ) : (
-                  !historyError && <p className="empty" role="status">Loading resource history…</p>
+                  !historyError && <AsciiLoading label="Loading resource history…" variant="dither" lines={4} widths={["100%", "90%", "100%", "84%"]} />
                 )}
               </div>
 
@@ -565,8 +569,10 @@ export function HostWorkspace({
                       </svg>
                     </Button>
                   </>
+                ) : openIncidents === null && !incidentsStale ? (
+                  <AsciiLoading label="Loading related incidents…" />
                 ) : (
-                  <p className="muted small">{openIncidents === null ? incidentsStale ? "Related incident data is unavailable." : "Loading related incidents…" : "No open incident for this host in the latest 100 records."}</p>
+                  <p className="muted small">{openIncidents === null ? "Related incident data is unavailable." : "No open incident for this host in the latest 100 records."}</p>
                 )}
                 {incidentsStale && openIncidents !== null && <p className="tiny">Cached incident records; the latest refresh failed.</p>}
                 <p className="tiny">Measured signals only. No root cause inferred.</p>

@@ -11,6 +11,7 @@ import { ProviderSettings } from "../components/provider-settings";
 import { WorkspaceIcon, WorkspaceShell, type WorkspacePage } from "../components/workspace-shell";
 import { ThresholdOverview } from "../components/threshold-overview";
 import { ServerOnboarding } from "../components/server-onboarding";
+import { AsciiLoading } from "../components/ascii-card-reveal";
 import { api, ApiError } from "../lib/api";
 import { percent, resources, type Resource } from "../lib/host-pressure";
 type Incident = { id: string; title: string; category: string; status: string; hostname: string; agent_id: string; created_at: string; resolved_at: string | null; resolution: string | null };
@@ -18,6 +19,7 @@ type Evidence = { id: string; source: string; content: string; created_at: strin
 type Investigation = { id: string; provider: { id: string | null; name: string; protocol: ProviderProtocol; baseUrl: string | null; model: string | null }; status: string; result_json: { probable_cause?: string; confidence?: number | string; evidence_ids?: string[]; recommended_checks?: string[] } | null; error: string | null };
 type Detail = { incident: Incident; evidence: Evidence[]; investigations: Investigation[] };
 type Memory = { id: string; summary: string; resolution: string; created_at: string };
+type MemoryRead = { records: Memory[]; error?: never } | { records?: never; error: string };
 
 const headings = {
   overview: ["Know what’s close to the edge.", "See which resources have reached their configured limits and how much headroom is left."],
@@ -57,6 +59,7 @@ export default function Home() {
   const [serviceHostId, setServiceHostId] = useState("");
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [detail, setDetail] = useState<Detail | null>(null);
+  const [detailError, setDetailError] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const selectedIncident = useRef<string | null>(null);
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -75,7 +78,7 @@ export default function Home() {
   const [resolution, setResolution] = useState("");
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<WorkspacePage>("overview");
-  const [memories, setMemories] = useState<Memory[]>([]);
+  const [memoryRead, setMemoryRead] = useState<MemoryRead | null>(null);
   const [search, setSearch] = useState("");
   const [hostRefresh, setHostRefresh] = useState(0);
   const pageHeading = useRef<HTMLHeadingElement>(null);
@@ -86,11 +89,12 @@ export default function Home() {
   const endSession = useCallback(() => {
     sessionGeneration.current++;
     setLogged(false); setAuthDisabled(false); setFleet(null); setFleetError(""); setInspectHost(null);
-    setDetail(null); setSelected(null); selectedIncident.current = null;
+    setDetail(null); setDetailError(""); setSelected(null); selectedIncident.current = null;
     setTab("overview");
     setIncidents([]); setIncidentsError(""); setRefreshedAt(null);
     setServiceHostId(""); setEndpoints(null); setServicesError(""); setCheckingEndpointId(null);
     setProviders([]); setEncryptionConfigured(false); setProviderId(""); setModel("");
+    setMemoryRead(null);
     selectedProviderId.current = "";
   }, []);
 
@@ -204,9 +208,12 @@ export default function Home() {
     const generation = sessionGeneration.current;
     try {
       const result: Detail = await api(`/incidents/${id}`);
-      if (generation === sessionGeneration.current && selectedIncident.current === id) setDetail(result);
+      if (generation === sessionGeneration.current && selectedIncident.current === id) {
+        setDetail(result);
+        setDetailError("");
+      }
     } catch (e: unknown) {
-      if (generation === sessionGeneration.current && selectedIncident.current === id) setError(e instanceof Error ? e.message : String(e));
+      if (generation === sessionGeneration.current && selectedIncident.current === id) setDetailError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
@@ -242,7 +249,14 @@ export default function Home() {
     }
   }, [tab, detail]);
   useEffect(() => {
-    if (logged && tab === "memory") void api(`/memory?q=${encodeURIComponent(search)}`).then(setMemories).catch(e => setError(e.message));
+    if (!logged || tab !== "memory") return;
+    let active = true;
+    void api(`/memory?q=${encodeURIComponent(search)}`)
+      .then((records: Memory[]) => { if (active) setMemoryRead({ records }); })
+      .catch((cause: unknown) => {
+        if (active) setMemoryRead({ error: cause instanceof Error ? cause.message : "Unable to load incident memory." });
+      });
+    return () => { active = false; };
   }, [logged, tab, search]);
 
   async function act(action: () => Promise<unknown>) {
@@ -290,7 +304,7 @@ export default function Home() {
   if (logged === null) return (
     <main className="center">
       <div>
-        <p role="status">{sessionError ? "Unable to verify your session." : "Checking admin session…"}</p>
+        {sessionError ? <p role="status">Unable to verify your session.</p> : <AsciiLoading label="Checking admin session…" />}
         {sessionError && <Notice tone="danger" role="alert">{sessionError}<p><Button onClick={() => void checkSession()}>Retry session check</Button></p></Notice>}
         <Link href="/design-system">Explore the design system</Link>
       </div>
@@ -324,11 +338,13 @@ export default function Home() {
   const visibleIncidents = tab === "drift" ? incidents.filter(i => i.category === "config_drift") : incidents;
   const selectedProvider = providers.find(p => p.id === providerId && p.enabled);
   const detailHost = detail && hosts.find(h => h.id === detail.incident.agent_id);
+  const providersPending = providersLoading && !providers.length && !providersError;
 
   function chooseIncident(id: string | null) {
     if (id === selectedIncident.current) return;
     selectedIncident.current = id;
     setDetail(null);
+    setDetailError("");
     setSelected(id);
     setResolution("");
   }
@@ -340,6 +356,7 @@ export default function Home() {
     chooseIncident(next === "incidents" || next === "drift"
       ? records.find(i => i.status === "open")?.id ?? records[0]?.id ?? null
       : null);
+    if (next === "memory") setMemoryRead(null);
     focusPage.current = true;
     setTab(next);
     window.scrollTo(0, 0);
@@ -383,7 +400,7 @@ export default function Home() {
           <span className="workspace-context">{tab === "overview" || tab === "hosts" ? <>
             Local workspace {fleet && <span className="workspace-meta">· {fleet.total} {fleet.total === 1 ? "host" : "hosts"}{fleetError ? " · cached" : ""}</span>}
           </> : incidentView ? <>
-            {open === null ? incidentsError ? "Incident data unavailable" : "Loading incidents…" : `${visibleIncidents.filter(i => i.status === "open").length} open${incidentsError ? " · cached" : ""}`}
+            {open === null ? incidentsError ? "Incident data unavailable" : <AsciiLoading as="span" className="workspace-context-loading" label="Loading incidents…" lines={1} widths={["100%"]} /> : `${visibleIncidents.filter(i => i.status === "open").length} open${incidentsError ? " · cached" : ""}`}
           </> : "Local workspace"}</span>
           {(tab === "overview" || tab === "hosts" || incidentView) && <div className="workspace-toolbar-actions">
             <span className="workspace-meta">{incidentView ? "Incident" : "Fleet"} refresh · 10s</span>
@@ -433,7 +450,8 @@ export default function Home() {
                   {serviceHost ? <HostSystemd key={serviceHost.id} hostId={serviceHost.id} refreshKey={hostRefresh} />
                     : <p className="muted" role="status">The selected host is no longer in the loaded inventory.</p>}
                 </>
-              ) : <p className="muted" role="status">{fleetError ? "Host inventory is unavailable." : fleet ? "Connect a host to view its service observations." : "Loading host inventory…"}</p>}
+              ) : !fleet && !fleetError ? <AsciiLoading label="Loading host inventory…" />
+                : <p className="muted" role="status">{fleetError ? "Host inventory is unavailable." : "Connect a host to view its service observations."}</p>}
             </Panel>
               <Panel aria-labelledby="services-endpoints-title">
                 <div className="panel-head">
@@ -442,7 +460,7 @@ export default function Home() {
                     <p className="muted">Independent HTTP probes from {endpoints?.[0]?.probe_location ?? "hub-local"}.</p>
                   </div>
                 </div>
-                {servicesError ? <p className="muted" role="status">{servicesError}</p> : !endpoints ? <p className="muted" role="status">Loading endpoint monitors…</p> : !endpoints.length && <p className="muted">No endpoint monitors configured.</p>}
+                {servicesError ? <p className="muted" role="status">{servicesError}</p> : !endpoints ? <AsciiLoading label="Loading endpoint monitors…" lines={3} widths={["86%", "73%", "80%"]} /> : !endpoints.length && <p className="muted">No endpoint monitors configured.</p>}
                 <ul className="overview-endpoint-list" role="list">
                   {endpoints?.map(endpoint => (
                     <li key={endpoint.id} className="overview-endpoint-item">
@@ -490,7 +508,7 @@ export default function Home() {
             <section className="incident-queue" aria-labelledby="incidents-title">
               <h2 id="incidents-title">{tab === "drift" ? "Recorded hash changes" : "Needs attention"}</h2>
               <div className="list">
-                {open === null ? <p className="empty">{incidentsError ? "Incident records are unavailable. Retry the incident refresh to load them." : "Loading incident records…"}</p> : <>
+                {open === null ? incidentsError ? <p className="empty">Incident records are unavailable. Retry the incident refresh to load them.</p> : <AsciiLoading label="Loading incident records…" lines={3} /> : <>
                   {visibleIncidents.filter(i => i.status === "open").length === 0 && <p className="empty">No open {tab === "drift" ? "drift records" : "incidents"} in the latest 100 records.</p>}
                   {(["open", "resolved"] as const).map(status => {
                     const records = visibleIncidents.filter(i => i.status === status);
@@ -513,10 +531,15 @@ export default function Home() {
                   <Button type="submit" loading={busy} disabled={!hostId || title.length < 3}>Create incident</Button>
                 </form>}
             </section>
-            {!detail && <Panel className="incident-placeholder"><p className="muted">{selected ? "Loading incident detail…" : "Select an incident to review measured evidence and investigation activity."}</p></Panel>}
+            {!detail && <Panel className="incident-placeholder">
+              {detailError ? <Notice tone="warning" role="alert">Incident detail unavailable: {detailError}</Notice>
+                : selected ? <AsciiLoading label="Loading incident detail…" lines={3} />
+                  : <p className="muted">Select an incident to review measured evidence and investigation activity.</p>}
+            </Panel>}
             {detail && detail.incident.id === selected && (
               <Panel className="detail" role="region" aria-labelledby="incident-detail-title">
                 <div className="panel-head"><div><h2 id="incident-detail-title" ref={incidentHeading} tabIndex={-1}>{detail.incident.title}</h2><p>{detail.incident.hostname} · {categoryLabel(detail.incident.category)}</p></div><Badge tone={detail.incident.status === "open" ? "danger" : "neutral"}>{detail.incident.status}</Badge></div>
+                {detailError && <Notice tone="warning" role="alert">Incident detail refresh failed: {detailError}. Showing the last loaded record.</Notice>}
                 <div className="incident-context">
                   <WorkspaceIcon name="hosts" />
                   <div><h3>Host context</h3><p>{detail.incident.hostname} · {fleetError || !fleet ? "Connectivity unavailable" : detailHost?.status ?? "Not in loaded inventory"}</p>
@@ -543,7 +566,7 @@ export default function Home() {
                     {providersError && <Notice tone="danger" role="alert">{providersError} Provider metadata may be stale. Investigate is disabled until a successful refresh. <Button size="sm" disabled={providersLoading} onClick={() => void refreshProviders()}>Retry provider refresh</Button></Notice>}
                     {!providersLoading && !providersError && !encryptionConfigured && <Notice tone="warning">AI is unavailable until the server administrator configures AI_PROVIDER_ENCRYPTION_KEY on the Hub and Worker.</Notice>}
                     {investigationError && <Notice tone="danger" role="alert">{investigationError}</Notice>}
-                    <form className="investigation-form" onSubmit={investigate}>
+                    {providersPending ? <AsciiLoading label="Loading provider metadata…" /> : <form className="investigation-form" onSubmit={investigate}>
                       <Field id="ai-provider" label="AI provider" hint={providersLoading ? "Refreshing provider metadata…" : "Only enabled connections are available."} required>
                         <Select id="ai-provider" value={providerId} aria-describedby="ai-provider-hint" required disabled={providersLoading || !!providersError || !encryptionConfigured || busy || !providers.some(p => p.enabled)} onChange={e => { const connection = providers.find(p => p.id === e.target.value); selectedProviderId.current = e.target.value; setProviderId(e.target.value); setModel(connection?.defaultModel ?? ""); }}>
                           {!providers.some(p => p.enabled) ? <option value="">No enabled AI providers</option> : providers.filter(p => p.enabled).map(p => <option key={p.id} value={p.id}>{p.name} · {p.protocol}</option>)}
@@ -556,7 +579,7 @@ export default function Home() {
                       </div>}
                       {providerReviewRequired && <Button disabled={providersLoading || !!providersError || !selectedProvider || !encryptionConfigured} onClick={() => { setProviderReviewRequired(false); setInvestigationError(""); }}>I reviewed the updated destination and model</Button>}
                       <Button type="submit" variant="primary" loading={busy} aria-describedby={selectedProvider ? "investigation-destination" : undefined} disabled={!selectedProvider || !selectedProvider.hasApiKey || !encryptionConfigured || !model.trim() || providersLoading || !!providersError || providerReviewRequired || detail.incident.status !== "open"}>Investigate</Button>
-                    </form>
+                    </form>}
                     {detail.investigations.length === 0 ? <p className="muted">Investigation has not been started.</p> : detail.investigations.map(x => (
                       <div className="finding" key={x.id}>
                         <div className="finding-head"><div><strong>{x.provider.name}</strong><span className="finding-provider-meta">{x.provider.protocol} · {x.provider.model ?? "Model not recorded (legacy)"}</span>{x.provider.baseUrl && <span className="finding-provider-meta">{x.provider.baseUrl}</span>}</div><Badge tone={x.status === "failed" ? "danger" : x.status === "completed" ? "info" : "warning"}>{x.status}</Badge></div>
@@ -579,8 +602,14 @@ export default function Home() {
         {tab === "memory" && (
           <Panel role="region" aria-labelledby="memory-title">
             <div className="panel-head"><div><h2 id="memory-title">Resolved incident knowledge</h2><p>Full-text incident retrieval for future investigations</p></div></div>
-            <Field id="memory-search" label="Search confirmed resolutions"><Input id="memory-search" type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search symptoms, service, resolution…" /></Field>
-            {memories.length === 0 ? <p className="empty">No matching resolved incidents yet.</p> : memories.map(m => <div key={m.id} className="memory"><Badge tone="success">Human-confirmed</Badge><h3>{m.summary}</h3><p>{m.resolution}</p><small>{new Date(m.created_at).toLocaleString()}</small></div>)}
+            <Field id="memory-search" label="Search confirmed resolutions"><Input id="memory-search" type="search" value={search} onChange={e => {
+              setSearch(e.target.value);
+              setMemoryRead(null);
+            }} placeholder="Search symptoms, service, resolution…" /></Field>
+            {!memoryRead ? <AsciiLoading label="Loading incident memory…" lines={3} />
+              : memoryRead.records ? memoryRead.records.length === 0 ? <p className="empty">No matching resolved incidents yet.</p>
+                : memoryRead.records.map(m => <div key={m.id} className="memory"><Badge tone="success">Human-confirmed</Badge><h3>{m.summary}</h3><p>{m.resolution}</p><small>{new Date(m.created_at).toLocaleString()}</small></div>)
+                : <Notice tone="warning" role="alert">Incident memory unavailable: {memoryRead.error}</Notice>}
           </Panel>
         )}
         {tab === "providers" && <ProviderSettings providers={providers} encryptionConfigured={encryptionConfigured} loading={providersLoading} error={providersError} onRefresh={refreshProviders} />}

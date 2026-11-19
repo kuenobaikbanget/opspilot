@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import { SYSTEMD_STALE_AFTER_SECONDS, type HostSystemdStatus } from "@opspilot/contracts";
 import { api, ApiError } from "../lib/api";
+import { AsciiLoading } from "./ascii-card-reveal";
 import { Badge } from "./ui";
 
 export const systemdStates = {
@@ -70,7 +71,7 @@ export function HostSystemd({ hostId, refreshKey }: { hostId: string; refreshKey
   return (
     <section className="host-systemd" aria-labelledby={titleId}>
       <h3 id={titleId}>systemd status</h3>
-      {!result && !failed && <p className="muted small" role="status">Loading service status…</p>}
+      {!result && !failed && <AsciiLoading label="Loading service status…" lines={1} widths={["76%"]} />}
       {failed ? (
         <p className="muted small" role="status">Service refresh failed. {service ? "Showing the last received observation." : "Service status is unavailable."}</p>
       ) : result && (

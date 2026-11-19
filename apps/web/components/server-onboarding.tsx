@@ -3,6 +3,7 @@
 import type { AgentInstallConfig, HostList } from "@opspilot/contracts";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { buildAgentInstallCommand } from "../lib/agent-install";
+import { AsciiLoading } from "./ascii-card-reveal";
 import { Button, Field, Notice, Select } from "./ui";
 
 type Props = {
@@ -274,7 +275,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                 <div className="onboarding-step-body">
                   <p>Choose the Linux server you want to connect. Run the installer there yourself as root or with sudo. OpsPilot does not open an SSH session.</p>
                   <p>Requires amd64 or arm64 Linux with running systemd, Bash, curl, and CA certificates. The server must be able to reach the Hub over HTTPS.</p>
-                  {installConfig.status === "loading" && <p id={`${id}-config-status`} role="status">Loading installation configuration…</p>}
+                  {installConfig.status === "loading" && <AsciiLoading id={`${id}-config-status`} label="Loading installation configuration…" />}
                   {installConfig.status === "error" && (
                     <>
                       <Notice id={`${id}-config-status`} tone="warning" role="alert">
@@ -362,7 +363,9 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                       ))}
                     </dl>
                   )}
-                  <p id={`${id}-verification-status`} role="status">{verificationReason ?? "The selected agent is online and has sent fresh telemetry."}</p>
+                  {!fleet && !fleetError
+                    ? <AsciiLoading id={`${id}-verification-status`} label="Waiting for a current fleet observation." />
+                    : <p id={`${id}-verification-status`} role="status">{verificationReason ?? "The selected agent is online and has sent fresh telemetry."}</p>}
                   <div className="onboarding-actions">
                     <Button size="sm" onClick={() => goTo(1)}><Icon name="left" /> Back</Button>
                     <Button variant="primary" size="sm" disabled={verificationReason !== null} aria-describedby={`${id}-verification-status`} onClick={backToHosts}>Finish <Icon name="check" /></Button>

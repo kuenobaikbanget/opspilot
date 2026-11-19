@@ -3,7 +3,7 @@ import { finitePercent, SYSTEMD_STALE_AFTER_SECONDS, type EndpointMonitor, type 
 import { api } from "../lib/api";
 import { hasFreshSample, percent, pressure, resources, type Pressure, type Resource } from "../lib/host-pressure";
 import { HostSystemd, isSystemdReportCurrent, systemdCollection, systemdStates } from "./host-systemd";
-import { AsciiCardReveal, AsciiCardSkeleton } from "./ascii-card-reveal";
+import { AsciiCardReveal, AsciiCardSkeleton, AsciiLoading } from "./ascii-card-reveal";
 import { Badge, Button } from "./ui";
 
 type OverviewIncidentSummary = {
@@ -154,10 +154,7 @@ function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
       </AsciiCardReveal>
       <AsciiCardReveal className="overview-risk-services" loading={!serviceInfo} revealOnMount={false}>
         {!serviceInfo ? (
-          <div className="overview-service-skeleton" role="status">
-            <span className="sr-only" data-ascii="skip">Service · Loading…</span>
-            <AsciiCardSkeleton variant="scan" lines={1} widths={["72%"]} seed={11} />
-          </div>
+          <AsciiLoading className="overview-service-skeleton" label="Service · Loading…" lines={1} widths={["72%"]} seed={11} />
         ) : failed && !service ? (
           <span className="overview-meta">Service · Unavailable</span>
         ) : service ? (
@@ -221,17 +218,15 @@ function AdvisoryAnalysis({ incident, incidentsStale, incidentsLoading }: {
         </p>
       )}
       <AsciiCardReveal loading={Boolean(incident) && read.state === "loading"} revealOnMount={false}>
-        {!incident ? (
+        {!incident && !incidentsStale && incidentsLoading ? (
+          <AsciiLoading className="overview-ai-skeleton" label="Loading incident records…" />
+        ) : !incident ? (
           <p className="overview-meta" role="status">
             {incidentsStale ? "Cannot confirm a matching incident: incident records are unavailable or cached."
-              : incidentsLoading ? "Loading incident records…"
-                : "No incident for this resource on this device in the loaded records."}
+              : "No incident for this resource on this device in the loaded records."}
           </p>
         ) : read.state === "loading" ? (
-          <div className="overview-ai-skeleton" role="status">
-            <span className="sr-only" data-ascii="skip">Loading recorded AI analysis…</span>
-            <AsciiCardSkeleton variant="braille" lines={3} widths={["92%", "78%", "56%"]} seed={37} />
-          </div>
+          <AsciiLoading className="overview-ai-skeleton" label="Loading recorded AI analysis…" variant="braille" lines={3} widths={["92%", "78%", "56%"]} seed={37} />
         ) : read.state === "unavailable" ? (
           <p className="overview-meta" role="status">Could not load the incident’s investigation record.</p>
         ) : investigation?.result_json?.probable_cause ? (
@@ -315,11 +310,12 @@ function PressureInspector({
   );
 }
 
-function SummaryReading({ label, value, state }: { label: string; value: number | null; state?: "near" | "exceeded" }) {
+function SummaryReading({ label, value, state, loading }: { label: string; value: number | null; state?: "near" | "exceeded"; loading?: boolean }) {
   return (
     <div className="overview-summary-reading" data-pressure={value ? state : undefined}>
       <dt>{label}</dt>
-      <dd>{value === null ? <><span aria-hidden="true">—</span><span className="sr-only">Unavailable</span></> : value}</dd>
+      <dd>{loading ? <AsciiLoading label={`Loading ${label.toLowerCase()}…`} lines={1} widths={["2ch"]} />
+        : value === null ? <><span aria-hidden="true">—</span><span className="sr-only">Unavailable</span></> : value}</dd>
     </div>
   );
 }
@@ -444,10 +440,7 @@ function EndpointReachability({ rows, servicesError, checkingEndpointId, onCheck
         {servicesError ? (
           <p role="status">Endpoint reachability unavailable. {servicesError}</p>
         ) : !rows ? (
-          <div className="overview-ascii-loading" role="status">
-            <span className="sr-only" data-ascii="skip">Loading endpoint monitors…</span>
-            <AsciiCardSkeleton variant="scan" lines={3} widths={["46%", "94%", "82%"]} seed={23} />
-          </div>
+          <AsciiLoading className="overview-ascii-loading" label="Loading endpoint monitors…" lines={3} widths={["46%", "94%", "82%"]} seed={23} />
         ) : !rows.length ? (
           <p role="status">No endpoint monitors configured.</p>
         ) : (
@@ -631,10 +624,7 @@ export function ThresholdOverview({
           </h2>
           <AsciiCardReveal loading={fleetLoading} revealOnMount={true}>
             {fleetLoading ? (
-              <div className="overview-ascii-loading" role="status">
-                <span className="sr-only" data-ascii="skip">Loading fleet scope… Loading agent connectivity counts…</span>
-                <AsciiCardSkeleton variant="scan" lines={2} widths={["62%", "48%"]} seed={3} />
-              </div>
+              <AsciiLoading className="overview-ascii-loading" label="Loading fleet scope and agent connectivity counts…" widths={["62%", "48%"]} seed={3} />
             ) : (
               <>
                 <p>{fleet ? `${scope} · ${assessed} assessed against a configured limit` : "Could not load fleet scope"}</p>
@@ -662,15 +652,12 @@ export function ThresholdOverview({
         </div>
         <AsciiCardReveal loading={fleetLoading} revealOnMount={true}>
           {fleetLoading ? (
-            <div className="overview-summary-skeleton" role="status">
-              <span className="sr-only" data-ascii="skip">Loading threshold readings…</span>
-              <AsciiCardSkeleton variant="dither" lines={2} widths={["100%", "78%"]} seed={7} />
-            </div>
+            <AsciiLoading className="overview-summary-skeleton" label="Loading threshold readings…" variant="dither" widths={["100%", "78%"]} seed={7} />
           ) : (
             <dl className="overview-summary-readings">
               <SummaryReading label="At or above limit" value={assessed ? exceeded : null} state="exceeded" />
               <SummaryReading label="Near limit" value={assessed ? near : null} state="near" />
-              <SummaryReading label={incidentsStale && openIncidents !== null ? "Open incidents · cached" : "Open incidents"} value={openIncidents} />
+              <SummaryReading label={incidentsStale && openIncidents !== null ? "Open incidents · cached" : "Open incidents"} value={openIncidents} loading={openIncidents === null && !incidentsStale} />
             </dl>
           )}
         </AsciiCardReveal>
@@ -703,14 +690,14 @@ export function ThresholdOverview({
                 {[1, 2].map((index) => (
                   <div key={index} className="overview-risk-card">
                     <div className="overview-risk-skeleton-head">
-                      <AsciiCardSkeleton variant="scan" lines={2} widths={["42%", "32%"]} seed={13 + index} animate={false} />
+                      <AsciiCardSkeleton variant="scan" lines={2} widths={["42%", "32%"]} seed={13 + index} />
                     </div>
                     <div className="overview-risk-reading overview-risk-skeleton-body">
-                      <AsciiCardSkeleton variant="scan" lines={2} widths={["20%", "28%"]} seed={17 + index} animate={false} />
+                      <AsciiCardSkeleton variant="scan" lines={2} widths={["20%", "28%"]} seed={17 + index} />
                       <AsciiCardSkeleton variant="dither" lines={1} widths={["100%"]} seed={21 + index} />
                     </div>
                     <div className="overview-risk-services">
-                      <AsciiCardSkeleton variant="scan" lines={1} widths={["55%"]} seed={25 + index} animate={false} />
+                      <AsciiCardSkeleton variant="scan" lines={1} widths={["55%"]} seed={25 + index} />
                     </div>
                   </div>
                 ))}
@@ -755,12 +742,12 @@ export function ThresholdOverview({
             <div role="status">
               <span className="sr-only">Loading device details…</span>
               <div className="overview-inspector-head">
-                <AsciiCardSkeleton variant="scan" lines={1} widths={["50%"]} seed={43} animate={false} />
+                <AsciiCardSkeleton variant="scan" lines={1} widths={["50%"]} seed={43} />
               </div>
               <div className="overview-inspector-body">
-                <AsciiCardSkeleton variant="scan" lines={2} widths={["25%", "37%"]} seed={47} animate={false} />
+                <AsciiCardSkeleton variant="scan" lines={2} widths={["25%", "37%"]} seed={47} />
                 <AsciiCardSkeleton variant="dither" lines={1} widths={["100%"]} seed={51} />
-                <AsciiCardSkeleton variant="scan" lines={3} widths={["84%", "73%", "51%"]} seed={55} animate={false} />
+                <AsciiCardSkeleton variant="scan" lines={3} widths={["84%", "73%", "51%"]} seed={55} />
               </div>
             </div>
           ) : (
@@ -799,7 +786,7 @@ export function ThresholdOverview({
             <span className="sr-only" data-ascii="skip">Loading device inventory…</span>
             {[1, 2, 3].map((index) => (
               <div key={index} className="overview-inventory-skeleton-row">
-                <AsciiCardSkeleton variant="dither" animate={false} lines={2} widths={["58%", "86%"]} seed={41 + index} />
+                <AsciiCardSkeleton variant="dither" lines={2} widths={["58%", "86%"]} seed={41 + index} />
               </div>
             ))}
           </div>
