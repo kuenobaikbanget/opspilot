@@ -73,7 +73,11 @@
 .workspace-dock .dock-search { width: 62px; }
 .workspace-dock .dock-add { width: 45px; min-height: 45px; flex: none; padding: 4px; border-radius: 9px; }
 .dock-add svg { width: 22px; height: 22px; }
-.content { min-width: 0; padding-block: 28px calc(120px + env(safe-area-inset-bottom)); }
+.content {
+  --workspace-dock-clearance: calc(120px + env(safe-area-inset-bottom));
+  min-width: 0;
+  padding-block: 28px var(--workspace-dock-clearance);
+}
 .shell[data-setup="true"] .content { padding-block-end: var(--space-10); }
 .content:focus, .topbar h1:focus { outline: none; }
 
