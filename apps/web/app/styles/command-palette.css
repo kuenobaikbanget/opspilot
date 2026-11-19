@@ -1,26 +1,10 @@
-.dashboard-context:has(.command-trigger) {
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.dashboard-context > span { text-align: end; }
-
-.command-trigger.ui-button {
-  flex: none;
-  min-height: 32px;
-  border-color: var(--color-border);
-  background: transparent;
-  color: var(--color-text-muted);
-  font-weight: 500;
-}
-
-.command-trigger svg, .command-palette svg {
+.command-palette svg {
   width: 16px;
   height: 16px;
   flex: none;
 }
 
-.command-trigger kbd, .command-palette kbd {
+.command-palette kbd {
   padding: 0 var(--space-1);
   border: 1px solid var(--command-border, var(--color-border));
   border-radius: var(--radius-sm);
@@ -167,8 +151,7 @@ body:has(.command-palette[open]) { overflow: hidden; }
 .command-help .command-help-shortcut { margin-left: auto; border-color: transparent; }
 
 @media (max-width: 560px) {
-  .command-trigger.ui-button { min-height: 44px; }
-  .command-trigger kbd, .command-option-meta kbd, .command-help-shortcut { display: none; }
+  .command-option-meta kbd, .command-help-shortcut { display: none; }
   .command-palette { --command-top: var(--space-4); }
   .command-search { padding: var(--space-2) var(--space-3); }
   .command-filters { padding: var(--space-2) var(--space-3); }

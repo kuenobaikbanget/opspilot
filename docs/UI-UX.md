@@ -83,13 +83,13 @@ flowchart TD
   A --> C[Public design system]
 ```
 
-The workspace header shows the local scope, command search and admin controls. `Ctrl+K` / `Cmd+K` can jump to a destination or a loaded host by name. A fixed bottom dock shows Overview, Services, Hosts and Incidents; its plus action opens Add service. Setup pages keep the global header and use back links rather than the dock.
+The workspace header shows the local scope, command search and admin controls. A fixed bottom dock shows Overview, Services, Hosts and Incidents; its plus action opens Add service. Setup pages keep the global header and use back links rather than the dock.
 
 ### Command palette
 
-Open **Jump to…** or press `Ctrl+K` / `Cmd+K` from any signed-in dashboard view. The palette filters loaded hosts by name or ID, the latest loaded incidents by title, and quick actions by keyword. Suggestions come from loaded records; after an item is opened through the palette, up to three recent items replace suggestions for the current dashboard session.
+Open **Jump to…** in the header, use the desktop dock search, or press `Ctrl+K` / `Cmd+K` from any signed-in dashboard view. The mobile header keeps an icon-only search button. Search loaded hosts by name or ID, loaded incidents by title, and every workspace destination by name or keyword. Use the filters to narrow results. Up to three recently opened host or incident results replace suggestions for the current dashboard session.
 
-Use `↑` / `↓` to select, `Enter` to open, and `Esc` to dismiss and return focus. Host and incident results focus their existing inspector or detail. Quick actions open enrollment, provider settings, and incident memory without submitting a form. The **Services** filter explains that inventory and endpoint checks are not collected; it never shows sample services in the dashboard.
+Use `↑` / `↓` to select, `Enter` to open, and `Esc` to dismiss and return focus. Host and incident results focus the existing inspector or detail. Quick actions open Connect server, Provider settings, and Incident memory without submitting forms or generating an enrollment token. The **Services** filter links to the Services page, which shows the selected host's configured systemd unit and endpoint checks. It does not search individual units or endpoints.
 
 ## Implemented screens / states
 

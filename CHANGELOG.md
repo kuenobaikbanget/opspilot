@@ -4,6 +4,7 @@
 
 - Added opt-in, read-only status for one locally configured systemd service. Hosts and Services show the selected agent's measured state and observation time, including stale/offline, explicitly disabled and unavailable/unsupported states. Existing host telemetry and endpoint check behavior are unchanged. Apply migration 004 before deploying the new Hub.
 - Fixed the Web release image build by excluding the Home regression fixtures from the Docker build context. Local Web typechecking and the Home regression suite keep their existing scope.
+- Wired the signed-in command palette to the header, desktop dock, and Ctrl/Cmd+K. Search all workspace destinations and loaded hosts and incidents, navigate by keyboard, and reopen recent records. The enrollment shortcut opens Connect server without generating a token.
 
 ## Unreleased — 2026-11-18
 
@@ -29,7 +30,6 @@
 - Fixed the home audit findings: check the existing admin-session endpoint independently of incident loading, preserve host monitoring during incident-read failures, distinguish unavailable/cached incident counts and related records, and clear only the recovered source's error.
 - Increased shared controls and fleet action/disclosure targets to at least 44px on mobile/coarse-pointer devices while preserving compact fine-pointer desktop controls. Added isolated component regressions for initial/cached failures, recovery without hiding action errors, session-check failure/retry, unauthorized startup and expiry.
 - Six isolated Home regressions (33 assertions) and the Web typecheck passed. Chromium checks with local persisted demo data covered incident outage/recovery, keyboard/enrollment focus, 1440/1024/390/320px layouts, 44px mobile/coarse-pointer targets and synthesized horizontal touch scrolling. No password-login, physical-device, agent or paid-provider integration claim; see `docs/TESTING.md`.
-- Added a responsive Ctrl/Cmd+K command palette with local host and incident search, recently opened results, keyboard navigation, and quick links to enrollment, provider settings and incident memory. Service search explicitly reports unavailable inventory.
 
 ## Unreleased — 2026-11-17
 
