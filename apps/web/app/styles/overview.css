@@ -181,6 +181,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-input);
+  --ascii-surface: var(--color-input);
 }
 
 .overview-risk-card[data-selected="true"] {
@@ -574,6 +575,49 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-input);
+  --ascii-surface: var(--color-input);
+}
+
+.overview-ascii-reveal {
+  min-width: 0;
+}
+
+.overview-ascii-loading {
+  display: grid;
+  gap: var(--space-2);
+  padding-block: var(--space-2);
+}
+
+.overview-summary-skeleton {
+  min-width: 14rem;
+}
+
+.overview-risk-skeleton {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.overview-risk-skeleton-body {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.overview-service-skeleton {
+  padding-block: 0.125rem;
+}
+
+.overview-ai-skeleton {
+  padding-block: var(--space-1);
+}
+
+.overview-inventory-skeleton {
+  display: grid;
+}
+
+.overview-inventory-skeleton-row {
+  padding-block: var(--space-3);
+  border-top: 1px solid var(--color-border);
 }
 
 .overview-ai-head {

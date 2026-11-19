@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@opspilot/contracts": "workspace:*",
+    "ascii-reveal": "^0.3.0",
     "geist": "^1.4.2",
     "next": "^16.0.0",
     "react": "^19.0.0",

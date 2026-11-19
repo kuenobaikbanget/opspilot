@@ -46,4 +46,10 @@
   --duration-fast: 150ms;
   --duration-normal: 220ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ascii-accent: var(--color-accent);
+  --ascii-skeleton: var(--color-text-muted);
+  --ascii-glyph: var(--color-text-muted);
+  --ascii-flash: var(--color-accent-hover);
+  --ascii-font: var(--font-mono);
+  --ascii-surface: var(--color-surface);
 }

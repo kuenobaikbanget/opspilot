@@ -113,3 +113,36 @@ test("host history fetches only in Hosts and aborts when leaving", async () => {
   expect(afterLeaving).toBe(1);
   expect(historyAborted).toBe(true);
 });
+
+test("overview dashboard cards show ASCII skeletons while loading and clear cleanly without canvas 2D", async () => {
+  const { loadingState, midState, loadedState } = await scenario("ascii-loading-transition");
+  expect(loadingState.summarySkeletons).toBeGreaterThan(0);
+  expect(loadingState.riskSkeletons).toBeGreaterThan(0);
+  expect(loadingState.endpointSkeletons).toBeGreaterThan(0);
+  expect(loadingState.inventorySkeletons).toBeGreaterThan(0);
+  expect(loadingState.animatedSkeletons).toBe(0);
+  expect(loadingState.overlays).toBe(0);
+
+  expect(midState.summarySkeletons).toBe(0);
+  expect(midState.endpointSkeletons).toBe(0);
+  expect(midState.inventorySkeletons).toBe(0);
+  expect(midState.serviceSkeletons).toBeGreaterThan(0);
+  expect(midState.serviceStatus).toContain("Service · Loading…");
+  expect(midState.advisoryBrailleSkeletons).toBeGreaterThan(0);
+  expect(midState.advisoryStatus).toContain("AI hypothesis (advisory)");
+  expect(midState.advisoryStatus).toContain("Loading recorded AI analysis…");
+
+  expect(loadedState.remainingSkeletons).toBe(0);
+  expect(loadedState.riskServices).toContain("mock-edge-proxy.service");
+  expect(loadedState.advisory).toContain("AI hypothesis (advisory)");
+  expect(loadedState.advisory).toContain("Sustained worker load saturated CPU.");
+});
+
+test("failed fleet and endpoint reads clear ASCII skeletons and report truthful errors", async () => {
+  const { remainingSkeletons, overlays, summaryText, endpointText, inventoryText } = await scenario("ascii-error-safety");
+  expect(remainingSkeletons).toBe(0);
+  expect(overlays).toBe(0);
+  expect(summaryText).toContain("Could not load fleet scope");
+  expect(endpointText).toContain("Endpoint reachability unavailable");
+  expect(inventoryText).toContain("Device inventory unavailable.");
+});
