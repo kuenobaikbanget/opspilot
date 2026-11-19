@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 import type { Host, HostList, HostMetric } from "@opspilot/contracts";
 import { AsciiLoading } from "./ascii-card-reveal";
@@ -72,90 +72,185 @@ async function request(path: string, signal?: AbortSignal, method = "GET") {
   return value;
 }
 
-function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resource: Resource }) {
+type HistoryMode = Resource | "all";
+
+const hasReading = (value: number | null): value is number => value != null && Number.isFinite(value);
+
+function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resource: HistoryMode }) {
   const sliderId = useId();
   const [cursorTime, setCursorTime] = useState<string | null>(null);
-  const label = resources.find(r => r.key === resource)!.label;
-  const rows = [...samples].sort((a, b) => Date.parse(a.sampled_at) - Date.parse(b.sampled_at));
-  const valid = rows.filter(r => r[resource] != null && Number.isFinite(r[resource]));
+  const [showTooltip, setShowTooltip] = useState(false);
+  useEffect(() => {
+    if (!showTooltip) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowTooltip(false);
+    };
+    window.addEventListener("keydown", dismiss);
+    return () => window.removeEventListener("keydown", dismiss);
+  }, [showTooltip]);
+  const stacked = resource === "all";
+  const series = stacked ? resources : resources.filter(r => r.key === resource);
+  const title = stacked ? "Resource history" : `${series[0].label} utilization`;
+  const rows = useMemo(() => samples
+    .map(sample => ({ sample, timestamp: Date.parse(sample.sampled_at) }))
+    .sort((a, b) => a.timestamp - b.timestamp), [samples]);
   if (!rows.length) {
-    return <p className="empty">No {label} samples received yet. History is unavailable.</p>;
+    return <p className="empty">No {stacked ? "resource" : series[0].label} samples received yet. History is unavailable.</p>;
   }
 
-  const start = Date.parse(rows[0].sampled_at);
-  const end = Date.parse(rows[rows.length - 1].sampled_at);
-  const duration = end - start;
-  const width = 480;
+  const first = rows[0];
+  const last = rows[rows.length - 1];
+  const duration = last.timestamp - first.timestamp;
+  const svgWidth = 548;
+  const svgHeight = 232;
+  const left = 54;
+  const width = 528 - left;
+  const top = 16;
   const height = 180;
-  const x = (t: number) => 48 + ((t - start) / (duration || 1)) * width;
-  const y = (n: number) => 16 + height * (1 - n / 100);
-  const cursorIndex = rows.findIndex(r => r.sampled_at === cursorTime);
+  const max = stacked ? 300 : 100;
+  const x = (t: number) => left + ((t - first.timestamp) / (duration || 1)) * width;
+  const y = (n: number) => top + height * (1 - n / max);
+  const baseline = y(0);
+  const cursorIndex = rows.findIndex(({ sample }) => sample.sampled_at === cursorTime);
   const index = cursorIndex < 0 ? rows.length - 1 : cursorIndex;
-  const observation = rows[index];
-  const cursorX = x(Date.parse(observation.sampled_at));
-  const measured = observation[resource] != null && Number.isFinite(observation[resource]);
+  const observation = rows[index].sample;
+  const observationTime = stamp(observation.sampled_at);
+  const readings = series.map(({ key, label }) => {
+    const reading = observation[key];
+    const value = hasReading(reading) ? reading : null;
+    return { key, label, value, text: value === null ? "Unavailable" : percent(value) };
+  });
+  const measured = readings.filter(({ value }) => value !== null).length;
+  const partial = stacked && measured > 0 && measured < series.length;
 
   let interval = 15000;
   for (let i = 1; i < rows.length; i++) {
-    const gap = Date.parse(rows[i].sampled_at) - Date.parse(rows[i - 1].sampled_at);
+    const gap = rows[i].timestamp - rows[i - 1].timestamp;
     if (gap > 0) interval = Math.min(interval, gap);
   }
-  const barWidth = Math.max(1, Math.min(24, duration ? (width * interval) / duration * 0.72 : 24));
+  const barWidth = Math.min(24, duration ? (width * interval) / duration * 0.72 : 24);
+  const measuredSamples = rows.filter(({ sample }) => series.some(({ key }) => hasReading(sample[key]))).length;
   const time = (s: string) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const columnX = x(rows[index].timestamp);
+  const observationContent = (
+    <>
+      <div className="history-observation-meta">
+        <time dateTime={observation.sampled_at}>{observationTime}</time>
+        {partial && <span>Partial observation</span>}
+      </div>
+      <dl className="history-readings">
+        {readings.map(({ key, label, value, text }) => (
+          <div key={key} data-series={key}>
+            <dt>{label}</dt>
+            <dd className={value === null ? "measurement--unknown" : undefined}>{text}</dd>
+          </div>
+        ))}
+      </dl>
+    </>
+  );
 
   return (
     <figure className="resource-history">
       <figcaption>
-        <h3>{label} utilization</h3>
+        <h3>{title}</h3>
         <span>{duration ? `${Math.round(duration / 60000)} min` : "Single sample"} · Raw samples</span>
       </figcaption>
-      <div className="history-observation">
-        <strong>{percent(observation[resource])}</strong>
-        <time dateTime={observation.sampled_at}>{stamp(observation.sampled_at)}</time>
-      </div>
-      <svg
-        viewBox="0 0 548 232"
-        role="img"
-        aria-label={`${label} usage, 0 to 100 percent. ${valid.length} measured samples from ${stamp(rows[0].sampled_at)} to ${stamp(rows[rows.length - 1].sampled_at)}. Each bar is one observation; missing intervals remain empty.`}
-        onPointerMove={event => {
-          if (event.pointerType !== "mouse") return;
-          const bounds = event.currentTarget.getBoundingClientRect();
-          const position = (event.clientX - bounds.left) / bounds.width * 548;
-          const timestamp = start + Math.max(0, Math.min(1, (position - 48) / width)) * duration;
-          let nearest = 0;
-          for (let i = 1; i < rows.length; i++) {
-            if (Math.abs(Date.parse(rows[i].sampled_at) - timestamp) < Math.abs(Date.parse(rows[nearest].sampled_at) - timestamp)) nearest = i;
-          }
-          setCursorTime(rows[nearest].sampled_at);
-        }}
-      >
-        {[0, 50, 100].map(value => (
-          <g key={value}>
-            <text x="0" y={y(value) + 4}>{value}%</text>
-            <line x1="48" x2="544" y1={y(value)} y2={y(value)} className="chart-grid" />
-          </g>
-        ))}
-        {valid.map(r => (
-          <rect
-            key={r.sampled_at}
-            x={x(Date.parse(r.sampled_at)) - barWidth / 2}
-            y={y(r[resource])}
-            width={barWidth}
-            height={(height * r[resource]) / 100}
-            rx="1.5"
-            className="chart-bar"
-            data-active={r.sampled_at === observation.sampled_at}
+      <div className="history-observation">{observationContent}</div>
+      {stacked && <p className="history-scale tiny">Stack height (percentage points) · Not overall host utilization</p>}
+      <div className="history-plot">
+        <svg
+          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+          role="img"
+          aria-label={`${title}, 0 to ${max} ${stacked ? "percentage points" : "percent"}. ${measuredSamples} samples with measurements from ${stamp(first.sample.sampled_at)} to ${stamp(last.sample.sampled_at)}. Each column is one observation; missing intervals remain empty.`}
+          onPointerMove={event => {
+            if (event.pointerType !== "mouse") return;
+            const bounds = event.currentTarget.getBoundingClientRect();
+            const position = (event.clientX - bounds.left) / bounds.width * svgWidth;
+            const vertical = (event.clientY - bounds.top) / bounds.height * svgHeight;
+            if (vertical < top || vertical > baseline) {
+              setShowTooltip(false);
+              return;
+            }
+            const timestamp = first.timestamp + Math.max(0, Math.min(1, (position - left) / width)) * duration;
+            let nearest = 0;
+            for (let i = 1; i < rows.length; i++) {
+              if (Math.abs(rows[i].timestamp - timestamp) < Math.abs(rows[nearest].timestamp - timestamp)) nearest = i;
+            }
+            const overColumn = Math.abs(position - x(rows[nearest].timestamp)) <= barWidth / 2 + 2;
+            setShowTooltip(overColumn);
+            if (overColumn) setCursorTime(rows[nearest].sample.sampled_at);
+          }}
+          onPointerLeave={() => setShowTooltip(false)}
+        >
+          {(stacked ? [0, 100, 200, 300] : [0, 50, 100]).map(value => (
+            <g key={value}>
+              <text x="0" y={y(value) + 4}>{value}{stacked ? "" : "%"}</text>
+              <line x1={left - 14} x2="544" y1={y(value)} y2={y(value)} className="chart-grid" />
+            </g>
+          ))}
+          {rows.map(({ sample, timestamp }, rowIndex) => {
+            const center = x(timestamp);
+            let level = 0;
+            let hasZero = false;
+            const segments = series.map(({ key }) => {
+              const value = sample[key];
+              if (!hasReading(value)) return null;
+              if (value === 0) {
+                hasZero = true;
+                return null;
+              }
+              level += value;
+              return (
+                <rect
+                  key={key}
+                  x={center - barWidth / 2}
+                  y={y(level)}
+                  width={barWidth}
+                  height={height * value / max}
+                  rx={stacked ? undefined : 1.5}
+                  className="chart-bar"
+                  data-series={key}
+                />
+              );
+            });
+            return (
+              <g key={sample.sampled_at}>
+                {segments}
+                {level === 0 && hasZero && (
+                  <line x1={center - barWidth / 2} x2={center + barWidth / 2} y1={baseline} y2={baseline} className="chart-zero" />
+                )}
+                {rowIndex === index && (measured ? (
+                  <rect
+                    x={center - barWidth / 2 - 1.5}
+                    y={y(level) - 2}
+                    width={barWidth + 3}
+                    height={baseline - y(level) + 4}
+                    rx="2"
+                    className="chart-selection"
+                  />
+                ) : (
+                  <line x1={center} x2={center} y1={y(max)} y2={baseline} className="chart-cursor" />
+                ))}
+              </g>
+            );
+          })}
+          <text x={left} y="224">{time(first.sample.sampled_at)}</text>
+          {duration > 0 && <text x={left + width} y="224" textAnchor="end">{time(last.sample.sampled_at)}</text>}
+        </svg>
+        {showTooltip && (
+          <div
+            className="history-tooltip"
+            data-side={columnX > svgWidth / 2 ? "left" : "right"}
+            aria-hidden="true"
+            style={{
+              "--column-x": `${columnX / svgWidth * 100}%`,
+              "--column-y": `${y(readings.reduce((level, { value }) => level + (value ?? 0), 0)) / svgHeight * 100}%`,
+            } as CSSProperties}
           >
-            <title>{stamp(r.sampled_at)} · {percent(r[resource])}</title>
-          </rect>
-        ))}
-        <line x1={cursorX} x2={cursorX} y1="16" y2="196" className="chart-cursor" />
-        {measured && <circle cx={cursorX} cy={y(observation[resource])} r="4" className="chart-cursor-point" />}
-        <text x="48" y="224">{time(rows[0].sampled_at)}</text>
-        {duration > 0 && (
-          <text x="528" y="224" textAnchor="end">{time(rows[rows.length - 1].sampled_at)}</text>
+            {observationContent}
+          </div>
         )}
-      </svg>
+      </div>
       <div className="history-scrubber">
         <label htmlFor={sliderId}>Inspect observation</label>
         <span>{index + 1} / {rows.length}</span>
@@ -166,17 +261,20 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
           max={rows.length - 1}
           value={index}
           disabled={rows.length === 1}
-          onChange={event => setCursorTime(rows[Number(event.target.value)].sampled_at)}
-          aria-valuetext={`${stamp(observation.sampled_at)}: ${measured ? percent(observation[resource]) : "No measurement"}`}
+          onChange={event => {
+            setShowTooltip(false);
+            setCursorTime(rows[Number(event.target.value)].sample.sampled_at);
+          }}
+          aria-valuetext={`${observationTime}${partial ? ", partial observation" : ""}: ${readings.map(({ label, text }) => `${label} ${text}`).join(", ")}`}
         />
       </div>
       <p className="tiny">
-        {valid.length} measurements · No aggregation · {Intl.DateTimeFormat().resolvedOptions().timeZone}
+        {measuredSamples} samples with measurements · No aggregation · {Intl.DateTimeFormat().resolvedOptions().timeZone}
         <br />
-        <time dateTime={rows[0].sampled_at}>{stamp(rows[0].sampled_at)}</time> –{" "}
-        <time dateTime={rows[rows.length - 1].sampled_at}>{stamp(rows[rows.length - 1].sampled_at)}</time>
+        <time dateTime={first.sample.sampled_at}>{stamp(first.sample.sampled_at)}</time> –{" "}
+        <time dateTime={last.sample.sampled_at}>{stamp(last.sample.sampled_at)}</time>
       </p>
-      {!valid.length && <p>{label} measurements unavailable for this range.</p>}
+      {!measuredSamples && <p>{stacked ? "Resource" : series[0].label} measurements unavailable for this range.</p>}
     </figure>
   );
 }
@@ -206,7 +304,7 @@ export function HostWorkspace({
   selectedRef.current = selected;
   const [history, setHistory] = useState<{ id: string; samples: HostMetric[] } | null>(null);
   const [historyError, setHistoryError] = useState("");
-  const [resource, setResource] = useState<Resource>("disk_percent");
+  const [resource, setResource] = useState<HistoryMode>("disk_percent");
   const [now, setNow] = useState(Date.now());
   const inspectorHeading = useRef<HTMLHeadingElement>(null);
 
@@ -500,7 +598,7 @@ export function HostWorkspace({
           ) : (
             <>
               <div className="inspector-resources" role="group" aria-label="Resource history">
-                <span className="sr-only">Choose a resource to view its history</span>
+                <span className="sr-only">Choose one resource or view all three as stacked bars</span>
                 {resources.map(({ key, label }) => (
                   <Button
                     key={key}
@@ -519,6 +617,16 @@ export function HostWorkspace({
                     <span className="resource-label">{label}</span>
                   </Button>
                 ))}
+                <Button
+                  variant="ghost"
+                  className="all-resources"
+                  aria-pressed={resource === "all"}
+                  onClick={() => {
+                    if (resource !== "all") selectWithTransition(() => setResource("all"));
+                  }}
+                >
+                  <span className="resource-label">All</span>
+                </Button>
               </div>
 
               <p className="tiny inspector-sample">
