@@ -200,11 +200,12 @@ export default function Home() {
   }
 
   const loadDetail = useCallback(async (id: string) => {
+    const generation = sessionGeneration.current;
     try {
       const result: Detail = await api(`/incidents/${id}`);
-      if (selectedIncident.current === id) setDetail(result);
+      if (generation === sessionGeneration.current && selectedIncident.current === id) setDetail(result);
     } catch (e: unknown) {
-      if (selectedIncident.current === id) setError(e instanceof Error ? e.message : String(e));
+      if (generation === sessionGeneration.current && selectedIncident.current === id) setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
@@ -509,7 +510,7 @@ export default function Home() {
                 </form>}
             </section>
             {!detail && <Panel className="incident-placeholder"><p className="muted">{selected ? "Loading incident detail…" : "Select an incident to review measured evidence and investigation activity."}</p></Panel>}
-            {detail && (
+            {detail && detail.incident.id === selected && (
               <Panel className="detail" role="region" aria-labelledby="incident-detail-title">
                 <div className="panel-head"><div><h2 id="incident-detail-title" tabIndex={-1}>{detail.incident.title}</h2><p>{detail.incident.hostname} · {categoryLabel(detail.incident.category)}</p></div><Badge tone={detail.incident.status === "open" ? "danger" : "neutral"}>{detail.incident.status}</Badge></div>
                 <div className="incident-context">
