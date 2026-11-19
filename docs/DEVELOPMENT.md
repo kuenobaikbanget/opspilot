@@ -21,6 +21,43 @@ bun run typecheck           # TypeScript checks
 
 Backend can be run individually with `bun run dev:hub`, `bun run dev:worker`, `bun run dev:web`. Ensure the root `.env` is exported/loaded in each isolated process.
 
+## Isolated worktree development
+
+Child git/Orca worktrees should not run `bun run dev` on the default ports (`3001`/`3100`/`4102`), which can collide with `main` or share worker job polling against the same PostgreSQL database.
+
+```bash
+# Full-stack worktree runner (auto-probes free ports starting at 3200/3201; omits Worker by default)
+bun run dev:worktree
+
+# Optional flags: explicit ports, host, env file, worker opt-in, or dry-run
+bun run dev:worktree -- --web-port 3210 --hub-port 3211 --env-file .env.worktree
+bun run dev:worktree -- --with-worker
+bun run dev:worktree -- --dry-run
+
+# Mock UI worktree runner (starts Mock API from 4202 + Web from 3200; no .env or PostgreSQL required)
+bun run dev:worktree:mock
+bun run dev:worktree:mock -- --scenario empty --dry-run
+```
+
+- `dev:worktree` overrides `PORT`, `ALLOWED_ORIGIN`, and `HUB_INTERNAL_URL` in child processes so `.env` defaults do not leak across worktrees.
+- `@opspilot/worker` is omitted by default because `apps/worker/src/index.ts` polls `DATABASE_URL` with `SKIP LOCKED` and competes with `main`'s worker. Pass `--with-worker` only when testing worker behavior against an isolated database.
+- Trapping `SIGINT`, `SIGTERM`, and `SIGHUP` stops all spawned child process groups cleanly.
+
+### Worktree process cleanup and Orca Repo Settings
+
+Use `worktree:cleanup` to stop any lingering processes whose working directory (`cwd`) or command line targets the worktree (Linux `/proc`; safely no-ops on non-Linux, and excludes PID `<= 1`, self, and all ancestor PIDs such as Orca):
+
+```bash
+bun run worktree:cleanup -- --dry-run --json
+bun run worktree:cleanup -- --path /path/to/worktree
+```
+
+Recommended Orca **Repo Settings**:
+
+- **Setup script**: install dependencies only (`bun install --frozen-lockfile`). Do **not** run `bun run dev` on default ports inside child setup.
+- **Archive script**: clean up orphaned worktree processes before archiving (`bun run worktree:cleanup`).
+- Check for orphaned listeners across worktrees with `orca ports --all`.
+
 ## Dashboard mock server
 
 Run these in separate terminals from the repository root:
