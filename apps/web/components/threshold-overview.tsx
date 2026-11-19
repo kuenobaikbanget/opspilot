@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { finitePercent, type EndpointMonitor, type Host, type HostList } from "@opspilot/contracts";
+import { finitePercent, SYSTEMD_STALE_AFTER_SECONDS, type EndpointMonitor, type Host, type HostList, type HostSystemdStatus } from "@opspilot/contracts";
 import { api } from "../lib/api";
 import { hasFreshSample, percent, pressure, resources, type Pressure, type Resource } from "../lib/host-pressure";
+import { HostSystemd, isSystemdReportCurrent, systemdCollection, systemdStates } from "./host-systemd";
 import { Badge, Button } from "./ui";
 
 export type OverviewIncidentSummary = {
@@ -38,7 +39,10 @@ type Props = {
   onOpenIncident: (id: string) => void;
   onInspectHost: (id: string, resource?: Resource) => void;
   onBrowseHosts: () => void;
+  refreshKey?: number;
 };
+
+type HostServiceEntry = { status: HostSystemdStatus | null; failed: boolean };
 
 type Risk = { host: Host; reading: Pressure };
 
@@ -100,13 +104,24 @@ function RiskBadge({ reading }: { reading: Pressure }) {
   return <Badge tone="warning">Near limit</Badge>;
 }
 
-function RiskCard({ risk, selected, inspectorId, onSelect }: {
+function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
   risk: Risk;
+  serviceInfo?: HostServiceEntry;
+  now: number;
   selected: boolean;
   inspectorId: string;
   onSelect: () => void;
 }) {
   const { host, reading } = risk;
+  const status = serviceInfo?.status;
+  const service = status?.service;
+  const failed = Boolean(serviceInfo?.failed);
+  const expired = Boolean(
+    status?.report?.current &&
+    now - Date.parse(status.checked_at) >= SYSTEMD_STALE_AFTER_SECONDS * 1000 + Date.parse(status.report.observed_at) - Date.parse(status.checked_at),
+  );
+  const fresh = service?.freshness === "fresh" && isSystemdReportCurrent(status, expired, failed);
+
   return (
     <li className="overview-risk-card" data-pressure={reading.state} data-selected={selected}>
       <Button variant="ghost" className="overview-risk-select" aria-controls={inspectorId} aria-pressed={selected} onClick={onSelect}>
@@ -124,6 +139,25 @@ function RiskCard({ risk, selected, inspectorId, onSelect }: {
           <div><dt>Margin</dt><dd>{marginLabel(reading.headroom)}</dd></div>
         </dl>
         <ThresholdBar share={limitShare(reading)} />
+        <div className="overview-risk-services">
+          {!serviceInfo ? (
+            <span className="overview-meta">Service · Loading…</span>
+          ) : failed && !service ? (
+            <span className="overview-meta">Service · Unavailable</span>
+          ) : service ? (
+            <div className="overview-risk-service">
+              <span className="overview-meta">Service</span>
+              <strong>{service.name}</strong>
+              <Badge tone={fresh ? systemdStates[service.state].tone : "neutral"} dot>
+                {systemdStates[service.state].label}{fresh ? "" : " · Stale"}
+              </Badge>
+            </div>
+          ) : status?.report && status.report.status !== "observed" ? (
+            <span className="overview-meta">{systemdCollection[status.report.status]}</span>
+          ) : (
+            <span className="overview-meta">Service · Not reported</span>
+          )}
+        </div>
       </div>
     </li>
   );
@@ -131,6 +165,7 @@ function RiskCard({ risk, selected, inspectorId, onSelect }: {
 
 function PressureInspector({
   risk,
+  refreshKey,
   incident,
   investigation,
   investigationLoading,
@@ -138,6 +173,7 @@ function PressureInspector({
   onOpenIncident,
 }: {
   risk: Risk;
+  refreshKey: number;
   incident: OverviewIncidentSummary | null;
   investigation: InvestigationSummary | null;
   investigationLoading: boolean;
@@ -169,6 +205,7 @@ function PressureInspector({
           <div><dt>Measured sample</dt><dd><SampleTime value={host.sampled_at} /></dd></div>
           <div><dt>Agent connection</dt><dd>Online</dd></div>
         </dl>
+        <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />
         <section className="overview-ai-card" aria-label="Advisory AI analysis">
           <div className="overview-ai-head">
             <span className="overview-meta">AI hypothesis (advisory)</span>
@@ -292,9 +329,11 @@ export function ThresholdOverview({
   onOpenIncident,
   onInspectHost,
   onBrowseHosts,
+  refreshKey = 0,
 }: Props) {
   const [clock, setClock] = useState(Date.now);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hostServices, setHostServices] = useState<Record<string, HostServiceEntry>>({});
   const [incidentDetails, setIncidentDetails] = useState<Record<string, InvestigationSummary | null>>({});
   const [loadingIncidentId, setLoadingIncidentId] = useState<string | null>(null);
   const inspectorId = useId();
@@ -333,6 +372,42 @@ export function ThresholdOverview({
     return () => window.clearTimeout(timer);
   }, [nextExpiry]);
   risks.sort((a, b) => a.reading.headroom - b.reading.headroom || a.host.hostname.localeCompare(b.host.hostname));
+  const riskHostKeys = risks.map(r => r.host.id).join(",");
+
+  useEffect(() => {
+    const ids = riskHostKeys ? riskHostKeys.split(",") : [];
+    if (!ids.length) return;
+    let active = true;
+
+    async function load() {
+      const entries = await Promise.all(
+        ids.map(async (id): Promise<[string, HostServiceEntry]> => {
+          try {
+            const status: HostSystemdStatus = await api(`/hosts/${id}/services`);
+            return [id, { status, failed: false }];
+          } catch {
+            return [id, { status: null, failed: true }];
+          }
+        }),
+      );
+      if (!active) return;
+      setHostServices(prev => {
+        const next = { ...prev };
+        for (const [id, entry] of entries) {
+          next[id] = entry.failed && prev[id]?.status ? { status: prev[id].status, failed: true } : entry;
+        }
+        return next;
+      });
+    }
+
+    void load();
+    const poll = setInterval(() => void load(), 10_000);
+    return () => {
+      active = false;
+      clearInterval(poll);
+    };
+  }, [riskHostKeys, refreshKey]);
+
   const selected = risks.find(({ host }) => host.id === selectedId) ?? risks[0];
   const selectedIncident = selected
     ? incidents.find(i => i.agent_id === selected.host.id && i.status === "open")
@@ -408,6 +483,8 @@ export function ThresholdOverview({
                 <RiskCard
                   key={risk.host.id}
                   risk={risk}
+                  serviceInfo={hostServices[risk.host.id]}
+                  now={now}
                   selected={selected?.host.id === risk.host.id}
                   inspectorId={inspectorId}
                   onSelect={() => {
@@ -478,7 +555,9 @@ export function ThresholdOverview({
           <h2 id="overview-inspector-heading" className={selected ? "sr-only" : undefined}>Pressure inspector</h2>
           {selected ? (
             <PressureInspector
+              key={selected.host.id}
               risk={selected}
+              refreshKey={refreshKey}
               incident={selectedIncident}
               investigation={selectedIncident ? (incidentDetails[selectedIncident.id] ?? null) : null}
               investigationLoading={Boolean(selectedIncident && loadingIncidentId === selectedIncident.id && !(selectedIncident.id in incidentDetails))}

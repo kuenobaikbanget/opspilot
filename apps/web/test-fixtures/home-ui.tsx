@@ -8,7 +8,10 @@ let sessionStatus = scenario === "unauthorized" ? 401 : scenario === "session-re
 let incidentStatus = scenario === "cold-failure" || scenario === "recovery" ? 503 : 200;
 const requests: string[] = [];
 const hostId = "d0000000-0000-4000-8000-000000000001";
-const timestamp = "2026-11-18T00:00:00.000Z";
+const timestamp = scenario === "overview-services" || scenario === "overview-services-error"
+  ? new Date().toISOString()
+  : "2026-11-18T00:00:00.000Z";
+const hostOnline = scenario === "overview-services" || scenario === "overview-services-error";
 const incident = {
   id: "d0000000-0000-4000-8000-000000000002",
   title: "Fixture CPU incident",
@@ -39,8 +42,8 @@ const fixtureFetch = async (input: RequestInfo | URL) => {
       break;
     case "/api/hosts":
       value = {
-        hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: "offline", created_at: timestamp, last_seen_at: timestamp, sampled_at: timestamp, cpu_percent: 82, memory_percent: 40, disk_percent: 25 }],
-        total: 1, online: 0, limit: 100, observed_at: timestamp, stale_after_seconds: 60,
+        hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: hostOnline ? "online" : "offline", created_at: timestamp, last_seen_at: timestamp, sampled_at: timestamp, cpu_percent: hostOnline ? 94 : 82, memory_percent: 40, disk_percent: 25 }],
+        total: 1, online: hostOnline ? 1 : 0, limit: 100, observed_at: timestamp, stale_after_seconds: 60,
         thresholds: { cpu_percent: 90, memory_percent: 90, disk_percent: 90 },
       };
       break;
@@ -48,7 +51,32 @@ const fixtureFetch = async (input: RequestInfo | URL) => {
       value = [];
       break;
     case `/api/hosts/${hostId}/services`:
-      value = { agent_id: hostId, online: false, checked_at: timestamp, report: null, service: null };
+      if (scenario === "overview-services-error") {
+        status = 503;
+        value = { error: "Fixture systemd outage" };
+        break;
+      }
+      value = hostOnline
+        ? {
+            agent_id: hostId,
+            online: true,
+            checked_at: timestamp,
+            report: { status: "observed", observed_at: timestamp, current: true },
+            service: {
+              id: "d0000000-0000-4000-8000-000000000003",
+              agent_id: hostId,
+              name: "mock-edge-proxy.service",
+              runtime: "systemd",
+              source: "agent_systemd",
+              state: "running",
+              observed_at: timestamp,
+              freshness: "fresh",
+            },
+          }
+        : { agent_id: hostId, online: false, checked_at: timestamp, report: null, service: null };
+      break;
+    case `/api/incidents/${incident.id}`:
+      value = { incident, evidence: [], investigations: [] };
       break;
     case "/api/ai/providers":
       value = { providers: [], encryptionConfigured: false };
@@ -129,6 +157,13 @@ try {
       break;
     case "auth-disabled":
       console.log(JSON.stringify({ initial, requests }));
+      break;
+    case "overview-services":
+    case "overview-services-error":
+      console.log(JSON.stringify({
+        riskServices: document.querySelector(".overview-risk-services")?.textContent,
+        inspectorSystemd: document.querySelector(".overview-inspector .host-systemd")?.textContent,
+      }));
       break;
     default:
       throw new Error(`Unknown scenario: ${scenario}`);

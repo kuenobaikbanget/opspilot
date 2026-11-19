@@ -79,3 +79,16 @@ test("when dev auth is disabled, the dashboard opens without login and omits sig
   expect(initial.signOutVisible).toBe(false);
   expect(requests).toContain("/api/auth/me");
 });
+
+test("overview risk card and pressure inspector display the host systemd service and fail truthfully", async () => {
+  const ok = await scenario("overview-services");
+  expect(ok.riskServices).toContain("mock-edge-proxy.service");
+  expect(ok.riskServices).toContain("Running");
+  expect(ok.inspectorSystemd).toContain("mock-edge-proxy.service");
+  expect(ok.inspectorSystemd).toContain("Fresh");
+
+  const failed = await scenario("overview-services-error");
+  expect(failed.riskServices).toContain("Unavailable");
+  expect(failed.riskServices).not.toContain("Running");
+  expect(failed.inspectorSystemd).toContain("Service status is unavailable.");
+});
