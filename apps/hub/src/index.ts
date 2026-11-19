@@ -21,21 +21,26 @@ import {
 import {
   checkPassword,
   createSession,
+  isAuthDisabled,
   isAuthed,
   logoutCookie,
   sessionCookie,
 } from "./auth";
 import { audit, db } from "./db";
-import { createIncident } from "./incidents";
+import { createIncident, hostThresholds } from "./incidents";
 import { readAgentInstallConfig } from "./agent-install";
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
+import { serviceRoutes } from "./services";
 
 const agentInstallerUrl = new URL("../../../infra/install/agent.sh", import.meta.url);
 
 const port = Number(process.env.PORT || 3001);
 if (process.env.NODE_ENV === "production" && !process.env.ADMIN_PASSWORD_HASH) {
   throw new Error("ADMIN_PASSWORD_HASH required in production");
+}
+if (isAuthDisabled()) {
+  console.warn("WARNING: Admin login is disabled (DISABLE_AUTH=true, non-production only)");
 }
 
 
@@ -74,6 +79,9 @@ async function router(req: Request): Promise<Response> {
   }
 
   if (path === "/api/auth/login" && method === "POST") {
+    if (isAuthDisabled()) {
+      return j({ ok: true, authDisabled: true });
+    }
     const data = await body(req);
     const password = String(data.password || "");
     if (password.length > 256) {
@@ -92,14 +100,16 @@ async function router(req: Request): Promise<Response> {
   }
   const providerResponse = await providerRoutes(req, path, method);
   if (providerResponse) return providerResponse;
+  const serviceResponse = await serviceRoutes(req, path, method);
+  if (serviceResponse) return serviceResponse;
 
 
   if (path === "/api/auth/me" && method === "GET") {
-    return j({ authenticated: true, role: "admin" });
+    return j({ authenticated: true, role: "admin", authDisabled: isAuthDisabled() });
   }
 
   if (path === "/api/auth/logout" && method === "POST") {
-    return j({ ok: true }, 200, { "Set-Cookie": logoutCookie() });
+    return j({ ok: true }, 200, isAuthDisabled() ? {} : { "Set-Cookie": logoutCookie() });
   }
 
 
@@ -136,6 +146,7 @@ async function router(req: Request): Promise<Response> {
       limit,
       observed_at: new Date().toISOString(),
       stale_after_seconds: 60,
+      thresholds: hostThresholds(),
     };
     return j(result);
   }
@@ -401,7 +412,7 @@ const server = Bun.serve<SocketData>({
         if (!agentId) {
           return invalid("Invalid agent identity", 401);
         }
-        if (server.upgrade(req, { data: { agentId } })) {
+        if (server.upgrade(req, { data: { agentId, sessionId: crypto.randomUUID() } })) {
           return;
         }
         return invalid("Upgrade failed", 400);

@@ -1,7 +1,18 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+/** Returns true only in non-production when `DISABLE_AUTH=true`; throws if enabled in production. */
+export function isAuthDisabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const disabled = env.DISABLE_AUTH === "true";
+  if (env.NODE_ENV === "production" && disabled) {
+    throw new Error("DISABLE_AUTH cannot be enabled in production");
+  }
+  return env.NODE_ENV !== "production" && disabled;
+}
+
 const secret = process.env.SESSION_SECRET || "";
-if (secret.length < 32) {
+if (!isAuthDisabled() && secret.length < 32) {
   throw new Error("SESSION_SECRET must have >= 32 chars");
 }
 
@@ -12,6 +23,9 @@ const sign = (payload: string) =>
 
 /** Creates a signed single-admin session token valid for 8 hours. */
 export function createSession(): string {
+  if (secret.length < 32) {
+    throw new Error("SESSION_SECRET must have >= 32 chars");
+  }
   const payload = Buffer.from(
     JSON.stringify({
       sub: "single-admin",
@@ -23,6 +37,9 @@ export function createSession(): string {
 
 /** Verifies the HMAC signature and expiration of a session token. */
 export function verifySession(token: string): boolean {
+  if (secret.length < 32) {
+    return false;
+  }
   const [payload, signature, ...extra] = token.split(".");
   if (!payload || !signature || extra.length) {
     return false;
@@ -46,8 +63,11 @@ export function verifySession(token: string): boolean {
   }
 }
 
-/** Returns true when the incoming request carries a valid admin session cookie. */
+/** Returns true when dev auth bypass is active or the incoming request carries a valid admin session cookie. */
 export function isAuthed(req: Request): boolean {
+  if (isAuthDisabled()) {
+    return true;
+  }
   const raw = req.headers.get("cookie") || "";
   const token = raw
     .split(";")

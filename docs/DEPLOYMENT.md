@@ -109,6 +109,12 @@ sudo journalctl -u opspilot-agent -n 50 --no-pager
 
 For an existing dedicated account/group, inspect and reuse them rather than rerunning creation commands; never ignore account-creation errors. `enroll` requires an HTTPS origin and exits after saving/reusing a valid identity; unsupported arguments fail with usage. No-argument monitoring retains HTTP for local development only. The dedicated user may not be able to read Nginx config or journal: fix permissions **narrowly**, not by running as root. Keep the token out of the env/unit and never remove an identity as a retry mechanism. This manual route remains usable when dashboard installation metadata is unavailable.
 
+### Optional systemd unit status
+
+In the agent's local `/etc/opspilot/agent.env`, set `OPSPILOT_SYSTEMD_UNIT=nginx.service` (use the exact existing unit name). Empty/unset disables collection. One literal ASCII `.service` name up to 80 characters is supported; no lists, paths, globs or arguments. `OPSPILOT_ALLOWED_SERVICES` still controls only the existing diagnostics. Restart **`opspilot-agent`**, not the monitored unit, to apply the change. Older agents keep sending ordinary telemetry, but both agent and Hub must support v1 status to display it. Keep the host clock synchronized.
+
+Check **Services → Host** or the selected **Hosts** inspector; normal sampling remains on its own interval. No extra access is needed on systems permitting the unprivileged read. If `/usr/bin/systemctl` or a booted system manager is absent, or policy denies the query, the dashboard shows unsupported/unavailable rather than `Stopped`. Do not add root, sudo, bus mounts or new group access to make status work in a container.
+
 ## Container agent
 
 ```bash

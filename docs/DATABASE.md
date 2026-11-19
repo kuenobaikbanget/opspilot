@@ -37,6 +37,7 @@ erDiagram
 | `investigations` | immutable non-secret provider snapshot, status, validated JSON, safe error | 90d |
 | `incident_memory` | searchable human-confirmed resolution | opt-in long term |
 | `audit_events` | important admin actions | 90d, tamper protection later |
+| `host_systemd_reports`, `host_services` | latest collector report and up to one real systemd observation per host | replaced on new report/observation, cascade on host deletion; no history |
 
 ## SQL invariants
 
@@ -52,6 +53,7 @@ erDiagram
 - Investigation snapshots include name/protocol/base URL/model/revision, never key/ciphertext. `provider_id` is nullable with `ON DELETE SET NULL`; report snapshots survive rename/delete.
 - Migration 002 backfills legacy brand names/protocols, leaves unrecorded model/base URL null and preserves terminal results/errors/timestamps. Legacy queued/running jobs become failed with a migration notice. Old binaries must be stopped before dropping the old `provider` column.
 - `last_test_*` columns retain one slot per connection, including model/revision and 90-second expiry. Conditional result writes and audits cannot overwrite replaced/expired slots.
+- Migration 004 adds the report status, source timestamp and socket session ID separate from the measured unit/state in `host_services`. The two rows change atomically and only on an increasing observation timestamp. Read-time freshness does not mutate rows. A new configured name or explicit opt-out removes the old live unit; `demo_fixture` rows are not read as live observations.
 
 ## Full-text retrieval (currently implemented)
 

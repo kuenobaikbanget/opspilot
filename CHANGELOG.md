@@ -1,7 +1,12 @@
 # Changelog
 
+## Unreleased — 2026-11-19
+
+- Added opt-in, read-only status for one locally configured systemd service. Hosts and Services show the selected agent's measured state and observation time, including stale/offline, explicitly disabled and unavailable/unsupported states. Existing host telemetry and endpoint check behavior are unchanged. Apply migration 004 before deploying the new Hub.
+
 ## Unreleased — 2026-11-18
 
+- Rebuilt the OpsPilot workspace from the Pencil Monochrome design: bottom dock, keyboard command search, threshold-first Overview, filterable Hosts, incident timeline, and three-step agent setup. The Hub exposes effective resource limits through the existing authenticated host read. Service and endpoint setup clearly report unavailable capabilities without sample data in live views.
 - Added stored BYOK AI connections with encrypted credentials, manual protocol/model selection, revision-checked investigation snapshots, and explicit asynchronous synthetic connection tests.
 - Added public-only DNS-pinned HTTPS transport with verified TLS, bounded responses/deadlines and sanitized failures; no OAuth, automatic fallback, model discovery or 9Router dependency.
 - Added checksummed transactional migrations, explicit legacy credential importer and ordered Compose schema bootstrap. Existing deployments must stop old Hub/Worker before migration; see the cutover guide.
@@ -20,6 +25,9 @@
 - Simplified the sidebar to Hosts, Incidents, Configuration drift and Incident memory. Merged the duplicate Overview/Hosts views; removed sidebar enrollment (still in the header), the developer catalog link and repeated deployment/account captions. Provider settings and Sign out remain below; mobile exposes them through More.
 - Replaced the count-dependent moving navigation marker with a marker on the active item. Preserved icon-only mode, accessible names, keyboard focus and the stored collapse preference.
 - Web typecheck passed. Browser checks with synthetic API responses covered desktop/mobile navigation at 1440/1024/390/320px, collapse persistence, keyboard access, More, enrollment focus and sign-out UI. No live authentication or diagnostics integration was tested; the detector only reported existing meter-width/root-font findings.
+- Fixed the home audit findings: check the existing admin-session endpoint independently of incident loading, preserve host monitoring during incident-read failures, distinguish unavailable/cached incident counts and related records, and clear only the recovered source's error.
+- Increased shared controls and fleet action/disclosure targets to at least 44px on mobile/coarse-pointer devices while preserving compact fine-pointer desktop controls. Added isolated component regressions for initial/cached failures, recovery without hiding action errors, session-check failure/retry, unauthorized startup and expiry.
+- Six isolated Home regressions (33 assertions) and the Web typecheck passed. Chromium checks with local persisted demo data covered incident outage/recovery, keyboard/enrollment focus, 1440/1024/390/320px layouts, 44px mobile/coarse-pointer targets and synthesized horizontal touch scrolling. No password-login, physical-device, agent or paid-provider integration claim; see `docs/TESTING.md`.
 - Added a responsive Ctrl/Cmd+K command palette with local host and incident search, recently opened results, keyboard navigation, and quick links to enrollment, provider settings and incident memory. Service search explicitly reports unavailable inventory.
 
 ## Unreleased — 2026-11-17

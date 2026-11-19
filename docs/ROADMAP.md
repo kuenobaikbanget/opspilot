@@ -32,13 +32,13 @@ No promise of elapsed time is made here; phases are sequenced by dependencies. T
 
 ### Fleet & services dashboard delivery (planned)
 
-The [approved screen contract](UI-UX.md#fleet-services-dashboard-contract-target) applies the supplied reference without replacing measured data with demo values. The host-only slice now provides typed host read models, scoped host totals and bounded real history; workload/endpoint capabilities and the full screen gates below remain incomplete and ordered by dependency:
+The [Monochrome workspace](UI-UX.md#fleet-services-dashboard-contract-target) implements the threshold-first Overview, host inventory, incident inspector and agent setup against existing data. Selected-host systemd status now reports one explicitly configured unit, observation time and collection availability. Broader workload and endpoint capabilities still depend on the gates below:
 
 - [ ] Define typed host/workload/endpoint read models, source timestamps, capability/unavailable reasons, stale policy and correctly scoped aggregate counts. Keep collection within the existing Hub/Worker/Go-agent module boundaries.
 - [ ] Implement opt-in, locally validated, bounded read-only Docker/systemd inventory and resource collection. Update `packages/contracts`, Go agent, API documentation and interoperability/negative tests together for any wire change; do not infer continuous inventory from `docker_status`.
 - [ ] Implement persisted HTTP monitor configuration/results and bounded scheduling in the existing Hub/Worker boundary, with an actual named probe location. Complete SSRF, DNS/redirect, egress, authorization and audit controls before enabling checks; no generic URL-fetch diagnostic or new microservice by default.
-- [ ] Provide real timestamped host history, configured alert-rule metadata and network counter-delta rates; cover gaps, resets, stale samples and unavailable metadata.
-- [ ] Replace the card-led overview with the host/service tables, inline summary strip and contextual inspector; wire real search/selection, enrollment, endpoint configuration and inspection flows. Separate navigation destinations must work end to end.
+- [ ] Add network counter-delta rates, covering gaps, resets and stale samples. Host history and current CPU/memory/disk limits are exposed.
+- [ ] Connect Services, Add service and endpoint investigation to supported workload/endpoint APIs. The current screens explicitly report unavailable capabilities.
 - [ ] Verify independent process/endpoint states, offline-agent/reachable-endpoint behavior, truthful freshness and no causality claims; verify actual browser layout and keyboard access at 1440px, 1024px and 390px using the [acceptance scenarios](TESTING.md#fleet-services-dashboard-acceptance-planned).
 
 **Dashboard exit gate:** FR-13–FR-16 work against real authorized data, negative security/interoperability tests pass, and desktop/mobile browser evidence exists. The current `/design-system` preview is not evidence that inventory or endpoint monitoring works.
