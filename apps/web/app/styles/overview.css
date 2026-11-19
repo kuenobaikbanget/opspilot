@@ -124,6 +124,12 @@
   gap: var(--space-6);
 }
 
+.overview-pressure-sources {
+  display: grid;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
 .overview-watchlist {
   display: grid;
   gap: var(--space-4);
@@ -351,7 +357,7 @@
 
 .overview-inspector {
   position: sticky;
-  top: var(--space-6);
+  inset-block-start: var(--space-6);
   scroll-margin-block: var(--space-6);
 }
 
@@ -509,6 +515,43 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
+}
+
+.overview-endpoint-scope .overview-endpoint-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.overview-endpoint-item[data-selected="true"] {
+  border-color: var(--color-border-strong);
+}
+
+.overview-endpoint-scope .overview-endpoint-select {
+  flex: 1;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  min-width: 0;
+  padding-inline: var(--space-2);
+  text-align: start;
+}
+
+.overview-endpoint-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.overview-endpoint-select .overview-endpoint-name {
+  flex: 1 1 8rem;
+}
+
+.overview-endpoint-scope .overview-endpoint-item > .ui-button:last-child {
+  flex: none;
+}
+
+.overview-evidence > .overview-endpoint-target {
+  display: grid;
 }
 
 .overview-endpoint-main {

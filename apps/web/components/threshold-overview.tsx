@@ -55,6 +55,10 @@ type HostServiceEntry = { status: HostSystemdStatus | null; failed: boolean };
 
 type Risk = { host: Host; reading: Pressure };
 
+type DetailSelection = { kind: "host" | "endpoint"; id: string };
+type EndpointStatus = "up" | "down" | "pending" | "stale";
+type EndpointRow = { endpoint: EndpointMonitor; status: EndpointStatus };
+
 const icons = {
   server: <><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></>,
   globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z"/></>,
@@ -391,25 +395,48 @@ function endpointResult(endpoint: EndpointMonitor) {
   return `Down · ${endpoint.last_http_status !== null ? `HTTP ${endpoint.last_http_status}` : endpoint.last_error ?? "unreachable"}`;
 }
 
-function EndpointReachability({ endpoints, servicesError, checkingEndpointId, onCheckEndpoint }: Pick<Props, "endpoints" | "servicesError" | "checkingEndpointId" | "onCheckEndpoint">) {
-  const [, setClock] = useState(Date.now);
-  const now = Date.now();
-  const counts = { up: 0, down: 0, pending: 0, stale: 0 };
-  let nextExpiry = Infinity;
-  const rows = servicesError ? null : endpoints?.map(endpoint => {
-    const expiry = Date.parse(endpoint.last_checked_at ?? "") + endpointFreshnessMs;
-    const status = endpoint.last_status === "unknown" || !Number.isFinite(expiry) ? "pending"
-      : now >= expiry ? "stale" : endpoint.last_status;
-    counts[status]++;
-    if (status === "up" || status === "down") nextExpiry = Math.min(nextExpiry, expiry);
-    return { endpoint, status };
-  });
+function EndpointBadge({ endpoint, status }: EndpointRow) {
+  return (
+    <Badge tone={status === "up" ? "success" : status === "down" ? "danger" : "neutral"} dot>
+      {status === "stale" ? "Stale" : status === "pending" ? "Pending" : endpointResult(endpoint)}
+    </Badge>
+  );
+}
 
-  useEffect(() => {
-    if (!Number.isFinite(nextExpiry)) return;
-    const timer = window.setTimeout(() => setClock(Date.now()), Math.max(1, nextExpiry - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [nextExpiry]);
+function EndpointInspector({ row, checkingEndpointId, onCheckEndpoint }: Pick<Props, "checkingEndpointId" | "onCheckEndpoint"> & { row: EndpointRow }) {
+  const { endpoint, status } = row;
+  return (
+    <>
+      <div className="overview-inspector-head">
+        <OverviewIcon name="globe" />
+        <h3 className="overview-endpoint-name">{endpoint.name}</h3>
+        <EndpointBadge {...row} />
+      </div>
+      <div className="overview-inspector-body">
+        <dl className="overview-evidence">
+          <div className="overview-endpoint-target"><dt>Target URL</dt><dd>{endpoint.target_url}</dd></div>
+          {endpoint.service_name && <div><dt>Service</dt><dd>{endpoint.service_name}</dd></div>}
+          <div><dt>Probe location</dt><dd>{endpoint.probe_location}</dd></div>
+          <div><dt>Expected response</dt><dd>HTTP {endpoint.expected_status}</dd></div>
+          <div><dt>Last checked</dt><dd><SampleTime value={endpoint.last_checked_at} /></dd></div>
+          {status === "stale" && <div><dt>Last result</dt><dd>{endpointResult(endpoint)}</dd></div>}
+        </dl>
+        <Button size="sm" loading={checkingEndpointId === endpoint.id} onClick={() => onCheckEndpoint(endpoint.id)}>
+          Check now
+        </Button>
+      </div>
+    </>
+  );
+}
+
+function EndpointReachability({ rows, servicesError, checkingEndpointId, onCheckEndpoint, selectedId, inspectorId, onSelect }: Pick<Props, "servicesError" | "checkingEndpointId" | "onCheckEndpoint"> & {
+  rows: EndpointRow[] | undefined;
+  selectedId: string | undefined;
+  inspectorId: string;
+  onSelect: (id: string) => void;
+}) {
+  const counts = { up: 0, down: 0, pending: 0, stale: 0 };
+  for (const { status } of rows ?? []) counts[status]++;
 
   return (
     <section className="overview-endpoint-scope" aria-labelledby="overview-endpoint-heading">
@@ -427,26 +454,27 @@ function EndpointReachability({ endpoints, servicesError, checkingEndpointId, on
         <>
           <p role="status">{counts.up} up · {counts.down} down · {counts.pending} pending · {counts.stale} stale</p>
           <ul className="overview-endpoint-list" role="list">
-            {rows.map(({ endpoint, status }) => (
-              <li key={endpoint.id} className="overview-endpoint-item">
-                <div className="overview-endpoint-main">
-                  <div>
-                    <strong>{endpoint.name}</strong>
-                    <span className="overview-meta">
-                      {endpoint.target_url} · Probe: {endpoint.probe_location}
-                      {endpoint.last_checked_at ? <> · Checked <SampleTime value={endpoint.last_checked_at} /></> : " · Not checked yet"}
-                    </span>
-                    {status === "stale" && <span className="overview-meta">Last result: {endpointResult(endpoint)}</span>}
-                  </div>
-                  <div className="overview-endpoint-actions">
-                    <Badge tone={status === "up" ? "success" : status === "down" ? "danger" : "neutral"} dot>
-                      {status === "stale" ? "Stale" : status === "pending" ? "Pending" : endpointResult(endpoint)}
-                    </Badge>
-                    <Button size="sm" loading={checkingEndpointId === endpoint.id} onClick={() => onCheckEndpoint(endpoint.id)}>
-                      Check now
-                    </Button>
-                  </div>
-                </div>
+            {rows.map((row) => (
+              <li key={row.endpoint.id} className="overview-endpoint-item" data-selected={selectedId === row.endpoint.id}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="overview-endpoint-select"
+                  aria-controls={inspectorId}
+                  aria-pressed={selectedId === row.endpoint.id}
+                  onClick={() => onSelect(row.endpoint.id)}
+                >
+                  <span className="overview-endpoint-name">{row.endpoint.name}</span>
+                  <EndpointBadge {...row} />
+                </Button>
+                <Button
+                  size="sm"
+                  aria-label={`Check now: ${row.endpoint.name}`}
+                  loading={checkingEndpointId === row.endpoint.id}
+                  onClick={() => onCheckEndpoint(row.endpoint.id)}
+                >
+                  Check now
+                </Button>
               </li>
             ))}
           </ul>
@@ -473,7 +501,7 @@ export function ThresholdOverview({
   refreshKey = 0,
 }: Props) {
   const [clock, setClock] = useState(Date.now);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<DetailSelection | null>(null);
   const [hostServices, setHostServices] = useState<Record<string, HostServiceEntry>>({});
   const [offlineOnly, setOfflineOnly] = useState(false);
   const inspectorId = useId();
@@ -481,6 +509,11 @@ export function ThresholdOverview({
   const inventoryHeading = useRef<HTMLHeadingElement>(null);
   const loaded = fleet?.hosts.length ?? 0;
   const cached = Boolean(fleet && fleetError);
+
+  function selectDetail(kind: DetailSelection["kind"], id: string) {
+    setSelection({ kind, id });
+    inspector.current?.focus();
+  }
 
   const observedAt = fleet ? Date.parse(fleet.observed_at) : NaN;
   const now = Number.isFinite(observedAt) ? Math.max(clock, observedAt) : clock;
@@ -505,6 +538,15 @@ export function ThresholdOverview({
       }
     }
     return { host, fresh };
+  });
+
+  const endpointNow = Date.now();
+  const endpointRows = servicesError ? undefined : endpoints?.map((endpoint): EndpointRow => {
+    const expiry = Date.parse(endpoint.last_checked_at ?? "") + endpointFreshnessMs;
+    const status = endpoint.last_status === "unknown" || !Number.isFinite(expiry) ? "pending"
+      : endpointNow >= expiry ? "stale" : endpoint.last_status;
+    if (status === "up" || status === "down") nextExpiry = Math.min(nextExpiry, expiry);
+    return { endpoint, status };
   });
 
   useEffect(() => {
@@ -549,9 +591,13 @@ export function ThresholdOverview({
     };
   }, [riskHostKeys, refreshKey]);
 
-  const selected = risks.find(({ host }) => host.id === selectedId) ?? risks[0];
-  const matchingIncidents = selected ? incidents.filter(i =>
-    i.agent_id === selected.host.id && i.category === categoryByResource[selected.reading.key],
+  const selectedEndpointId = selection?.kind === "endpoint" ? selection.id : undefined;
+  const selectedEndpoint = endpointRows?.find(({ endpoint }) => endpoint.id === selectedEndpointId);
+  const selectedRisk = selectedEndpointId === undefined
+    ? risks.find(({ host }) => host.id === selection?.id) ?? risks[0]
+    : undefined;
+  const matchingIncidents = selectedRisk ? incidents.filter(i =>
+    i.agent_id === selectedRisk.host.id && i.category === categoryByResource[selectedRisk.reading.key],
   ) : [];
   const selectedIncident = matchingIncidents.find(i => i.status === "open") ?? matchingIncidents[0] ?? null;
   const visibleDevices = offlineOnly ? devices?.filter(({ host }) => host.status === "offline") : devices;
@@ -609,38 +655,50 @@ export function ThresholdOverview({
       </section>
 
       <div className="overview-pressure-workspace">
-        <section className="overview-watchlist" aria-labelledby="overview-watchlist-heading">
-          <div className="overview-section-head">
-            <h2 id="overview-watchlist-heading">Devices at risk</h2>
-            <span className="overview-meta overview-sort"><OverviewIcon name="sort" /> Risk first</span>
-          </div>
-          {risks.length ? (
-            <ul className="overview-risk-list" role="list">
-              {risks.map((risk) => (
-                <RiskCard
-                  key={risk.host.id}
-                  risk={risk}
-                  serviceInfo={hostServices[risk.host.id]}
-                  now={now}
-                  selected={selected?.host.id === risk.host.id}
-                  inspectorId={inspectorId}
-                  onSelect={() => {
-                    setSelectedId(risk.host.id);
-                    inspector.current?.focus();
-                  }}
-                />
-              ))}
-            </ul>
-          ) : <p className="overview-empty">{emptyWatchlist}</p>}
-          <p className="overview-rule">Devices are ranked by smallest limit margin. Near limit means no more than 5 percentage points below the configured limit. Readings at or above it count toward the exceeded total.</p>
-        </section>
+        <div className="overview-pressure-sources">
+          <section className="overview-watchlist" aria-labelledby="overview-watchlist-heading">
+            <div className="overview-section-head">
+              <h2 id="overview-watchlist-heading">Devices at risk</h2>
+              <span className="overview-meta overview-sort"><OverviewIcon name="sort" /> Risk first</span>
+            </div>
+            {risks.length ? (
+              <ul className="overview-risk-list" role="list">
+                {risks.map((risk) => (
+                  <RiskCard
+                    key={risk.host.id}
+                    risk={risk}
+                    serviceInfo={hostServices[risk.host.id]}
+                    now={now}
+                    selected={selectedRisk?.host.id === risk.host.id}
+                    inspectorId={inspectorId}
+                    onSelect={() => selectDetail("host", risk.host.id)}
+                  />
+                ))}
+              </ul>
+            ) : <p className="overview-empty">{emptyWatchlist}</p>}
+            <p className="overview-rule">Devices are ranked by smallest limit margin. Near limit means no more than 5 percentage points below the configured limit. Readings at or above it count toward the exceeded total.</p>
+          </section>
+          <EndpointReachability
+            rows={endpointRows}
+            servicesError={servicesError}
+            checkingEndpointId={checkingEndpointId}
+            onCheckEndpoint={onCheckEndpoint}
+            selectedId={selectedEndpointId}
+            inspectorId={inspectorId}
+            onSelect={(id) => selectDetail("endpoint", id)}
+          />
+        </div>
 
         <aside id={inspectorId} className="overview-inspector" aria-labelledby="overview-inspector-heading" ref={inspector} tabIndex={-1}>
-          <h2 id="overview-inspector-heading" className={selected ? "sr-only" : undefined}>Pressure inspector</h2>
-          {selected ? (
+          <h2 id="overview-inspector-heading" className={selectedRisk || selectedEndpoint ? "sr-only" : undefined}>Overview details</h2>
+          {selectedEndpoint ? (
+            <EndpointInspector row={selectedEndpoint} checkingEndpointId={checkingEndpointId} onCheckEndpoint={onCheckEndpoint} />
+          ) : selectedEndpointId !== undefined ? (
+            <p role="status">{servicesError ? "Endpoint details are unavailable until the endpoint list refreshes successfully." : "This endpoint is no longer in the loaded list."}</p>
+          ) : selectedRisk ? (
             <PressureInspector
-              key={selected.host.id}
-              risk={selected}
+              key={selectedRisk.host.id}
+              risk={selectedRisk}
               refreshKey={refreshKey}
               incident={selectedIncident}
               incidentsStale={incidentsStale}
@@ -649,12 +707,10 @@ export function ThresholdOverview({
               onOpenIncident={onOpenIncident}
             />
           ) : (
-            <p>A near-limit or exceeded device will show its current reading, threshold, sample time, and AI analysis here.</p>
+            <p>Select an endpoint to see its probe details, or a device at risk to see its readings and analysis.</p>
           )}
         </aside>
       </div>
-
-      <EndpointReachability endpoints={endpoints} servicesError={servicesError} checkingEndpointId={checkingEndpointId} onCheckEndpoint={onCheckEndpoint} />
 
       <section className="overview-inventory" aria-labelledby="overview-inventory-heading">
         <div className="overview-section-head">
