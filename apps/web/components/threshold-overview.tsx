@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { finitePercent, SYSTEMD_STALE_AFTER_SECONDS, type EndpointMonitor, type Host, type HostList, type HostSystemdStatus } from "@opspilot/contracts";
 import { api } from "../lib/api";
 import { hasFreshSample, percent, pressure, resources, type Pressure, type Resource } from "../lib/host-pressure";
@@ -85,19 +85,27 @@ function SampleTime({ value }: { value: string | null }) {
     : "Not observed";
 }
 
-function limitShare({ value, limit }: Pressure) {
-  const share = (value / limit) * 100;
-  return Number.isFinite(share) ? share : null;
-}
-
-function ThresholdBar({ share }: { share: number | null }) {
-  if (share === null) return null;
-  const fill = Math.max(0, Math.min(share, 100));
+function PressureReading({ reading }: { reading: Pressure }) {
   return (
-    <span className="overview-threshold-bar" aria-hidden="true">
-      {fill > 0 && <span className="overview-threshold-used" style={{ flexGrow: fill }} />}
-      {fill < 100 && <span className="overview-threshold-remaining" style={{ flexGrow: 100 - fill }} />}
-    </span>
+    <div className="overview-pressure-reading">
+      <p className="overview-meta">{reading.label} usage</p>
+      <p className="overview-pressure-comparison">
+        <strong>{percent(reading.value)}</strong>
+        <span className="overview-pressure-limit-label">Limit <span className="overview-pressure-limit">{percent(reading.limit)}</span></span>
+      </p>
+      <div className="overview-pressure-gauge" aria-hidden="true">
+        <div className="overview-pressure-track" style={{
+          "--usage": `${reading.value}%`,
+          "--limit": `${reading.limit}%`,
+        } as CSSProperties}>
+          {reading.value > 0 && <span className="overview-pressure-fill" />}
+          {reading.value > reading.limit && <span className="overview-pressure-overrun" />}
+          <span className="overview-pressure-marker" />
+        </div>
+        <div className="overview-pressure-ticks" />
+        <div className="overview-pressure-scale"><span>0%</span><span>100%</span></div>
+      </div>
+    </div>
   );
 }
 
@@ -117,7 +125,6 @@ function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
   onSelect: () => void;
 }) {
   const { host, reading } = risk;
-  const share = limitShare(reading);
   const status = serviceInfo?.status;
   const service = status?.service;
   const failed = Boolean(serviceInfo?.failed);
@@ -138,15 +145,7 @@ function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
         <RiskBadge reading={reading} />
       </Button>
       <div className="overview-risk-reading">
-        <dl className="overview-risk-values">
-          <div><dt>{reading.label} threshold</dt><dd>{percent(reading.limit)}</dd></div>
-          <div><dt>Current reading</dt><dd>{percent(reading.value)}</dd></div>
-          <div>
-            <dt>Limit used</dt>
-            <dd>{percent(share)}</dd>
-          </div>
-        </dl>
-        <ThresholdBar share={share} />
+        <PressureReading reading={reading} />
         <div className="overview-risk-services">
           {!serviceInfo ? (
             <span className="overview-meta">Service · Loading…</span>
@@ -266,7 +265,6 @@ function PressureInspector({
   onOpenIncident: Props["onOpenIncident"];
 }) {
   const { host, reading } = risk;
-  const share = limitShare(reading);
   return (
     <>
       <div className="overview-inspector-head">
@@ -275,14 +273,7 @@ function PressureInspector({
         <RiskBadge reading={reading} />
       </div>
       <div className="overview-inspector-body" data-pressure={reading.state}>
-        <div>
-          <p className="overview-meta">{reading.label} usage vs. limit</p>
-          <p className="overview-limit-usage">
-            {percent(share)} <span>{share === null ? "ratio unavailable" : "of limit"}</span>
-          </p>
-          <p className="overview-inspector-measurement"><strong>{percent(reading.value)}</strong> current · {percent(reading.limit)} threshold</p>
-        </div>
-        <ThresholdBar share={share} />
+        <PressureReading reading={reading} />
         <dl className="overview-evidence">
           <div><dt>Measured sample</dt><dd><SampleTime value={host.sampled_at} /></dd></div>
           <div><dt>Agent connection</dt><dd>Online</dd></div>
