@@ -112,8 +112,7 @@
 
 .overview-summary-reading dd,
 .overview-risk-values > :last-child dd,
-.overview-headroom,
-.overview-inspector-share p {
+.overview-limit-usage {
   color: var(--overview-pressure-ink, var(--color-text));
 }
 
@@ -391,7 +390,7 @@
   font-size: var(--text-sm);
 }
 
-.overview-headroom {
+.overview-limit-usage {
   font-family: var(--font-mono);
   font-size: 3rem;
   font-variant-numeric: tabular-nums;
@@ -399,7 +398,7 @@
   line-height: 1.15;
 }
 
-.overview-headroom-direction {
+.overview-limit-usage span {
   color: var(--color-text-muted);
   font-size: var(--text-base);
   letter-spacing: 0;
@@ -413,13 +412,6 @@
 .overview-inspector-measurement strong {
   color: var(--color-text);
   font-weight: 500;
-}
-
-.overview-inspector-share {
-  display: grid;
-  gap: var(--space-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
 }
 
 .overview-evidence {

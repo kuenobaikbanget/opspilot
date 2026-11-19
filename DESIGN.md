@@ -119,7 +119,7 @@ The light action token is for primary controls, the active dock item and focus, 
 
 ## Typography
 
-Use self-hosted Geist Sans for operational text and Geist Mono for readings, identifiers, timestamps, shortcuts and commands. Main headings use 34px, summary and inspector headings 23px, section headings 18px. Body, labels and captions use 14px, 12px and 11px. Threshold figures use tabular display numbers at 28px; the inspector emphasizes signed headroom at 48px.
+Use self-hosted Geist Sans for operational text and Geist Mono for readings, identifiers, timestamps, shortcuts and commands. Main headings use 34px, summary and inspector headings 23px, section headings 18px. Body, labels and captions use 14px, 12px and 11px. Threshold figures use tabular display numbers at 28px; the inspector emphasizes usage as a percentage of the limit at 48px.
 
 ## Layout
 
@@ -134,7 +134,7 @@ Use self-hosted Geist Sans for operational text and Geist Mono for readings, ide
 
 - **Controls:** 3px radius, 38px standard/36px compact buttons for fine pointers, 42px desktop field height, 2px visible focus. Use busy/disabled states and associated labels and error text. Panels use 4px corners and one-pixel borders.
 - **Elevation:** neutral surface steps and borders define grouping. Only the floating dock uses a soft offset shadow; the command dialog has a dark backdrop. Use short existing transitions and respect reduced motion. Host history retains its scoped View Transition on capable desktop browsers.
-- **Pressure display:** show the source reading, configured limit, and margin in percentage points. The bar visualizes the ratio to the limit; that ratio is a separate percentage. Historical samples do not get live risk color. The advisory card only draws from incidents matching the selected host and resource, and names the source incident and its opening time.
+- **Pressure display:** show the source reading, configured limit, and usage as a percentage of that limit. The bar visualizes the same ratio and fills at 100%. Historical samples do not get live risk color. The advisory card only draws from incidents matching the selected host and resource, and names the source incident and its opening time.
 - **Partial failures:** a failed session check offers retry; 401 returns to login. Unavailable reads do not block other independently scoped reads. Cached data carries the original observation timestamp; a failed refresh is not an empty inventory or recovered incident.
 - **Providers:** the existing table/editor keeps stored credentials server-side, tests explicit, and configuration changes revision-checked. Evidence, recommendations and resolution remain separately labeled.
 - **Services:** show the selected host's configured systemd unit, measured state and original observation time. Separate unavailable collection and stale observations from process state. Do not infer fleet counts, endpoint health or a cause from the unit state.

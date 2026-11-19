@@ -85,20 +85,6 @@ function SampleTime({ value }: { value: string | null }) {
     : "Not observed";
 }
 
-function MarginAmount({ value }: { value: number }) {
-  const magnitude = Number(Math.abs(value).toPrecision(12));
-  const tiny = magnitude > 0 && magnitude < 0.1;
-  const amount = Number(magnitude.toFixed(1));
-  return (
-    <>
-      <span aria-hidden="true">{tiny ? "<0.1" : amount} pp</span>
-      <span className="sr-only">
-        {tiny ? "Less than 0.1 percentage points" : `${amount} ${amount === 1 ? "percentage point" : "percentage points"}`}
-      </span>
-    </>
-  );
-}
-
 function limitShare({ value, limit }: Pressure) {
   const share = (value / limit) * 100;
   return Number.isFinite(share) ? share : null;
@@ -131,6 +117,7 @@ function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
   onSelect: () => void;
 }) {
   const { host, reading } = risk;
+  const share = limitShare(reading);
   const status = serviceInfo?.status;
   const service = status?.service;
   const failed = Boolean(serviceInfo?.failed);
@@ -155,11 +142,11 @@ function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
           <div><dt>{reading.label} threshold</dt><dd>{percent(reading.limit)}</dd></div>
           <div><dt>Current reading</dt><dd>{percent(reading.value)}</dd></div>
           <div>
-            <dt>Margin</dt>
-            <dd>{reading.headroom === 0 ? "At limit" : <><MarginAmount value={reading.headroom} /> {reading.headroom > 0 ? "below" : "over"} limit</>}</dd>
+            <dt>Limit used</dt>
+            <dd>{percent(share)}</dd>
           </div>
         </dl>
-        <ThresholdBar share={limitShare(reading)} />
+        <ThresholdBar share={share} />
         <div className="overview-risk-services">
           {!serviceInfo ? (
             <span className="overview-meta">Service · Loading…</span>
@@ -289,18 +276,13 @@ function PressureInspector({
       </div>
       <div className="overview-inspector-body" data-pressure={reading.state}>
         <div>
-          <p className="overview-meta">{reading.label} limit margin</p>
-          <p className="overview-headroom">
-            {reading.headroom === 0 ? "At limit" : (
-              <><MarginAmount value={reading.headroom} /> <span className="overview-headroom-direction">{reading.headroom < 0 ? "over limit" : "below limit"}</span></>
-            )}
+          <p className="overview-meta">{reading.label} usage vs. limit</p>
+          <p className="overview-limit-usage">
+            {percent(share)} <span>{share === null ? "ratio unavailable" : "of limit"}</span>
           </p>
           <p className="overview-inspector-measurement"><strong>{percent(reading.value)}</strong> current · {percent(reading.limit)} threshold</p>
         </div>
-        <div className="overview-inspector-share">
-          <p>{share === null ? "Utilization ratio unavailable for this limit" : `${percent(share)} of configured limit`}</p>
-          <ThresholdBar share={share} />
-        </div>
+        <ThresholdBar share={share} />
         <dl className="overview-evidence">
           <div><dt>Measured sample</dt><dd><SampleTime value={host.sampled_at} /></dd></div>
           <div><dt>Agent connection</dt><dd>Online</dd></div>
