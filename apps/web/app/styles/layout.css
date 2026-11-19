@@ -37,7 +37,7 @@
 .workspace-scope > span { color: var(--color-border-strong); font-size: 16px; }
 .workspace-tools, .workspace-toolbar-actions { display: flex; align-items: center; gap: 14px; }
 .workspace-tools { margin-inline-start: auto; }
-.workspace-tools svg, .header-actions svg, .workspace-toolbar svg, .command-dialog svg, .host-guidance svg { width: 16px; height: 16px; flex: none; }
+.workspace-tools svg, .header-actions svg, .workspace-toolbar svg, .host-guidance svg { width: 16px; height: 16px; flex: none; }
 .workspace-jump.ui-button { gap: 12px; padding-inline: 10px; color: var(--color-text-muted); border-color: var(--color-border); }
 .workspace-jump kbd, .workspace-dock kbd, .workspace-meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
 .workspace-jump kbd { padding: 2px 5px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
@@ -73,13 +73,6 @@
 .workspace-dock .dock-search { width: 62px; }
 .workspace-dock .dock-add { width: 45px; min-height: 45px; flex: none; padding: 4px; border-radius: 9px; }
 .dock-add svg { width: 22px; height: 22px; }
-.command-dialog { width: min(500px, calc(100% - 32px)); max-height: min(600px, calc(100dvh - 48px)); padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text); overflow: auto; }
-.command-dialog::backdrop { background: #000a; }
-.command-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.command-heading h2 { margin: 0; }
-.command-results { display: grid; gap: 4px; margin-top: 8px; }
-.command-results .ui-button { justify-content: space-between; text-align: start; overflow-wrap: anywhere; }
-.command-results p { margin-inline: 8px; }
 .content { min-width: 0; padding-block: 28px calc(120px + env(safe-area-inset-bottom)); }
 .shell[data-setup="true"] .content { padding-block-end: var(--space-10); }
 .content:focus, .topbar h1:focus { outline: none; }

@@ -80,6 +80,7 @@ export default function Home() {
   const [hostRefresh, setHostRefresh] = useState(0);
   const pageHeading = useRef<HTMLHeadingElement>(null);
   const focusPage = useRef(false);
+  const incidentHeading = useRef<HTMLHeadingElement>(null);
   const focusIncident = useRef(false);
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   const endSession = useCallback(() => {
@@ -235,11 +236,11 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [selected, logged, loadDetail]);
   useEffect(() => {
-    if (detail && focusIncident.current) {
+    if (tab === "incidents" && incidentHeading.current && focusIncident.current) {
       focusIncident.current = false;
-      document.getElementById("incident-detail-title")?.focus();
+      incidentHeading.current.focus();
     }
-  }, [detail]);
+  }, [tab, detail]);
   useEffect(() => {
     if (logged && tab === "memory") void api(`/memory?q=${encodeURIComponent(search)}`).then(setMemories).catch(e => setError(e.message));
   }, [logged, tab, search]);
@@ -350,10 +351,12 @@ export default function Home() {
   }
 
   function openIncident(id: string) {
-    focusIncident.current = true;
+    const alreadyShown = tab === "incidents" && detail?.incident.id === id;
+    focusIncident.current = !alreadyShown;
     setTab("incidents");
     chooseIncident(id);
     window.scrollTo(0, 0);
+    if (alreadyShown) incidentHeading.current?.focus();
   }
 
   function signOut() {
@@ -363,7 +366,7 @@ export default function Home() {
   }
 
   return (
-    <WorkspaceShell page={tab} onNavigate={navigate} onInspectHost={inspect} hosts={hosts} incidents={open} incidentsStale={!!incidentsError} busy={busy} onSignOut={authDisabled ? undefined : signOut}>
+    <WorkspaceShell page={tab} onNavigate={navigate} onInspectHost={inspect} onOpenIncident={openIncident} hosts={hosts} incidents={incidents} openIncidents={open} incidentsStale={!!incidentsError} busy={busy} onSignOut={authDisabled ? undefined : signOut}>
       <main className="content" id="main-content" tabIndex={-1}>
         {heading && <header className="topbar">
           <div>
@@ -512,7 +515,7 @@ export default function Home() {
             {!detail && <Panel className="incident-placeholder"><p className="muted">{selected ? "Loading incident detail…" : "Select an incident to review measured evidence and investigation activity."}</p></Panel>}
             {detail && detail.incident.id === selected && (
               <Panel className="detail" role="region" aria-labelledby="incident-detail-title">
-                <div className="panel-head"><div><h2 id="incident-detail-title" tabIndex={-1}>{detail.incident.title}</h2><p>{detail.incident.hostname} · {categoryLabel(detail.incident.category)}</p></div><Badge tone={detail.incident.status === "open" ? "danger" : "neutral"}>{detail.incident.status}</Badge></div>
+                <div className="panel-head"><div><h2 id="incident-detail-title" ref={incidentHeading} tabIndex={-1}>{detail.incident.title}</h2><p>{detail.incident.hostname} · {categoryLabel(detail.incident.category)}</p></div><Badge tone={detail.incident.status === "open" ? "danger" : "neutral"}>{detail.incident.status}</Badge></div>
                 <div className="incident-context">
                   <WorkspaceIcon name="hosts" />
                   <div><h3>Host context</h3><p>{detail.incident.hostname} · {fleetError || !fleet ? "Connectivity unavailable" : detailHost?.status ?? "Not in loaded inventory"}</p>

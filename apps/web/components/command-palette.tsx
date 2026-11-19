@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import type { Host } from "@opspilot/contracts";
 import { Button, Input } from "./ui";
+import type { WorkspacePage } from "./workspace-shell";
 
 const filters = [
   ["all", "All"],
@@ -14,11 +15,10 @@ const filters = [
 
 type Filter = typeof filters[number][0];
 type ResourceCategory = "hosts" | "incidents";
-type Action = "enroll" | "providers" | "memory";
-type Incident = { id: string; title: string; hostname: string; status: string };
+export type PaletteIncident = { id: string; title: string; hostname: string; status: string };
 type Target =
   | { category: ResourceCategory; id: string }
-  | { category: "actions"; id: Action };
+  | { category: "actions"; id: WorkspacePage };
 
 const icons = {
   search: "m21 21-4.4-4.4M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z",
@@ -28,23 +28,40 @@ const icons = {
   enroll: "M12 5v14M5 12h14",
   providers: "M3 7h4m4 0h10M3 17h10m4 0h4M7 4v6m10 4v6",
   memory: "M12 6v15M3 4h5l4 2 4-2h5v15h-5l-4 2-4-2H3z",
+  overview: "M3 3h7v10H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 17h7v4H3z",
+  services: "m12 2 10 5-10 5L2 7z M2 12l10 5 10-5 M2 17l10 5 10-5",
+  drift: "M14 2H5v20h14V7z M14 2v5h5 M8 12h8 M8 16h5",
 } as const;
 
 type Icon = keyof typeof icons;
 type Entry = Target & { key: string; title: string; description: string; label: string; icon: Icon; search: string };
 type Group = { title: string; entries: Entry[] };
 
-const actions: Entry[] = [
-  { category: "actions", id: "enroll", key: "enroll", title: "Enroll host", description: "Connect a Linux host with OpsPilot", label: "Action", icon: "enroll", search: "enroll host add connect server" },
-  { category: "actions", id: "providers", key: "providers", title: "Provider settings", description: "Manage AI connections and models", label: "Settings", icon: "providers", search: "provider settings ai connections models" },
-  { category: "actions", id: "memory", key: "memory", title: "Incident memory", description: "Browse human-confirmed resolutions", label: "Action", icon: "memory", search: "incident memory resolutions" },
+function page(id: WorkspacePage, title: string, description: string, icon: Icon, keywords = "", label = "Page"): Entry {
+  return { category: "actions", id, key: id, title, description, label, icon, search: `${title.toLowerCase()} ${keywords}` };
+}
+
+const quickActions = [
+  page("connect", "Connect server", "Set up a Linux host with OpsPilot", "enroll", "enroll host add", "Action"),
+  page("providers", "Provider settings", "Manage AI connections and models", "providers", "ai connections models", "Settings"),
+  page("memory", "Incident memory", "Browse human-confirmed resolutions", "memory", "resolutions", "Action"),
 ];
+const services = page("services", "Services", "View selected-host systemd status and endpoint checks", "services", "workload systemd endpoint");
+const pages = [
+  page("overview", "Overview", "View fleet readings against configured limits", "overview", "dashboard fleet"),
+  services,
+  page("hosts", "Hosts", "Browse hosts and resource history", "host", "inventory"),
+  page("incidents", "Incidents", "Review the incident queue and evidence", "incident"),
+  page("new-monitor", "New monitor", "Open Add service setup", "enroll", "add service endpoint"),
+  page("drift", "Configuration drift", "Review recorded configuration hash changes", "drift"),
+];
+const actions = [...quickActions, ...pages];
 
 function PaletteIcon({ icon }: { icon: Icon }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={icons[icon]} /></svg>;
 }
 
-function resourceGroups(hosts: Host[], incidents: Incident[]) {
+function resourceGroups(hosts: Host[], incidents: PaletteIncident[]) {
   return {
     hosts: hosts.map((host): Entry => ({
       category: "hosts", id: host.id, key: `host-${host.id}`, title: host.hostname,
@@ -56,16 +73,21 @@ function resourceGroups(hosts: Host[], incidents: Incident[]) {
       description: `${incident.status === "resolved" ? "Resolved incident" : "Open incident"} · ${incident.hostname}`,
       label: "Incident", icon: "incident", search: incident.title.toLowerCase(),
     })),
+    services: [services],
     actions,
   };
 }
 
-export function CommandPalette({ hosts, incidents, onSelect }: {
+export function CommandPalette({ id, ref, hosts, incidents, onInspectHost, onOpenIncident, onNavigate }: {
+  id: string;
+  ref: Ref<{ open: () => void }>;
   hosts: Host[];
-  incidents: Incident[];
-  onSelect: (target: Target) => void;
+  incidents: PaletteIncident[];
+  onInspectHost: (id: string) => void;
+  onOpenIncident: (id: string) => void;
+  onNavigate: (page: WorkspacePage) => void;
 }) {
-  const id = useId();
+  const resultsId = `${id}-results`;
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const results = useRef<HTMLDivElement>(null);
@@ -83,6 +105,7 @@ export function CommandPalette({ hosts, incidents, onSelect }: {
     if (results.current) results.current.scrollTop = 0;
     input.current?.focus();
   }, []);
+  useImperativeHandle(ref, () => ({ open }), [open]);
 
   useEffect(() => {
     function shortcut(event: globalThis.KeyboardEvent) {
@@ -110,10 +133,10 @@ export function CommandPalette({ hosts, incidents, onSelect }: {
       const suggested = [...resources.hosts.slice(0, 2), ...resources.incidents.slice(0, 1)];
       if (suggested.length) groups.push({ title: "Suggested", entries: suggested });
     }
-    groups.push({ title: "Quick actions", entries: actions });
+    groups.push({ title: "Quick actions", entries: quickActions }, { title: "Pages", entries: pages });
   } else {
     for (const [category, label] of filters) {
-      if (category === "all" || category === "services" || (filter !== "all" && category !== filter)) continue;
+      if (category === "all" || (filter === "all" ? category === "services" : category !== filter)) continue;
       const entries = term ? resources[category].filter(entry => words.every(word => entry.search.includes(word))) : resources[category];
       if (entries.length) {
         const count = `${entries.length} ${entries.length === 1 ? "result" : "results"}`;
@@ -123,7 +146,7 @@ export function CommandPalette({ hosts, incidents, onSelect }: {
   }
   const entries = groups.flatMap(group => group.entries);
   const active = entries.find(entry => entry.key === activeKey) ?? entries[0];
-  const optionId = (entry: Entry) => `${id}-${entry.key}`;
+  const optionId = (entry: Entry) => `${resultsId}-${entry.key}`;
 
   function resetSelection() {
     setActiveKey(null);
@@ -133,7 +156,9 @@ export function CommandPalette({ hosts, incidents, onSelect }: {
   function choose(entry: Entry) {
     if (entry.category !== "actions") setRecent(previous => [entry.key, ...previous.filter(key => key !== entry.key)].slice(0, 3));
     dialog.current?.close();
-    onSelect(entry);
+    if (entry.category === "actions") onNavigate(entry.id);
+    else if (entry.category === "hosts") onInspectHost(entry.id);
+    else onOpenIncident(entry.id);
   }
 
   function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -151,56 +176,52 @@ export function CommandPalette({ hosts, incidents, onSelect }: {
   }
 
   return (
-    <>
-      <Button size="sm" className="command-trigger" aria-label="Open command palette" aria-haspopup="dialog" aria-controls={id} aria-keyshortcuts="Control+K Meta+K" onClick={open}>
-        <PaletteIcon icon="search" /><span>Jump to…</span><kbd aria-hidden="true">Ctrl K</kbd>
-      </Button>
-      <dialog ref={dialog} id={id} className="command-palette" aria-label="Command palette" onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}>
-        <div className="command-search">
-          <PaletteIcon icon="search" />
-          <Input ref={input} type="text" className="command-input" placeholder="Search or run a command…" autoComplete="off" enterKeyHint="go"
-            role="combobox" aria-label="Search commands" aria-autocomplete="list" aria-expanded="true" aria-controls={`${id}-results`} aria-activedescendant={active && optionId(active)}
-            value={query} onChange={event => { setQuery(event.target.value); resetSelection(); }} onKeyDown={onSearchKeyDown} />
-          {query && <Button size="sm" variant="ghost" className="command-icon-button" aria-label="Clear search" onClick={() => { setQuery(""); resetSelection(); input.current?.focus(); }}><PaletteIcon icon="close" /></Button>}
-          <Button size="sm" variant="ghost" className="command-icon-button" aria-label="Close command palette" onClick={() => dialog.current?.close()}><kbd>Esc</kbd></Button>
-        </div>
-        <div className="command-filters" role="group" aria-label="Filter commands">
-          {filters.map(([value, label]) => (
-            <Button key={value} size="sm" variant="ghost" aria-pressed={filter === value} onClick={() => { setFilter(value); resetSelection(); input.current?.focus(); }}>{label}</Button>
+    <dialog ref={dialog} id={id} className="command-palette" aria-label="Command palette" onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}>
+      <div className="command-search">
+        <PaletteIcon icon="search" />
+        <Input ref={input} type="text" className="command-input" placeholder="Search or run a command…" autoComplete="off" enterKeyHint="go"
+          role="combobox" aria-label="Search commands" aria-autocomplete="list" aria-expanded="true" aria-controls={resultsId} aria-activedescendant={active && optionId(active)}
+          value={query} onChange={event => { setQuery(event.target.value); resetSelection(); }} onKeyDown={onSearchKeyDown} />
+        {query && <Button size="sm" variant="ghost" className="command-icon-button" aria-label="Clear search" onClick={() => { setQuery(""); resetSelection(); input.current?.focus(); }}><PaletteIcon icon="close" /></Button>}
+        <Button size="sm" variant="ghost" className="command-icon-button" aria-label="Close command palette" onClick={() => dialog.current?.close()}><kbd>Esc</kbd></Button>
+      </div>
+      <div className="command-filters" role="group" aria-label="Filter commands">
+        {filters.map(([value, label]) => (
+          <Button key={value} size="sm" variant="ghost" aria-pressed={filter === value} onClick={() => { setFilter(value); resetSelection(); input.current?.focus(); }}>{label}</Button>
+        ))}
+      </div>
+      <div className="command-scroll" ref={results}>
+        <div className="command-results" id={resultsId} role="listbox" aria-label="Commands">
+          {groups.map((group, index) => (
+            <div className="command-group" key={index} role="group" aria-labelledby={`${resultsId}-group-${index}`}>
+              <div className="command-group-title" id={`${resultsId}-group-${index}`}>{group.title}</div>
+              {group.entries.map(entry => (
+                <div id={optionId(entry)} key={entry.key} role="option" aria-selected={entry.key === active?.key} className="command-option"
+                  aria-label={`${entry.title}, ${entry.label}`} aria-describedby={`${optionId(entry)}-description`}
+                  onPointerMove={event => { if (event.pointerType === "mouse") setActiveKey(entry.key); }}
+                  onMouseDown={event => event.preventDefault()} onClick={() => choose(entry)}>
+                  <PaletteIcon icon={entry.icon} />
+                  <span className="command-option-copy"><span>{entry.title}</span><small id={`${optionId(entry)}-description`}>{entry.description}</small></span>
+                  <span className="command-option-meta" aria-hidden="true">{entry.key === active?.key ? <>Open <kbd>Enter</kbd></> : entry.label}</span>
+                </div>
+              ))}
+            </div>
           ))}
         </div>
-        <div className="command-scroll" ref={results}>
-          <div className="command-results" id={`${id}-results`} role="listbox" aria-label="Commands">
-            {groups.map((group, index) => (
-              <div className="command-group" key={index} role="group" aria-labelledby={`${id}-group-${index}`}>
-                <div className="command-group-title" id={`${id}-group-${index}`}>{group.title}</div>
-                {group.entries.map(entry => (
-                  <div id={optionId(entry)} key={entry.key} role="option" aria-selected={entry.key === active?.key} className="command-option"
-                    aria-label={`${entry.title}, ${entry.label}`} aria-describedby={`${optionId(entry)}-description`}
-                    onPointerMove={event => { if (event.pointerType === "mouse") setActiveKey(entry.key); }}
-                    onMouseDown={event => event.preventDefault()} onClick={() => choose(entry)}>
-                    <PaletteIcon icon={entry.icon} />
-                    <span className="command-option-copy"><span>{entry.title}</span><small id={`${optionId(entry)}-description`}>{entry.description}</small></span>
-                    <span className="command-option-meta" aria-hidden="true">{entry.key === active?.key ? <>Open <kbd>Enter</kbd></> : entry.label}</span>
-                  </div>
-                ))}
-              </div>
-            ))}
+        {!entries.length ? (
+          <div className="command-message" role="status">
+            <strong>No results</strong>
+            <p>{term ? <>Nothing matches “{term}”. Try a different search or filter.</> : "Nothing to show in this category yet."}</p>
           </div>
-          {!entries.length ? (
-            <div className="command-message" role="status">
-              <strong>{filter === "services" ? "Service search unavailable" : "No results"}</strong>
-              <p>{filter === "services" ? "Service inventory and endpoint checks are not collected yet." : term ? <>Nothing matches “{term}”. Try a different search or filter.</> : "Nothing to show in this category yet."}</p>
-            </div>
-          ) : term && <p className="command-tip">Search by host name, incident title, or action</p>}
-        </div>
-        <div className="command-help" aria-hidden="true">
-          <span><kbd>↑</kbd><kbd>↓</kbd> Select</span>
-          <span><kbd>Enter</kbd> Open</span>
-          <span><kbd>Esc</kbd> Close</span>
-          <kbd className="command-help-shortcut">Ctrl K</kbd>
-        </div>
-      </dialog>
-    </>
+        ) : term && filter === "all" && <p className="command-tip">Search by host name, incident title, or page name</p>}
+        {filter === "services" && <p className="command-tip">Open Services to view the configured systemd unit for a selected host and endpoint checks. Individual units and endpoints are not searched here.</p>}
+      </div>
+      <div className="command-help" aria-hidden="true">
+        <span><kbd>↑</kbd><kbd>↓</kbd> Select</span>
+        <span><kbd>Enter</kbd> Open</span>
+        <span><kbd>Esc</kbd> Close</span>
+        <kbd className="command-help-shortcut">Ctrl K</kbd>
+      </div>
+    </dialog>
   );
 }
