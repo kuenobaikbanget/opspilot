@@ -15,6 +15,9 @@ import {
   type AsciiSkeletonProps,
 } from "ascii-reveal";
 
+// The library uses one frame clock. Keep every skeleton variant on the same period.
+const skeletonTiming = { "--ars-speed": "1.8s" } as React.CSSProperties;
+
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 const canvasSupportCache = new WeakMap<Document, boolean>();
 
@@ -97,7 +100,7 @@ export const AsciiCardReveal = forwardRef<AsciiRevealHandle, AsciiCardRevealProp
     {
       as = "div",
       preset = "decode",
-      speed,
+      speed = 0.5,
       duration = "fast",
       origin,
       selector,
@@ -177,10 +180,35 @@ export type AsciiCardSkeletonProps = AsciiSkeletonProps;
 export function AsciiCardSkeleton({
   variant = "scan",
   animate = true,
+  style,
   ...rest
 }: AsciiCardSkeletonProps) {
   const canAnimate = useCanAnimateAscii();
-  return <AsciiSkeleton {...rest} variant={variant} animate={animate && canAnimate} />;
+  return <AsciiSkeleton {...rest} variant={variant} style={{ ...style, ...skeletonTiming }} animate={animate && canAnimate} />;
+}
+
+export function AsciiLoading({
+  label,
+  as = "div",
+  className,
+  id,
+  lines = 2,
+  widths = ["88%", "62%"],
+  seed,
+  variant,
+}: Pick<AsciiCardSkeletonProps, "lines" | "widths" | "seed" | "variant"> & {
+  label: string;
+  as?: "div" | "span";
+  className?: string;
+  id?: string;
+}) {
+  const Element = as;
+  return (
+    <Element id={id} className={className} role="status">
+      <span className="sr-only" data-ascii="skip">{label}</span>
+      <AsciiCardSkeleton as="span" lines={lines} widths={widths} seed={seed} variant={variant} />
+    </Element>
+  );
 }
 
 export type { AsciiRevealHandle };

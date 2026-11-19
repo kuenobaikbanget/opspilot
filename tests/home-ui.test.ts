@@ -118,12 +118,16 @@ test("overview dashboard cards show ASCII skeletons while loading and clear clea
   const { loadingState, midState, loadedState } = await scenario("ascii-loading-transition");
   expect(loadingState.summarySkeletons).toBeGreaterThan(0);
   expect(loadingState.riskSkeletons).toBeGreaterThan(0);
+  expect(loadingState.inspectorSkeletons).toBeGreaterThan(0);
+  expect(loadingState.inspectorLoading).toContain("Loading device details…");
   expect(loadingState.endpointSkeletons).toBeGreaterThan(0);
   expect(loadingState.inventorySkeletons).toBeGreaterThan(0);
   expect(loadingState.animatedSkeletons).toBe(0);
   expect(loadingState.overlays).toBe(0);
 
   expect(midState.summarySkeletons).toBe(0);
+  expect(midState.inspectorHost).toBe("Fixture host");
+  expect(midState.inspectorLoading).toBeUndefined();
   expect(midState.endpointSkeletons).toBe(0);
   expect(midState.inventorySkeletons).toBe(0);
   expect(midState.serviceSkeletons).toBeGreaterThan(0);
@@ -145,4 +149,17 @@ test("failed fleet and endpoint reads clear ASCII skeletons and report truthful 
   expect(summaryText).toContain("Could not load fleet scope");
   expect(endpointText).toContain("Endpoint reachability unavailable");
   expect(inventoryText).toContain("Device inventory unavailable.");
+});
+
+test("incident memory shows ASCII while searching and distinguishes a failed read from a confirmed empty result", async () => {
+  const { pending, failed, afterStaleResponse, pendingAgain, empty } = await scenario("ascii-memory");
+  expect(pending.pending).toBe(true);
+  expect(pending.text).not.toContain("No matching resolved incidents");
+  expect(failed.pending).toBe(false);
+  expect(failed.text).toContain("Incident memory unavailable: Fixture memory outage");
+  expect(afterStaleResponse.text).toContain("Incident memory unavailable");
+  expect(afterStaleResponse.text).not.toContain("Old search result");
+  expect(pendingAgain.pending).toBe(true);
+  expect(empty.pending).toBe(false);
+  expect(empty.text).toContain("No matching resolved incidents");
 });

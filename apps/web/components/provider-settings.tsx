@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { AI_PROVIDER_PRESETS, type AiProvider, type ProviderProtocol, type UpdateAiProviderRequest } from "@opspilot/contracts";
 import { api, ApiError } from "../lib/api";
+import { AsciiLoading } from "./ascii-card-reveal";
 import { Badge, Button, Field, Input, Notice, Panel, Select } from "./ui";
 
 type Props = {
@@ -166,7 +167,9 @@ export function ProviderSettings({ providers, encryptionConfigured, loading, err
       <div><h2 id="provider-settings-title" ref={heading} tabIndex={-1}>AI providers</h2><p>Manage encrypted credentials and choose where AI requests are sent. Saving a connection does not verify its endpoint.</p></div>
       <Button variant="primary" disabled={locked || loading || providers.length >= 100} onClick={e => openEditor(null, e.currentTarget)}>Add provider</Button>
     </div>
-    {loading && <p className="muted" role="status">Refreshing provider metadata…</p>}
+    {loading && (providers.length || error
+      ? <p className="muted" role="status">Refreshing provider metadata…</p>
+      : <AsciiLoading label="Loading provider metadata…" lines={3} />)}
     {error && <Notice tone="danger" role="alert"><p>{error} Previously loaded metadata may be stale. Investigations and provider actions are disabled until refresh succeeds.</p><Button size="sm" onClick={() => void onRefresh()} disabled={loading}>Retry provider refresh</Button></Notice>}
     {!loading && !error && !encryptionConfigured && <Notice tone="warning">Server encryption is not configured. Set a valid AI_PROVIDER_ENCRYPTION_KEY on the Hub and Worker to enable provider changes, tests and investigations. No master key is entered in this browser.</Notice>}
     {actionError && <Notice tone="danger" role="alert">{actionError}</Notice>}

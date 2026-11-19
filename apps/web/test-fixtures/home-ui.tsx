@@ -13,6 +13,10 @@ const deferredHosts = scenario === "ascii-loading-transition" ? Promise.withReso
 const deferredServices = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
 const deferredHostServices = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
 const deferredInvestigation = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
+const deferredMemory = scenario === "ascii-memory" ? [
+  Promise.withResolvers<Response>(), Promise.withResolvers<Response>(), Promise.withResolvers<Response>(),
+] : [];
+let memoryRequests = 0;
 const timestamp = "2026-11-18T00:00:00.000Z";
 const sampleTime = currentSample ? new Date().toISOString() : timestamp;
 let historyAborted = false;
@@ -116,6 +120,11 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       }
       value = { endpoints: [] };
       break;
+    case "/api/memory": {
+      const read = deferredMemory[memoryRequests++];
+      if (!read) throw new Error("Unexpected memory read");
+      return read.promise;
+    }
     case "/api/auth/logout":
       status = 503;
       value = { error: "Fixture sign-out failure" };
@@ -220,6 +229,8 @@ try {
       const loadingState = {
         summarySkeletons: document.querySelectorAll(".overview-summary [data-ascii-skeleton]").length,
         riskSkeletons: document.querySelectorAll(".overview-watchlist [data-ascii-skeleton]").length,
+        inspectorLoading: document.querySelector(".overview-inspector > [role=status]")?.textContent,
+        inspectorSkeletons: document.querySelectorAll(".overview-inspector > [role=status] [data-ascii-skeleton]").length,
         endpointSkeletons: document.querySelectorAll(".overview-endpoint-scope [data-ascii-skeleton]").length,
         inventorySkeletons: document.querySelectorAll(".overview-inventory [data-ascii-skeleton]").length,
         animatedSkeletons: document.querySelectorAll("[data-ars-animate]").length,
@@ -235,6 +246,8 @@ try {
       });
       const midState = {
         summarySkeletons: document.querySelectorAll(".overview-summary [data-ascii-skeleton]").length,
+        inspectorHost: document.querySelector(".overview-inspector .overview-hostname")?.textContent,
+        inspectorLoading: document.querySelector(".overview-inspector > [role=status]")?.textContent,
         endpointSkeletons: document.querySelectorAll(".overview-endpoint-scope [data-ascii-skeleton]").length,
         inventorySkeletons: document.querySelectorAll(".overview-inventory [data-ascii-skeleton]").length,
         serviceSkeletons: document.querySelectorAll(".overview-risk-services [data-ascii-skeleton]").length,
@@ -290,6 +303,28 @@ try {
         endpointText: document.querySelector(".overview-endpoint-scope")?.textContent,
         inventoryText: document.querySelector(".overview-inventory")?.textContent,
       }));
+      break;
+    }
+    case "ascii-memory": {
+      const memory = () => ({
+        pending: Boolean(document.querySelector('[aria-labelledby="memory-title"] [data-ascii-skeleton]')),
+        text: document.querySelector('[aria-labelledby="memory-title"]')?.textContent,
+      });
+      async function reopenMemory() {
+        await click("Overview");
+        await click("Incident memory");
+      }
+      await click("Incident memory");
+      const pending = memory();
+      await reopenMemory();
+      await act(async () => { deferredMemory[1].resolve(Response.json({ error: "Fixture memory outage" }, { status: 503 })); });
+      const failed = memory();
+      await act(async () => { deferredMemory[0].resolve(Response.json([{ id: "old", summary: "Old search result" }])); });
+      const afterStaleResponse = memory();
+      await reopenMemory();
+      const pendingAgain = memory();
+      await act(async () => { deferredMemory[2].resolve(Response.json([])); });
+      console.log(JSON.stringify({ pending, failed, afterStaleResponse, pendingAgain, empty: memory() }));
       break;
     }
     default:
