@@ -27,7 +27,7 @@ The catalog and dashboard preserve the distinction between measured records, adv
 
 The supplied Pencil design replaces the earlier rail composition. Layout and typography follow [DESIGN.md](../DESIGN.md). Example devices, endpoints, probe periods and organization data from the reference are not embedded in live views.
 
-1. **Overview:** threshold pressure falls into at or above limit, within 5 percentage points below it, or within measured limits. Rank by smallest resource headroom and label that counts cover the assessed subset of loaded hosts. Show the selected reading, configured limit, sample time and host history. Endpoint reachability and workload availability stay separately labeled as uncollected.
+1. **Overview:** threshold pressure is at or above the limit, within 5 percentage points below it, or within measured limits. Rank by smallest resource headroom; assessment covers only loaded hosts with comparable current readings. Fleet agent counts use the full-fleet totals, and the offline shortcut shows only offline rows among loaded devices. The pressure inspector shows the reading, limit, percentage-point margin, separate utilization ratio, sample time, and a host history action. Independent endpoint reachability follows the watchlist and inspector.
 2. **Hosts:** the summary counts connected and enrolled agents. The table supports query and status filtering, displays CPU/memory/disk and last contact, and gives a separate resource-risk status. Historical readings stay readable and do not receive live risk color. Host details retain the existing raw resource history, metadata, and related incident link.
 3. **Incident investigation:** show open and recently resolved records with an inspector containing recorded timeline and evidence. A host sample is separate from incident-time evidence. Advisory AI and human-confirmed resolutions remain distinct.
 4. **Services and setup:** use a separate Services destination and Add service capability state. No configured monitor, probe result or service process state is fabricated. Connect server guides the operator through configuration, pinned installation, and checking the selected agent's connectivity and sample freshness.
@@ -45,6 +45,8 @@ The supplied Pencil design replaces the earlier rail composition. Layout and typ
 
 `Not configured` means no endpoint is associated with that service. `Unknown` means a configured check has no usable/fresh result. Multiple endpoints show `up / configured` plus failing/unknown counts as needed; details enumerate the checks rather than choosing an arbitrary result. Reachability is always from the displayed probe location, not a promise of global availability.
 
+In Overview, endpoint lists distinguish loading, unavailable and confirmed empty. A configured monitor without a usable result is pending; a result aged 60 seconds or more is stale. The Worker makes a monitor eligible after 15 seconds, so the 60-second freshness window tolerates polling and queue delays without promising a check cadence. Stale results retain their original check time and historical outcome, but do not count as current up or down. Aging is independent of page refresh and fleet sample freshness.
+
 The reference case must remain representable: `web-01` has high host CPU; `storefront-api` is running but its endpoint returns HTTP 503; `backup-01` has an offline agent but two independently successful endpoint checks; `node-exporter` has no configured endpoint. None of these observations establishes a root cause.
 
 ### Selection and real actions
@@ -54,6 +56,7 @@ The reference case must remain representable: `web-01` has high host CPU; `store
 - Search/filter shows matches and a clear action. Distinguish no matching hosts, no enrolled hosts and an API failure.
 - `Connect server` uses the existing single-use enrollment API. `Add service` cannot save anything without a validated target, a supported probe and persisted monitor configuration.
 - Opening host history or incident detail does not start an AI investigation or a diagnostic.
+- Overview's pressure inspector only attaches an incident matching the selected host and resource category. Its advisory card identifies the source incident and opening time; a recorded hypothesis does not assess the current sample. Loading, an unavailable detail read, a successful absence of investigations, and a recorded status are distinct.
 - Provider settings report server-side configuration only; no provider keys or enrollment credentials enter public reference examples or ordinary inspector content.
 
 ### Charts, freshness and responsive states
@@ -62,7 +65,7 @@ The reference case must remain representable: `web-01` has high host CPU; `store
 - Display the actual alert rule. The starter uses two consecutive high samples and a 15-minute cooldown; the image's ≥80% for 10 minutes is an example, not an implemented policy. Metric color is not proof that an incident was opened.
 - RX/TX rates require counter deltas over an observed interval, correct units and reset handling. Current byte counters cannot be labeled MiB/s directly. OS/capacity, per-service resources and probe metadata remain unavailable until collected.
 - Show sample/check timestamps independently. A page refresh timestamp does not make old telemetry or endpoint results fresh; staleness thresholds must come from the implemented collection policy.
-- Wide Overview and Incidents use a contextual right pane; narrow layouts stack. Preserve host-table headers, keyboard access, status and freshness in a named horizontal scroll region. Dock destinations keep their labels on mobile.
+- Wide Overview and Incidents use a contextual right pane; narrow layouts stack. In Overview the watchlist, pressure inspector, and endpoint panel retain that DOM and keyboard order at all widths. Preserve host-table headers, keyboard access, status and freshness in a named horizontal scroll region. Dock destinations keep their labels on mobile.
 - Loading, no hosts, no matches, no service selected, unsupported/denied inventory, no endpoint, check pending/stale, offline agent and partial fetch failure each need explicit copy. Do not replace these with the same “All healthy” or “No data” state.
 
 ### Delivery boundary
@@ -97,7 +100,7 @@ Use `↑` / `↓` to select, `Enter` to open, and `Esc` to dismiss and return fo
 Admin password only, error feedback, warning when keys absent. Login is separate from agent enrollment.
 
 ### Overview and Hosts
-The Overview compares fresh online resource observations against the limits reported by the Hub. Counts of enrolled and online agents cover the fleet; threshold counts cover only the assessed subset of loaded hosts. Hosts keeps historical values and raw timestamped history, not interpolated points. Use the watchlist inspector to open history for the selected resource.
+The Overview compares fresh online resource observations against the limits reported by the Hub. Agent online and offline counts cover the fleet; threshold counts cover only the assessed subset of loaded hosts. Offline rows show last agent contact when known; disconnected, online with a stale sample, online without a sample, and cached do not imply current readings. Hosts keeps historical values and raw timestamped history, not interpolated points. The watchlist inspector opens history for the selected resource. Fleet polling continues outside Hosts, but selected host history fetches and polls only while Hosts is open; leaving aborts any pending history read.
 
 ### Incident detail
 Open and resolved queues share an inspector with host context, a measured evidence timeline, explicit AI investigation and human-confirmed resolution. A latest host sample is not an incident-time measurement; no endpoint impact is inferred.

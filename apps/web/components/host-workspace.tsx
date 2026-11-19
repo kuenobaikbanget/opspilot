@@ -20,7 +20,7 @@ type FleetIncident = {
 
 type Props = {
   refreshKey: number;
-  showServices: boolean;
+  isVisible: boolean;
   onFleet: (fleet: HostList) => void;
   onFleetError: (message: string) => void;
   onUnauthorized: () => void;
@@ -182,7 +182,7 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
 
 export function HostWorkspace({
   refreshKey,
-  showServices,
+  isVisible,
   onFleet,
   onFleetError,
   onUnauthorized,
@@ -199,6 +199,7 @@ export function HostWorkspace({
   const [status, setStatus] = useState("all");
   const [selected, setSelected] = useState<string | null>(null);
   const [selectionNotice, setSelectionNotice] = useState("");
+  const [appliedInspection, setAppliedInspection] = useState<Props["inspectHost"]>(null);
   const selectedRef = useRef(selected);
   const loadedOnce = useRef(false);
   selectedRef.current = selected;
@@ -207,6 +208,13 @@ export function HostWorkspace({
   const [resource, setResource] = useState<Resource>("disk_percent");
   const [now, setNow] = useState(Date.now());
   const inspectorHeading = useRef<HTMLHeadingElement>(null);
+
+  if (inspectHost && inspectHost !== appliedInspection) {
+    setAppliedInspection(inspectHost);
+    setSelected(inspectHost.id);
+    setSelectionNotice("");
+    setResource(inspectHost.resource ?? "cpu_percent");
+  }
 
   useEffect(() => {
     let active = true;
@@ -225,7 +233,7 @@ export function HostWorkspace({
         onFleetError("");
         if (!loadedOnce.current) {
           loadedOnce.current = true;
-          setSelected(next.hosts[0]?.id ?? null);
+          setSelected(current => current ?? next.hosts[0]?.id ?? null);
         }
         if (selectedRef.current && !next.hosts.some(h => h.id === selectedRef.current)) {
           setSelected(null);
@@ -243,19 +251,24 @@ export function HostWorkspace({
 
     void load();
     const poll = setInterval(() => void load(), 10000);
-    const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       active = false;
       controller.abort();
       clearInterval(poll);
-      clearInterval(clock);
     };
   }, [refreshKey, onFleet, onFleetError, onUnauthorized]);
 
   useEffect(() => {
+    if (!isVisible) return;
+    setNow(Date.now());
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(clock);
+  }, [isVisible]);
+
+  useEffect(() => {
     setHistory(null);
     setHistoryError("");
-    if (!selected) return;
+    if (!isVisible || !selected) return;
     let active = true;
     let pending = false;
     const controller = new AbortController();
@@ -286,19 +299,18 @@ export function HostWorkspace({
       controller.abort();
       clearInterval(poll);
     };
-  }, [selected, onUnauthorized]);
+  }, [isVisible, selected, onUnauthorized]);
 
   useEffect(() => {
     if (!inspectHost) return;
-    setSelected(inspectHost.id);
-    setSelectionNotice("");
-    setResource(inspectHost.resource ?? "cpu_percent");
     const frame = requestAnimationFrame(() => {
       inspectorHeading.current?.closest(".host-inspector")?.scrollIntoView({ block: "start" });
       inspectorHeading.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
   }, [inspectHost]);
+
+  if (!isVisible) return null;
 
   const hosts = fleet?.hosts ?? [];
   const rows = hosts.map(host => ({ host, risk: fleet && !failure ? pressure(host, fleet, now) : null }));
@@ -516,7 +528,7 @@ export function HostWorkspace({
                       : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}
               </p>
 
-              {showServices && <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />}
+              <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />
 
               {historyError && (
                 <Notice tone="warning">
