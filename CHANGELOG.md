@@ -5,6 +5,7 @@
 - Added opt-in, read-only status for one locally configured systemd service. Hosts and Services show the selected agent's measured state and observation time, including stale/offline, explicitly disabled and unavailable/unsupported states. Existing host telemetry and endpoint check behavior are unchanged. Apply migration 004 before deploying the new Hub.
 - Fixed the Web release image build by excluding the Home regression fixtures from the Docker build context. Local Web typechecking and the Home regression suite keep their existing scope.
 - Wired the signed-in command palette to the header, desktop dock, and Ctrl/Cmd+K. Search all workspace destinations and loaded hosts and incidents, navigate by keyboard, and reopen recent records. The enrollment shortcut opens Connect server without generating a token.
+- Fixed Overview triage: fleet-wide agent counts with an offline shortcut, percentage-point limit margins, resource-matched incident provenance, and independently aged endpoint checks. The pressure inspector precedes reachability on narrow screens, and host history polling stops outside Hosts.
 
 ## Unreleased — 2026-11-18
 

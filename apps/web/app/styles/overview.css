@@ -57,6 +57,30 @@
   overflow-wrap: anywhere;
 }
 
+.overview-fleet-connectivity,
+.overview-fleet-connectivity dl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+.overview-fleet-connectivity dl > div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.overview-fleet-connectivity dt {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.overview-fleet-connectivity dd {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .overview-summary-readings {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -292,8 +316,12 @@
   margin-bottom: var(--space-2);
 }
 
-.overview-endpoint-heading h3 {
-  flex: 1;
+.overview-endpoint-scope {
+  overflow-wrap: anywhere;
+}
+
+.threshold-overview .overview-endpoint-heading h2 {
+  font-size: var(--text-base);
 }
 
 .overview-rule {
@@ -342,14 +370,10 @@
   line-height: 1.15;
 }
 
-.overview-headroom span {
+.overview-headroom-direction {
   color: var(--color-text-muted);
   font-size: var(--text-base);
   letter-spacing: 0;
-}
-
-.threshold-overview abbr {
-  text-decoration: none;
 }
 
 .overview-inspector-measurement {
@@ -429,6 +453,11 @@
 .overview-inventory-status {
   display: grid;
   gap: var(--space-1);
+}
+
+.overview-inventory-status .overview-icon {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 .overview-inventory-limit {
