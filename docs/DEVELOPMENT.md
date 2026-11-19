@@ -21,6 +21,43 @@ bun run typecheck           # TypeScript checks
 
 Backend can be run individually with `bun run dev:hub`, `bun run dev:worker`, `bun run dev:web`. Ensure the root `.env` is exported/loaded in each isolated process.
 
+## Dashboard mock server
+
+Run these in separate terminals from the repository root:
+
+```bash
+# Terminal 1 — synthetic Hub API
+bun run dev:mock-dashboard
+
+# Terminal 2 — real dashboard, pointed at the mock
+HUB_INTERNAL_URL=http://127.0.0.1:4102 bun run --cwd apps/web dev --hostname 127.0.0.1
+```
+
+Open `http://127.0.0.1:3100`. The mock does not require PostgreSQL, the Hub, the Worker, an agent, or credentials. If Web is already running from this checkout, stop it before starting the preview so Next uses the new API target.
+
+| `MOCK_DASHBOARD_SCENARIO` | Preview |
+| --- | --- |
+| `populated` (default) | Hosts comfortably below, near and above their resource limits, plus stale, offline and unsampled hosts; metric history, systemd observations, endpoint checks, incident evidence and searchable resolution memory |
+| `empty` | Empty fleet, endpoint list, incidents, memory and provider settings |
+| `incidents-error` | Incident list, detail and memory return 503 while host and endpoint data stay available |
+
+In **Hosts**, compare `mock-safe-01` (**Within limit**), `mock-near-limit-01` (**Near limit**, CPU 84% against 85%), and `mock-edge-01` (**Limit reached**, CPU 94% against 85%).
+
+For example, restart the mock with `MOCK_DASHBOARD_SCENARIO=empty bun run dev:mock-dashboard`, then reload the dashboard. To change the mock's port, set `MOCK_DASHBOARD_PORT` and use the same port in `HUB_INTERNAL_URL`. Changing only the scenario does not require restarting Web.
+
+The mock bypasses login and serves reads only. Mutations (including **Check now**), agent enrollment and live AI calls are not supported. Use the [database demo seed](#local-dashboard-demo-data) with the real Hub for backend-backed testing. Run the mock's HTTP checks with `bun test tests/mock-dashboard.test.ts`.
+
+### Live mock agents against the local Hub
+
+To populate the running `bun run dev` Hub (`http://127.0.0.1:3001`) and database with online, near-limit, exceeded, stale, offline, and unsampled mock servers:
+
+```bash
+bun run db:seed:mock     # Seed mock hosts, metrics, systemd reports, incidents and memory once
+bun run dev:mock-agents  # Seed and keep local WebSocket mock agents connected to the Hub
+```
+
+Both commands refuse `NODE_ENV=production` and non-loopback `DATABASE_URL` or `MOCK_HUB_URL` targets. Run `bun test tests/mock-agents.test.ts` for the safety negatives.
+
 ## Design system preview
 
 Run `bun run dev:web`, then open `http://localhost:3100/design-system`. This public reference route requires no Hub, database, `.env`, login, or provider credentials. Its examples and interactions are explicitly synthetic and local-only.

@@ -7,7 +7,8 @@ const scenario = process.argv[2];
 let sessionStatus = scenario === "unauthorized" ? 401 : scenario === "session-recovery" ? 503 : 200;
 let incidentStatus = scenario === "cold-failure" || scenario === "recovery" ? 503 : 200;
 const requests: string[] = [];
-const currentSample = scenario === "investigation-unavailable" || scenario === "unrelated-investigation";
+const hostOnline = scenario === "overview-services" || scenario === "overview-services-error";
+const currentSample = hostOnline || scenario === "investigation-unavailable" || scenario === "unrelated-investigation";
 const timestamp = "2026-11-18T00:00:00.000Z";
 const sampleTime = currentSample ? new Date().toISOString() : timestamp;
 let historyAborted = false;
@@ -41,8 +42,12 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       value = status === 200 ? [incident] : { error: "Fixture incident failure" };
       break;
     case `/api/incidents/${incident.id}`:
-      status = 503;
-      value = { error: "Fixture investigation detail failure" };
+      if (scenario === "investigation-unavailable") {
+        status = 503;
+        value = { error: "Fixture investigation detail failure" };
+      } else {
+        value = { incident, evidence: [], investigations: [] };
+      }
       break;
     case "/api/hosts":
       value = {
@@ -63,7 +68,29 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       value = [];
       break;
     case `/api/hosts/${hostId}/services`:
-      value = { agent_id: hostId, online: false, checked_at: timestamp, report: null, service: null };
+      if (scenario === "overview-services-error") {
+        status = 503;
+        value = { error: "Fixture systemd outage" };
+        break;
+      }
+      value = hostOnline
+        ? {
+            agent_id: hostId,
+            online: true,
+            checked_at: sampleTime,
+            report: { status: "observed", observed_at: sampleTime, current: true },
+            service: {
+              id: "d0000000-0000-4000-8000-000000000003",
+              agent_id: hostId,
+              name: "mock-edge-proxy.service",
+              runtime: "systemd",
+              source: "agent_systemd",
+              state: "running",
+              observed_at: sampleTime,
+              freshness: "fresh",
+            },
+          }
+        : { agent_id: hostId, online: false, checked_at: timestamp, report: null, service: null };
       break;
     case "/api/ai/providers":
       value = { providers: [], encryptionConfigured: false };
@@ -150,6 +177,13 @@ try {
       break;
     case "auth-disabled":
       console.log(JSON.stringify({ initial, requests }));
+      break;
+    case "overview-services":
+    case "overview-services-error":
+      console.log(JSON.stringify({
+        riskServices: document.querySelector(".overview-risk-services")?.textContent,
+        inspectorSystemd: document.querySelector(".overview-inspector .host-systemd")?.textContent,
+      }));
       break;
     case "investigation-unavailable":
     case "unrelated-investigation":

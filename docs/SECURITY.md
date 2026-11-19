@@ -105,6 +105,10 @@ The Next.js route `/design-system` is intentionally accessible without an admin 
 
 This route does not grant access to protected `/api` endpoints. Do not import server credentials or populate reference examples from live operational data. Dashboard and login UI checks using synthetic browser responses are not proof of authentication or authorization enforcement; the backend release blockers below remain unchanged.
 
+The opt-in `dev:mock-dashboard` tool is separate from the Hub. It binds only to `127.0.0.1`, refuses `NODE_ENV=production`, and serves synthetic GET responses without authentication, credentials, database access, or outbound requests. Run the preview Web server on loopback too; never proxy the mock publicly or use it to test authentication, enrollment, probes, or provider calls.
+
+The opt-in `dev:mock-agents` / `db:seed:mock` tool (`tools/mock-agents.ts`) refuses `NODE_ENV=production` and requires both `DATABASE_URL` and `MOCK_HUB_URL` to point to loopback hosts. It uses ephemeral random credentials scoped to reserved `f100*` fixture IDs (`version='mock-agent'`) and refuses all `diagnostic_request` messages without running host commands.
+
 ## CI trust boundary
 
 `.github/workflows/checks.yml` (`CI — Tests & builds`) runs untrusted pull-request code only on GitHub-hosted runners using `pull_request`, not `pull_request_target`. It requests only `contents: read`, disables persisted checkout credentials, pins third-party actions to full commit SHAs, and bounds job duration. Keep production credentials and deployment steps out of validation.

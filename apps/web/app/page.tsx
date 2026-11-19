@@ -409,6 +409,7 @@ export default function Home() {
             onOpenIncident={openIncident}
             onInspectHost={inspect}
             onBrowseHosts={() => navigate("hosts")}
+            refreshKey={hostRefresh}
           />
         )}
         {tab === "connect" && <ServerOnboarding onBack={() => navigate("hosts")} onUnauthorized={endSession} fleet={fleet} fleetError={fleetError} onRefresh={() => setHostRefresh(value => value + 1)} />}

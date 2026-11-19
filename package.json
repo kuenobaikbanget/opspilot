@@ -12,10 +12,13 @@
     "dev:hub": "bun run --filter @opspilot/hub dev",
     "dev:web": "bun run --filter @opspilot/web dev",
     "dev:worker": "bun run --filter @opspilot/worker dev",
+    "dev:mock-dashboard": "bun --no-env-file run tools/mock-dashboard.ts",
+    "dev:mock-agents": "bun run tools/mock-agents.ts",
     "dev:mock-endpoint": "bun run tools/mock-endpoint.ts",
     "test": "bun test",
     "db:init": "bun run tools/migrate.ts",
     "db:seed:demo": "bun run tools/seed-demo.ts",
+    "db:seed:mock": "bun run tools/mock-agents.ts --seed-only",
     "ai:import-env": "bun --no-env-file run tools/import-ai-providers.ts",
     "password:hash": "bun run tools/hash-password.ts",
     "typecheck": "bun run --filter @opspilot/hub typecheck && bun run --filter @opspilot/worker typecheck && bun run --filter @opspilot/web typecheck"

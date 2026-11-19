@@ -285,6 +285,27 @@
   );
 }
 
+.overview-risk-services {
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--color-border);
+}
+
+.overview-risk-service {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.overview-risk-service strong {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
 .overview-threshold-bar > span {
   flex-basis: 0;
   min-width: 0;
@@ -329,6 +350,8 @@
 }
 
 .overview-inspector {
+  position: sticky;
+  top: var(--space-6);
   scroll-margin-block: var(--space-6);
 }
 
@@ -411,6 +434,10 @@
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+}
+
+.overview-inspector-body .host-systemd {
+  padding-block: 0;
 }
 
 .overview-inspector-body .ui-button {
@@ -550,6 +577,10 @@
 @media (max-width: 900px) {
   .overview-pressure-workspace {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .overview-inspector {
+    position: static;
   }
 
   .overview-inventory-row {
