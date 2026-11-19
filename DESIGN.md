@@ -32,7 +32,6 @@ typography:
   wordmark: { fontSize: "22px", fontWeight: 600 }
   step-heading: { fontSize: "15px", fontWeight: 500 }
   measurement: { fontFamily: "Geist Mono", fontSize: "28px", fontWeight: 400 }
-  headroom: { fontFamily: "Geist Mono", fontSize: "48px", fontWeight: 400 }
   mono: { fontFamily: "Geist Mono" }
 rounded:
   sm: "3px"
@@ -119,7 +118,7 @@ The light action token is for primary controls, the active dock item and focus, 
 
 ## Typography
 
-Use self-hosted Geist Sans for operational text and Geist Mono for readings, identifiers, timestamps, shortcuts and commands. Main headings use 34px, summary and inspector headings 23px, section headings 18px. Body, labels and captions use 14px, 12px and 11px. Threshold figures use tabular display numbers at 28px; the inspector emphasizes usage as a percentage of the limit at 48px.
+Use self-hosted Geist Sans for operational text and Geist Mono for readings, identifiers, timestamps, shortcuts and commands. Main headings use 34px, summary and inspector headings 23px, section headings 18px. Body, labels and captions use 14px, 12px and 11px. The watchlist and its inspector use 28px tabular numbers for the measured resource reading, with the configured limit next to it in smaller type.
 
 ## Layout
 
@@ -134,7 +133,7 @@ Use self-hosted Geist Sans for operational text and Geist Mono for readings, ide
 
 - **Controls:** 3px radius, 38px standard/36px compact buttons for fine pointers, 42px desktop field height, 2px visible focus. Use busy/disabled states and associated labels and error text. Panels use 4px corners and one-pixel borders.
 - **Elevation:** neutral surface steps and borders define grouping. Only the floating dock uses a soft offset shadow; the command dialog has a dark backdrop. Use short existing transitions and respect reduced motion. Host history retains its scoped View Transition on capable desktop browsers.
-- **Pressure display:** show the source reading, configured limit, and usage as a percentage of that limit. The bar visualizes the same ratio and fills at 100%. Historical samples do not get live risk color. The advisory card only draws from incidents matching the selected host and resource, and names the source incident and its opening time.
+- **Pressure display:** pair the measured resource usage with its labeled configured limit. The Redline ruler uses a fixed 0–100% usage scale: graphite fill to the sample, a white limit marker, and rose hatching only on the part past the limit. The written risk status and both numbers remain available without the ruler. Historical samples do not get live risk color. The advisory card only draws from incidents matching the selected host and resource, and names the source incident and its opening time.
 - **Partial failures:** a failed session check offers retry; 401 returns to login. Unavailable reads do not block other independently scoped reads. Cached data carries the original observation timestamp; a failed refresh is not an empty inventory or recovered incident.
 - **Providers:** the existing table/editor keeps stored credentials server-side, tests explicit, and configuration changes revision-checked. Evidence, recommendations and resolution remain separately labeled.
 - **Services:** show the selected host's configured systemd unit, measured state and original observation time. Separate unavailable collection and stale observations from process state. Do not infer fleet counts, endpoint health or a cause from the unit state.

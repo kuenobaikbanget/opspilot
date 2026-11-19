@@ -11,7 +11,7 @@
 - Added opt-in `db:seed:mock` and `dev:mock-agents` tools for seeding local mock hosts, systemd reports, endpoint checks, incidents, and resolution memory into a loopback development database and streaming live WebSocket telemetry to the local Hub.
 - Displayed each at-risk host's reported `systemd` unit status inside the Overview risk cards and pressure inspector without fabricating running state when collection is disabled, stale, or unavailable.
 - Aligned Overview endpoint reachability with the device watchlist. The entire desktop inspector pins at the top within the workspace, at full content height and without a separate scrollbar.
-- Replaced the Overview's `pp` margins with usage as a percentage of the configured limit. Current readings, limits, and risk thresholds are unchanged.
+- Simplified Overview risk cards and the inspector to show measured resource usage directly beside its configured limit. A 0–100% ruler marks the limit and hatches only the portion beyond it. Risk labels and thresholds are unchanged.
 
 ## Unreleased — 2026-11-18
 
