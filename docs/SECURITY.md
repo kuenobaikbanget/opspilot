@@ -123,7 +123,7 @@ The reusable `packages.yml` additionally requires a matching tag-push context. O
 
 Agent archives ship SHA-256 checksums, not signatures: these detect corruption but do not establish independent publisher authenticity. Signed releases, SBOMs, digest-pinned base images and security scanning remain roadmap work. Image pushes are not atomic across components or with GitHub Release creation; a failed run may already have updated image aliases. Use reviewed versions and record deployment digests rather than relying on mutable `latest`.
 
-GHCR visibility/access is a separate package setting; new packages default to private. Review package Actions access and visibility after first publication, and select a license before enabling public distribution. Neither a stable tag nor successful publication resolves the production blockers below. No workflow deploys the application or enables network exposure.
+GHCR visibility/access is a separate package setting; new packages default to private. Review package Actions access and visibility after first publication. Public distribution must use a reviewed commit that includes the [MIT license](../LICENSE) and retain applicable third-party notices. Neither a stable tag nor successful publication resolves the production blockers below. No workflow deploys the application or enables network exposure.
 
 ## Open security issues — explicit release blockers
 

@@ -75,6 +75,14 @@ No live OpenAI/Anthropic/Gemini request, full Compose boot/image build, producti
 
 **Verification boundary:** public GitHub release publication/download and production DNS/TLS remain unverified. The VM acceptance used generated commands and locally built real release archives under trusted HTTPS fixtures, not a published release. ARM64 ran under QEMU, not physical ARM64 hardware. Browser issuance/copy and VM command execution were exercised separately, not as a single browser-clipboard-to-SSH session.
 
+### Private RC browser-to-systemd acceptance — 2026-11-19
+
+- Built private `v0.1.0-curl.rc.2` from `ee43dcd38d258d9f8221654b6afafb30aca5d8a6` using the release workflow archive steps. Both archives matched `SHA256SUMS`, contained the three expected files, and had static ELF binaries for their declared architectures.
+- Chromium signed in to the built Next.js dashboard over trusted HTTPS. **Connect server** generated a one-use command; **Copy install command** wrote the same bytes to the clipboard. The unchanged command ran via private SSH stdin as the nonroot user on a clean Debian 12 amd64/KVM systemd guest. The real Hub served the installer and processed enrollment over HTTPS. A guest-only CA and host mapping served the local release archives at the GitHub download path without bypassing TLS validation. The installed executable matched the verified AMD64 archive.
+- The real PostgreSQL database received its first sample (`id=1`). The guest rebooted with a changed Linux boot ID and the same agent ID, with the service active/enabled and the private state and identity modes intact. Persisted samples advanced from `id=3` before reboot to fresh `id=6` after it, with one enrollment token issued and consumed total. The proxy recorded two WSS `101` responses. The wizard showed the selected host **Online** with fresh telemetry before and after reboot, and **Finish** returned to Hosts.
+
+This verifies the complete clipboard-to-guest path against isolated local staging. ARM64 was verified as an archive, not booted in this run. The tested upstream commit lacked a distribution license, so no new tag, public GitHub release, asset publication or external staging was used.
+
 ## GitHub publication verification — 2026-11-18
 
 - `actionlint` 1.7.12 passed for CI, Release and reusable Packages workflows.

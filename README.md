@@ -105,7 +105,7 @@ The container agent intentionally has narrower host visibility than a properly p
 
 Pushing a valid version tag such as `v0.1.0-rc.1` on a commit already in `main` runs **Release — Versioned binaries & images**. After CI passes, it builds Linux AMD64/ARM64 agent archives with systemd templates and SHA-256 checksums, publishes four multi-platform images through **Packages — Publish multi-platform GHCR images**, then creates a GitHub Release with generated notes.
 
-Images: `ghcr.io/kuenobaikbanget/opspilot-{hub,worker,web,agent}:<version-without-v>`. Prereleases never update `latest`; stable versions do. Packages start private, and no npm packages or automatic deployments are included. Artifacts are unsigned; the production-hardening and licensing requirements still apply.
+Images: `ghcr.io/kuenobaikbanget/opspilot-{hub,worker,web,agent}:<version-without-v>`. Prereleases never update `latest`; stable versions do. Packages start private, and no npm packages or automatic deployments are included. Artifacts are unsigned; the production-hardening and [license](LICENSE) requirements still apply.
 
 See [publishing and package-access setup](docs/DEVELOPMENT.md#github-actions-releases-and-packages) and [using published artifacts](docs/DEPLOYMENT.md#published-release-assets-and-container-images). The workflows must first be merged/pushed; these instructions do not mean a release has already been published.
 
@@ -152,4 +152,4 @@ See [publishing and package-access setup](docs/DEVELOPMENT.md#github-actions-rel
 5. **No secret exfiltration**. The starter redacts common patterns, but this is not complete secret detection; do not feed sensitive production logs to third-party LLMs until controls are tested.
 
 ### Licensing
-No license selected yet. Choose and add a license before public distribution; absence of a license is not an invitation for redistribution.
+OpsPilot is licensed under the [MIT License](LICENSE). Third-party components remain subject to their own licenses.
