@@ -137,7 +137,6 @@ The [Fleet & services dashboard plan](ROADMAP.md#fleet-services-dashboard-delive
 opspilot/
 ├── README.md
 ├── AGENTS.md                    # Coding-agent rules and invariants
-├── CHANGELOG.md                 # Release and unreleased change log
 ├── DESIGN.md                    # Implemented visual system; not backend design
 ├── package.json                 # Bun workspaces + developer scripts
 ├── bun.lock                     # Reproducible TS workspace dependencies
@@ -205,13 +204,12 @@ opspilot/
 │   ├── seed-demo.test.ts        # Seed safety negative tests
 │   └── incident-fixtures/       # Synthetic annotated AI benchmark fixtures
 ├── docs/
-│   ├── PRD.md, ARCHITECTURE.md, BACKEND-DESIGN.md, UI-UX.md
+│   ├── ARCHITECTURE.md, BACKEND-DESIGN.md, UI-UX.md
 │   ├── DATABASE.md, API.md, AI-DESIGN.md, SECURITY.md
 │   ├── DEPLOYMENT.md, DEVELOPMENT.md, TESTING.md, ROADMAP.md
-│   ├── assets/
-│   │   ├── fleet-services-reference.png
-│   │   └── logo/                # Master SVG symbol and lockup assets
-│   └── runbooks/incident-502.md
+│   └── assets/
+│       ├── fleet-services-reference.png
+│       └── logo/                # Master SVG symbol and lockup assets
 └── .github/workflows/{checks,packages,release}.yml
 ```
 

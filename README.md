@@ -130,7 +130,6 @@ See [publishing and package-access setup](docs/DEVELOPMENT.md#github-actions-rel
 
 ## Repository documents
 
-- [PRD](docs/PRD.md) — problem, audience, scope, acceptance criteria.
 - [Architecture](docs/ARCHITECTURE.md) — deployment, data/agent/AI diagrams, ADRs, directory tree, and module ownership.
 - [Backend technical design](docs/BACKEND-DESIGN.md) — module design and responsibilities.
 - [Database](docs/DATABASE.md) — schema and retention strategy.
@@ -143,7 +142,6 @@ See [publishing and package-access setup](docs/DEVELOPMENT.md#github-actions-rel
 - [Development](docs/DEVELOPMENT.md) — day-to-day workflows and technology references.
 - [Testing](docs/TESTING.md) — tests, incident fixtures, verification history, validation checklist.
 - [Roadmap](docs/ROADMAP.md) — milestone plan and definition of done.
-- [Changelog](CHANGELOG.md) — release and unreleased change history.
 
 ## Design priorities
 

@@ -111,8 +111,7 @@
 }
 
 .overview-summary-reading dd,
-.overview-risk-values > :last-child dd,
-.overview-limit-usage {
+.overview-pressure-comparison strong {
   color: var(--overview-pressure-ink, var(--color-text));
 }
 
@@ -227,68 +226,131 @@
   border-top: 1px solid var(--color-border);
 }
 
-.overview-risk-values,
 .overview-inventory-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-2);
 }
 
-.overview-risk-values {
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 7.5rem);
-  align-items: center;
+.overview-pressure-reading {
+  display: grid;
+  gap: var(--space-1);
 }
 
-.overview-risk-values :is(dt, dd),
+.overview-pressure-comparison {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.overview-pressure-comparison strong,
+.overview-pressure-limit {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-pressure-comparison strong {
+  font-size: var(--text-stat);
+  font-weight: 400;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.overview-pressure-limit-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+.overview-pressure-limit-label::before,
+.overview-pressure-marker::before {
+  content: "";
+  inline-size: var(--space-2);
+  block-size: 5px;
+  background: var(--color-text);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.overview-pressure-gauge {
+  margin-block-start: var(--space-2);
+}
+
+.overview-pressure-track {
+  position: relative;
+  block-size: var(--space-3);
+  background: var(--color-input);
+  outline: 1px solid var(--color-border);
+}
+
+.overview-pressure-track > span {
+  position: absolute;
+  inset-block: 0;
+}
+
+.overview-pressure-fill {
+  left: 0;
+  width: var(--usage);
+  background: var(--color-border-strong);
+  box-shadow: inset -2px 0 var(--overview-pressure-ink, var(--color-text));
+}
+
+.overview-pressure-overrun {
+  left: var(--limit);
+  right: calc(100% - var(--usage));
+  background: var(--color-danger) repeating-linear-gradient(135deg, transparent 0 2px, var(--color-danger-subtle) 2px 4px);
+  box-shadow: inset -1px 0 var(--color-danger);
+}
+
+.overview-pressure-track > .overview-pressure-marker {
+  inset-block: -3px -2px;
+  left: var(--limit);
+  inline-size: 1px;
+  background: var(--color-text);
+  transform: translateX(-50%);
+}
+
+.overview-pressure-marker::before {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.overview-pressure-ticks {
+  block-size: var(--space-2);
+  margin-block-start: var(--space-1);
+  background:
+    linear-gradient(var(--color-text-muted), var(--color-text-muted)) right top / 1px 6px no-repeat,
+    repeating-linear-gradient(90deg, var(--color-text-muted) 0 1px, transparent 1px 25%) left top / 100% 6px no-repeat,
+    repeating-linear-gradient(90deg, var(--color-border-strong) 0 1px, transparent 1px 5%) left top / 100% 3px no-repeat;
+}
+
+.overview-pressure-scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.25;
+}
+
 .overview-inventory-metrics :is(dt, dd) {
   overflow-wrap: anywhere;
 }
 
-.overview-risk-values dt,
 .overview-inventory-metrics dt,
 .overview-evidence dt {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
 }
 
-.overview-risk-values dd,
 .overview-inventory-metrics dd {
   margin-top: var(--space-1);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
-}
-
-.overview-risk-values > :nth-child(2) {
-  text-align: center;
-}
-
-.overview-risk-values > :nth-child(2) dd {
-  color: var(--overview-pressure-ink);
-  font-size: 1.75rem;
-  letter-spacing: -0.03em;
-  line-height: 1.15;
-}
-
-.overview-risk-values > :last-child {
-  text-align: end;
-}
-
-.overview-threshold-bar {
-  display: flex;
-  gap: 3px;
-  height: 8px;
-}
-
-.overview-risk-reading .overview-threshold-bar {
-  --overview-segment-width: calc((100% + 2px) / 12);
-  gap: 0;
-  height: 6px;
-  mask-image: repeating-linear-gradient(
-    to right,
-    black 0 calc(var(--overview-segment-width) - 2px),
-    transparent 0 var(--overview-segment-width)
-  );
 }
 
 .overview-risk-services {
@@ -310,19 +372,6 @@
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: 500;
-}
-
-.overview-threshold-bar > span {
-  flex-basis: 0;
-  min-width: 0;
-}
-
-.overview-threshold-used {
-  background: var(--overview-pressure-ink, var(--color-text));
-}
-
-.overview-threshold-remaining {
-  background: var(--color-border);
 }
 
 .overview-endpoint-scope,
@@ -389,30 +438,6 @@
   padding: var(--space-5);
   color: var(--color-text-muted);
   font-size: var(--text-sm);
-}
-
-.overview-limit-usage {
-  font-family: var(--font-mono);
-  font-size: 3rem;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.04em;
-  line-height: 1.15;
-}
-
-.overview-limit-usage span {
-  color: var(--color-text-muted);
-  font-size: var(--text-base);
-  letter-spacing: 0;
-}
-
-.overview-inspector-measurement {
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
-}
-
-.overview-inspector-measurement strong {
-  color: var(--color-text);
-  font-weight: 500;
 }
 
 .overview-evidence {
@@ -691,14 +716,6 @@
 
   .overview-summary-reading dd {
     font-size: var(--text-xl);
-  }
-
-  .overview-risk-values {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .overview-risk-values > :nth-child(2) dd {
-    font-size: var(--text-lg);
   }
 
   .overview-inventory-row {

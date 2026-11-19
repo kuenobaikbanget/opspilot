@@ -1,7 +1,5 @@
 # Roadmap & Implementation Plan
 
-No promise of elapsed time is made here; phases are sequenced by dependencies. The delivered ZIP contains baseline scaffolding for the selected MVP envelope.
-
 ## Phase 0 — Bootstrap and validate stack
 
 - [x] Bun workspace and TS/Go folder structure
@@ -41,7 +39,7 @@ The [Monochrome workspace](UI-UX.md#fleet-services-dashboard-contract-target) im
 - [ ] Connect Services, Add service and endpoint investigation to supported workload/endpoint APIs. The current screens explicitly report unavailable capabilities.
 - [ ] Verify independent process/endpoint states, offline-agent/reachable-endpoint behavior, truthful freshness and no causality claims; verify actual browser layout and keyboard access at 1440px, 1024px and 390px using the [acceptance scenarios](TESTING.md#fleet-services-dashboard-acceptance-planned).
 
-**Dashboard exit gate:** FR-13–FR-16 work against real authorized data, negative security/interoperability tests pass, and desktop/mobile browser evidence exists. The current `/design-system` preview is not evidence that inventory or endpoint monitoring works.
+**Dashboard exit gate:** The fleet table and inspector, workload inventory, independent HTTP checks, and timestamped trends work against real authorized data. Negative security/interoperability tests pass, and desktop/mobile browser evidence exists. The current `/design-system` preview is not evidence that inventory or endpoint monitoring works.
 
 **Exit gate:** stable 24h test with a few hosts, bounded DB growth and reconnect handling.
 
