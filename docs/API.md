@@ -10,7 +10,7 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | POST | `/api/auth/logout` | none | `200` clears cookie |
 | GET | `/api/auth/me` | none | role, auth status, and `authDisabled` flag |
 | POST | `/api/agents/enrollment-token` | `{}` | `{token, expiresInSeconds}`; show once |
-| GET | `/api/agents/install-config` | none | `{hubUrl,installerUrl,version,repository}` or `503 {"error":"Agent installation is not configured"}` |
+| GET | `/api/agents/install-config` | none | `AgentInstallConfig` or `503 {"error":"Agent installation is not configured"}` |
 | GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}` |
 | GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; 400 invalid ID, 404 unknown host |
 | GET | `/api/hosts/:id/services` | none | selected-host `HostSystemdStatus`; 400 invalid ID, 404 unknown host |
@@ -46,11 +46,14 @@ Investigations validate the browser revision before diagnostics and recheck unde
 
 ### Installation metadata and public script
 
-`AgentInstallConfig` contains the canonical HTTPS `hubUrl`, `${hubUrl}/api/agents/install.sh` as `installerUrl`, exact pinned release `version` and GitHub `repository`. The Hub reads `OPSPILOT_PUBLIC_HUB_URL`, `OPSPILOT_AGENT_VERSION` and optional `OPSPILOT_AGENT_REPOSITORY` (default `kuenobaikbanget/opspilot`); see [validation and deployment prerequisites](DEPLOYMENT.md#curl-based-headless-linux-installation). No browser, Host/Forwarded header, `ALLOWED_ORIGIN` or `HUB_INTERNAL_URL` inference is used. Missing/invalid configuration disables dashboard generation with 503, not monitoring or the manual token API. Reading metadata issues no token.
+`AgentInstallConfig` includes `mode`, `hubUrl`, exact pinned release `version`, and GitHub `repository`. The Hub reads `OPSPILOT_PUBLIC_HUB_URL`, `OPSPILOT_AGENT_VERSION` and optional `OPSPILOT_AGENT_REPOSITORY` (default `kuenobaikbanget/opspilot`). No browser, Host/Forwarded header, `ALLOWED_ORIGIN` or `HUB_INTERNAL_URL` inference is used. Missing/invalid configuration disables dashboard generation with 503, not monitoring or the manual token API. Reading metadata issues no token.
+
+- `mode: "https"` uses the canonical HTTPS `hubUrl` and includes `installerUrl: "${hubUrl}/api/agents/install.sh"`.
+- `mode: "loopback-development"` has no `installerUrl`. It requires `OPSPILOT_DEV_LOOPBACK_INSTALL=true` and exact `NODE_ENV=development`. The raw `hubUrl` must be `http://127.0.0.1`, optionally with a decimal port (1–65535, no leading zero) and/or one terminal slash. The origin port must equal the Hub's actual listening port; no port means 80. The Hub binds to `127.0.0.1` with the development opt-in, and strips the terminal slash from metadata. See [same-machine setup](DEPLOYMENT.md#same-machine-http-development).
 
 Public `GET /api/agents/install.sh` needs no admin session and returns static Bash bytes with `Content-Type: text/x-shellscript; charset=utf-8`, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Other methods return 405 with `Allow: GET`; a missing asset is a server error. It contains no token, request interpolation, network fetch or DB mutation.
 
-Token issuance remains an authenticated, Origin-protected POST with `{token,expiresInSeconds:600}` and existing audit behavior. Tokens are usable once; hiding a command or generating another does not revoke them. The dashboard downloads the complete script into a private temporary file before invoking Bash as root (sudo when needed), not `curl | sudo bash`.
+Token issuance remains an authenticated, Origin-protected POST with `{token,expiresInSeconds:600}` and existing audit behavior. Tokens are usable once; hiding a command or generating another does not revoke them. The HTTPS mode downloads the complete script into a private temporary file before invoking Bash as root (sudo when needed), not `curl | sudo bash`. Development mode downloads only GitHub release assets over HTTPS; it runs the verified binary without arguments or privilege escalation. Enrollment and WebSocket message formats are unchanged.
 
 ### Host monitoring read model
 

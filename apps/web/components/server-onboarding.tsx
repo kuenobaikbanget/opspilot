@@ -220,6 +220,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
     }
   }
 
+  const loopback = installConfig.status === "ready" && installConfig.value.mode === "loopback-development";
   const observedAt = Date.parse(fleet?.observed_at ?? "");
   const staleAfter = (fleet?.stale_after_seconds ?? 0) * 1000;
   const fleetCurrent = !fleetError && Number.isFinite(observedAt) && now - observedAt <= staleAfter
@@ -229,7 +230,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
   const verificationReason = fleetError ? "Fleet data is unavailable. Refresh the fleet to continue."
     : !fleetCurrent ? "Waiting for a current fleet observation."
     : !fleet?.hosts.length ? "No enrolled hosts found. If the install succeeded, wait for the agent to appear and refresh the fleet."
-    : !selectedHost ? (selectedHostId ? "This host is no longer listed. Select another host." : "Select the server where you ran the installer.")
+    : !selectedHost ? (selectedHostId ? "This host is no longer listed. Select another host." : loopback ? "Select this machine from the host list." : "Select the server where you ran the installer.")
     : selectedHost.status !== "online" ? "The selected agent was offline at the last fleet update."
     : !Number.isFinite(sampledAt) ? "The selected agent has not sent telemetry yet."
     : sampledAt > observedAt ? "The sample timestamp is later than the fleet observation. Refresh the fleet to check again."
@@ -241,7 +242,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
       <Button size="sm" className="onboarding-back" onClick={backToHosts}><Icon name="left" /> Back to Hosts</Button>
       <header className="onboarding-header">
         <h1 id={`${id}-title`}>Connect server</h1>
-        <p>Install the OpsPilot agent on a Linux server and check that the Hub receives telemetry.</p>
+        <p>{loopback ? "Run the OpsPilot agent on this Linux machine and check that the local Hub receives telemetry." : "Install the OpsPilot agent on a Linux server and check that the Hub receives telemetry."}</p>
       </header>
 
       <ol className="onboarding-progress" role="list" aria-label="Server setup progress">
@@ -266,15 +267,24 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                 {!active && <span className="onboarding-step-number"><Icon name={complete ? "complete" : "lock"} /></span>}
                 <div>
                   <h2 ref={active ? activeHeading : undefined} tabIndex={active ? -1 : undefined}>{index + 1}. {title}</h2>
-                  {!active && <p className="onboarding-step-status">{complete ? (index === 0 ? "Installation configuration reviewed" : "Install command generated") : summary}</p>}
+                  {!active && <p className="onboarding-step-status">{complete ? (index === 0 ? "Installation configuration reviewed" : "Install command generated") : loopback && index === 1 ? "Run the one-time command on this machine" : summary}</p>}
                 </div>
                 {!active && complete && <Button size="sm" onClick={() => goTo(index === 0 ? 0 : 1)}>Review<span className="sr-only"> {title.toLowerCase()} step</span></Button>}
               </div>
 
               {active && index === 0 && (
                 <div className="onboarding-step-body">
-                  <p>Choose the Linux server you want to connect. Run the installer there yourself as root or with sudo. OpsPilot does not open an SSH session.</p>
-                  <p>Requires amd64 or arm64 Linux with running systemd, Bash, curl, and CA certificates. The server must be able to reach the Hub over HTTPS.</p>
+                  {installConfig.status === "ready" && (loopback ? (
+                    <>
+                      <Notice tone="warning">Development only. Run the agent on the same machine as the Hub, not on a remote server or in a container.</Notice>
+                      <p>Requires amd64 or arm64 Linux, Bash, curl, CA certificates, tar, awk, and sha256sum. No sudo or systemd.</p>
+                    </>
+                  ) : (
+                    <>
+                      <p>Choose the Linux server you want to connect. Run the installer there yourself as root or with sudo. OpsPilot does not open an SSH session.</p>
+                      <p>Requires amd64 or arm64 Linux with running systemd, Bash, curl, and CA certificates. The server must be able to reach the Hub over HTTPS.</p>
+                    </>
+                  ))}
                   {installConfig.status === "loading" && <AsciiLoading id={`${id}-config-status`} label="Loading installation configuration…" />}
                   {installConfig.status === "error" && (
                     <>
@@ -302,7 +312,9 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
 
               {active && index === 1 && (
                 <div className="onboarding-step-body">
-                  <p>Open a terminal on the intended server, then generate, copy, and run the command there. The installer verifies the pinned binary and starts a non-root systemd service.</p>
+                  <p>{loopback
+                    ? "Generate, copy, and run the command in Bash on this machine as your regular user. The verified agent runs in the foreground, without systemd. Ctrl+C stops it and removes its temporary local state."
+                    : "Open a terminal on the intended server, then generate, copy, and run the command there. The installer verifies the pinned binary and starts a non-root systemd service."}</p>
                   {installConfig.status === "ready" && (
                     <dl className="onboarding-details">
                       <div><dt>Hub address</dt><dd>{installConfig.value.hubUrl}</dd></div>
@@ -331,13 +343,13 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                     <Button size="sm" onClick={() => goTo(0)}><Icon name="left" /> Back</Button>
                     <Button variant={generated ? "primary" : "secondary"} size="sm" disabled={!generated || generating} aria-describedby={`${id}-continue-status`} onClick={() => goTo(2)}>Continue to verification <Icon name="right" /></Button>
                   </div>
-                  <p id={`${id}-continue-status`} className="onboarding-caption">{generated ? "Continue after the command finishes. Leaving this step hides the command; it does not revoke the token." : "Generate and run the install command before continuing."}</p>
+                  <p id={`${id}-continue-status`} className="onboarding-caption">{generated ? (loopback ? "Keep the agent running while you verify. Leaving this step hides the command; it does not revoke the token." : "Continue after the command finishes. Leaving this step hides the command; it does not revoke the token.") : "Generate and run the install command before continuing."}</p>
                 </div>
               )}
 
               {active && index === 2 && (
                 <div className="onboarding-step-body">
-                  <p>Select the server where you ran the installer. Match its hostname and, if there are duplicates, the agent ID. The fleet does not link hosts to the one-time command.</p>
+                  <p>{loopback ? "While the agent is running, select this machine by hostname or agent ID." : "Select the server where you ran the installer. Match its hostname and, if there are duplicates, the agent ID."} The fleet does not link hosts to the one-time command.</p>
                   {fleetError && <Notice tone="warning" role="alert">{fleetError}</Notice>}
                   <div className="onboarding-host-picker">
                     <Field id={`${id}-host`} label="Installed server">
