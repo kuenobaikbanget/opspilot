@@ -36,12 +36,12 @@ function listenEphemeral() {
   return { server, port: server.port };
 }
 
-async function runTool(scriptRelativePath: string, args: string[]) {
+async function runTool(scriptRelativePath: string, args: string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(
     [process.execPath, "--no-env-file", "run", path.join(repoRoot, scriptRelativePath), ...args],
     {
       cwd: repoRoot,
-      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env },
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -251,6 +251,15 @@ describe("CLI --help and --dry-run smoke checks", () => {
     const invalidPort = await runTool("tools/dev-worktree.ts", ["--web-port", "not-a-number"]);
     expect(invalidPort.exitCode).not.toBe(0);
     expect(invalidPort.stderr).toContain("Invalid --web-port");
+  });
+
+  test("the development loopback opt-in refuses a Web proxy bind outside loopback", async () => {
+    const run = await runTool("tools/dev-worktree.ts", ["--host", "0.0.0.0", "--dry-run"], {
+      NODE_ENV: "development",
+      OPSPILOT_DEV_LOOPBACK_INSTALL: "true",
+    });
+    expect(run.exitCode).not.toBe(0);
+    expect(run.stderr).toContain("requires --host 127.0.0.1");
   });
 
   test("worktree-cleanup supports --help, --dry-run --json, and rejects unknown flags", async () => {
