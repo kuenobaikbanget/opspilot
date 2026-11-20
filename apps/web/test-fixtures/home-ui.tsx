@@ -22,7 +22,7 @@ const sampleTime = currentSample ? new Date().toISOString() : timestamp;
 let historyAborted = false;
 let failHistory = false;
 let deferHistory = false;
-const deferredHistory = Promise.withResolvers<Response>();
+let deferredHistory = Promise.withResolvers<Response>();
 const secondHostId = "d0000000-0000-4000-8000-000000000004";
 const hostId = "d0000000-0000-4000-8000-000000000001";
 const incident = {
@@ -71,7 +71,7 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       }
       value = {
         hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: currentSample ? "online" : "offline", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: currentSample ? 94 : 82, memory_percent: 40, disk_percent: 25 }, ...(scenario === "host-network-history" ? [{ id: secondHostId, hostname: "Unsampled host", version: "fixture", status: "online", created_at: timestamp, last_seen_at: sampleTime, sampled_at: null, cpu_percent: null, memory_percent: null, disk_percent: null }] : [])],
-        total: 1, online: currentSample ? 1 : 0, limit: 100, observed_at: sampleTime, stale_after_seconds: 60,
+        total: scenario === "host-network-history" ? 2 : 1, online: scenario === "host-network-history" ? 2 : currentSample ? 1 : 0, limit: 100, observed_at: sampleTime, stale_after_seconds: 60,
         thresholds: { cpu_percent: 85, memory_percent: 90, disk_percent: 90 },
       };
       break;
@@ -231,8 +231,23 @@ try {
       console.log(JSON.stringify({ advisory: document.querySelector('[aria-label="Advisory AI analysis"]')?.textContent, requests }));
       break;
     case "host-network-history": {
+      failHistory = true;
       await click("Hosts");
+      await click("Network (Mb/s)");
+      const coldFailure = document.querySelector(".history-stage")?.textContent;
+      deferHistory = true;
+      await click("Refresh");
+      const coldPending = document.querySelector(".history-stage")?.textContent;
+      await act(async () => {
+        deferredHistory.resolve(Response.json({ error: "Fixture history outage" }, { status: 503 }));
+      });
+      const coldFailedAgain = document.querySelector(".history-stage")?.textContent;
+      deferHistory = false;
+      failHistory = false;
+      deferredHistory = Promise.withResolvers<Response>();
+      await click("Refresh");
       const before = requests.filter(path => path.endsWith("/metrics")).length;
+      await click("Resource (%)");
       await click("Network (Mb/s)");
       const network = document.querySelector(".network-history")?.textContent;
       const after = requests.filter(path => path.endsWith("/metrics")).length;
@@ -250,7 +265,7 @@ try {
       if (!hostButton) throw new Error("Missing unsampled host");
       await act(async () => { hostButton.click(); });
       const other = document.querySelector(".history-stage")?.textContent;
-      console.log(JSON.stringify({ before, after, network, cached, pending, failedAgain, other }));
+      console.log(JSON.stringify({ coldFailure, coldPending, coldFailedAgain, before, after, network, cached, pending, failedAgain, other }));
       break;
     }
     case "host-history-visibility": {

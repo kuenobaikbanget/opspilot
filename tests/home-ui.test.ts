@@ -165,7 +165,14 @@ test("incident memory shows ASCII while searching and distinguishes a failed rea
 });
 
 test("network history stays cached on retry and isolated by host", async () => {
-  const { before, after, network, cached, pending, failedAgain, other } = await scenario("host-network-history");
+  const { coldFailure, coldPending, coldFailedAgain, before, after, network, cached, pending, failedAgain, other } = await scenario("host-network-history");
+  expect(coldFailure).toContain("refresh failed: Fixture history outage");
+  expect(coldFailure).toContain("History unavailable");
+  expect(coldPending).toContain("Loading resource history");
+  expect(coldPending).not.toContain("Cached history");
+  expect(coldPending).not.toContain("refresh failed");
+  expect(coldFailedAgain).toContain("refresh failed: Fixture history outage");
+  expect(coldFailedAgain).toContain("History unavailable");
   expect(after).toBe(before);
   expect(network).toContain("RX (download): 1 Mb/s");
   expect(network).toContain("TX (upload): 0.5 Mb/s");

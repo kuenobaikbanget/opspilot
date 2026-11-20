@@ -663,9 +663,9 @@ export function HostWorkspace({
                     ))}
                   </div>
                 )}
-                {historyPending && activeHistoryError ? (
+                {historyPending && activeHistoryError && history?.id === host.id ? (
                   <Notice tone="warning">Refreshing history. Cached history below is stale.</Notice>
-                ) : activeHistoryError ? (
+                ) : !historyPending && activeHistoryError ? (
                   <Notice tone="warning">
                     Resource history refresh failed: {activeHistoryError}.{" "}
                     {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}
