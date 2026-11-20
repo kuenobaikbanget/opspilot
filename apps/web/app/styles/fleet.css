@@ -94,6 +94,10 @@
 .resource-history svg { display: block; width: 100%; height: auto; }
 .resource-history svg text { fill: var(--color-text-muted); font-family: var(--font-mono); font-size: 14px; font-variant-numeric: tabular-nums; }
 .chart-grid { stroke: var(--color-border); stroke-width: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  .history-marks { animation: history-bars-in var(--duration-normal) var(--ease-out); }
+}
+@keyframes history-bars-in { from { transform: scaleY(0.24); } }
 .chart-bar { fill: var(--series-color); }
 .chart-zero { stroke: var(--color-text-muted); stroke-width: 1; }
 .chart-selection { fill: none; stroke: var(--color-text); stroke-width: 1; vector-effect: non-scaling-stroke; }

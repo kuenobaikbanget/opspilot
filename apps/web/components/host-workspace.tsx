@@ -78,6 +78,7 @@ const hasReading = (value: number | null): value is number => value != null && N
 
 function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resource: HistoryMode }) {
   const sliderId = useId();
+  const marks = useRef<SVGGElement>(null);
   const [cursorTime, setCursorTime] = useState<string | null>(null);
   const [showTooltip, setShowTooltip] = useState(false);
   useEffect(() => {
@@ -178,7 +179,10 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
             }
             const overColumn = Math.abs(position - x(rows[nearest].timestamp)) <= barWidth / 2 + 2;
             setShowTooltip(overColumn);
-            if (overColumn) setCursorTime(rows[nearest].sample.sampled_at);
+            if (overColumn) {
+              if (!showTooltip) marks.current?.getAnimations()[0]?.finish();
+              setCursorTime(rows[nearest].sample.sampled_at);
+            }
           }}
           onPointerLeave={() => setShowTooltip(false)}
         >
@@ -188,52 +192,58 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
               <line x1={left - 14} x2="544" y1={y(value)} y2={y(value)} className="chart-grid" />
             </g>
           ))}
-          {rows.map(({ sample, timestamp }, rowIndex) => {
-            const center = x(timestamp);
-            let level = 0;
-            let hasZero = false;
-            const segments = series.map(({ key }) => {
-              const value = sample[key];
-              if (!hasReading(value)) return null;
-              if (value === 0) {
-                hasZero = true;
-                return null;
-              }
-              level += value;
-              return (
-                <rect
-                  key={key}
-                  x={center - barWidth / 2}
-                  y={y(level)}
-                  width={barWidth}
-                  height={height * value / max}
-                  rx={stacked ? undefined : 1.5}
-                  className="chart-bar"
-                  data-series={key}
-                />
-              );
-            });
-            return (
-              <g key={sample.sampled_at}>
-                {segments}
-                {level === 0 && hasZero && (
-                  <line x1={center - barWidth / 2} x2={center + barWidth / 2} y1={baseline} y2={baseline} className="chart-zero" />
-                )}
-                {rowIndex === index && (measured ? (
+          <g
+            key={resource}
+            ref={marks}
+            className="history-marks"
+            style={{ transformOrigin: `0 ${baseline}px` }}
+          >
+            {rows.map(({ sample, timestamp }, rowIndex) => {
+              const center = x(timestamp);
+              let level = 0;
+              let hasZero = false;
+              const segments = series.map(({ key }) => {
+                const value = sample[key];
+                if (!hasReading(value)) return null;
+                if (value === 0) {
+                  hasZero = true;
+                  return null;
+                }
+                level += value;
+                return (
                   <rect
-                    x={center - barWidth / 2 - 1.5}
-                    y={y(level) - 2}
-                    width={barWidth + 3}
-                    height={baseline - y(level) + 4}
-                    rx="2"
-                    className="chart-selection"
+                    key={key}
+                    x={center - barWidth / 2}
+                    y={y(level)}
+                    width={barWidth}
+                    height={height * value / max}
+                    rx={stacked ? undefined : 1.5}
+                    className="chart-bar"
+                    data-series={key}
                   />
-                ) : (
-                  <line x1={center} x2={center} y1={y(max)} y2={baseline} className="chart-cursor" />
-                ))}
-              </g>
-            );
-          })}
+                );
+              });
+              return (
+                <g key={sample.sampled_at}>
+                  {segments}
+                  {level === 0 && hasZero && (
+                    <line x1={center - barWidth / 2} x2={center + barWidth / 2} y1={baseline} y2={baseline} className="chart-zero" />
+                  )}
+                  {rowIndex === index && measured > 0 && (
+                    <rect
+                      x={center - barWidth / 2 - 1.5}
+                      y={y(level) - 2}
+                      width={barWidth + 3}
+                      height={baseline - y(level) + 4}
+                      rx="2"
+                      className="chart-selection"
+                    />
+                  )}
+                </g>
+              );
+            })}
+          </g>
+          {measured === 0 && <line x1={columnX} x2={columnX} y1={top} y2={baseline} className="chart-cursor" />}
           <text x={left} y="224">{time(first.sample.sampled_at)}</text>
           {duration > 0 && <text x={left + width} y="224" textAnchor="end">{time(last.sample.sampled_at)}</text>}
         </svg>
@@ -262,6 +272,7 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
           value={index}
           disabled={rows.length === 1}
           onChange={event => {
+            marks.current?.getAnimations()[0]?.finish();
             setShowTooltip(false);
             setCursorTime(rows[Number(event.target.value)].sample.sampled_at);
           }}
@@ -604,9 +615,7 @@ export function HostWorkspace({
                     key={key}
                     variant="ghost"
                     aria-pressed={resource === key}
-                    onClick={() => {
-                      if (resource !== key) selectWithTransition(() => setResource(key));
-                    }}
+                    onClick={() => setResource(key)}
                   >
                     <span
                       className={`resource-value ${pressureClass(fleet && !failure ? resourcePressure(host, fleet, now, key)?.state : undefined)}`}
@@ -621,9 +630,7 @@ export function HostWorkspace({
                   variant="ghost"
                   className="all-resources"
                   aria-pressed={resource === "all"}
-                  onClick={() => {
-                    if (resource !== "all") selectWithTransition(() => setResource("all"));
-                  }}
+                  onClick={() => setResource("all")}
                 >
                   <span className="resource-label">All</span>
                 </Button>
