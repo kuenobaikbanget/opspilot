@@ -163,3 +163,15 @@ test("incident memory shows ASCII while searching and distinguishes a failed rea
   expect(empty.pending).toBe(false);
   expect(empty.text).toContain("No matching resolved incidents");
 });
+
+ test("network history stays cached on retry and isolated by host", async () => {
+  const { before, after, network, cached, other } = await scenario("host-network-history");
+  expect(after).toBe(before);
+  expect(network).toContain("RX (download): 1 Mb/s");
+  expect(network).toContain("TX (upload): 0.5 Mb/s");
+  expect(cached).toContain("Cached history below is stale");
+  expect(cached).toContain("RX (download): 1 Mb/s");
+  expect(other).toContain("Network rates unavailable");
+  expect(other).not.toContain("Fixture history outage");
+  expect(other).not.toContain("RX (download): 1 Mb/s");
+});

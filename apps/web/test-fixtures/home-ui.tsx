@@ -8,7 +8,7 @@ let sessionStatus = scenario === "unauthorized" ? 401 : scenario === "session-re
 let incidentStatus = scenario === "cold-failure" || scenario === "recovery" ? 503 : 200;
 const requests: string[] = [];
 const hostOnline = scenario === "overview-services" || scenario === "overview-services-error" || scenario === "ascii-loading-transition";
-const currentSample = hostOnline || scenario === "investigation-unavailable" || scenario === "unrelated-investigation";
+const currentSample = scenario === "host-network-history" || hostOnline || scenario === "investigation-unavailable" || scenario === "unrelated-investigation";
 const deferredHosts = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
 const deferredServices = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
 const deferredHostServices = scenario === "ascii-loading-transition" ? Promise.withResolvers<Response>() : null;
@@ -20,6 +20,8 @@ let memoryRequests = 0;
 const timestamp = "2026-11-18T00:00:00.000Z";
 const sampleTime = currentSample ? new Date().toISOString() : timestamp;
 let historyAborted = false;
+let failHistory = false;
+const secondHostId = "d0000000-0000-4000-8000-000000000004";
 const hostId = "d0000000-0000-4000-8000-000000000001";
 const incident = {
   id: "d0000000-0000-4000-8000-000000000002",
@@ -66,7 +68,7 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         break;
       }
       value = {
-        hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: currentSample ? "online" : "offline", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: currentSample ? 94 : 82, memory_percent: 40, disk_percent: 25 }],
+        hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: currentSample ? "online" : "offline", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: currentSample ? 94 : 82, memory_percent: 40, disk_percent: 25 }, ...(scenario === "host-network-history" ? [{ id: secondHostId, hostname: "Unsampled host", version: "fixture", status: "online", created_at: timestamp, last_seen_at: sampleTime, sampled_at: null, cpu_percent: null, memory_percent: null, disk_percent: null }] : [])],
         total: 1, online: currentSample ? 1 : 0, limit: 100, observed_at: sampleTime, stale_after_seconds: 60,
         thresholds: { cpu_percent: 85, memory_percent: 90, disk_percent: 90 },
       };
@@ -80,8 +82,13 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         }, { once: true });
         return promise;
       }
-      value = [];
+      if (scenario === "host-network-history") {
+        if (failHistory) { status = 503; value = { error: "Fixture history outage" }; }
+        else value = [{ sampled_at: sampleTime, cpu_percent: 94, memory_percent: 40, disk_percent: 25, network_rx_bytes: 2875000, network_tx_bytes: 1437500 }, { sampled_at: new Date(Date.parse(sampleTime) - 15000).toISOString(), cpu_percent: 90, memory_percent: 40, disk_percent: 25, network_rx_bytes: 1000000, network_tx_bytes: 500000 }];
+      } else value = [];
       break;
+    case `/api/hosts/${secondHostId}/metrics`: value = []; break;
+    case `/api/hosts/${secondHostId}/services`: value = { agent_id: secondHostId, online: true, checked_at: sampleTime, report: null, service: null }; break;
     case `/api/hosts/${hostId}/services`:
       if (deferredHostServices) return deferredHostServices.promise.then(response => response.clone());
       if (scenario === "overview-services-error") {
@@ -216,6 +223,22 @@ try {
     case "unrelated-investigation":
       console.log(JSON.stringify({ advisory: document.querySelector('[aria-label="Advisory AI analysis"]')?.textContent, requests }));
       break;
+    case "host-network-history": {
+      await click("Hosts");
+      const before = requests.filter(path => path.endsWith("/metrics")).length;
+      await click("Network (Mb/s)");
+      const network = document.querySelector(".network-history")?.textContent;
+      const after = requests.filter(path => path.endsWith("/metrics")).length;
+      failHistory = true;
+      await click("Refresh");
+      const cached = document.querySelector(".history-stage")?.textContent;
+      const hostButton = [...document.querySelectorAll<HTMLButtonElement>(".host-table button")].find(button => button.textContent?.includes("Unsampled host"));
+      if (!hostButton) throw new Error("Missing unsampled host");
+      await act(async () => { hostButton.click(); });
+      const other = document.querySelector(".history-stage")?.textContent;
+      console.log(JSON.stringify({ before, after, network, cached, other }));
+      break;
+    }
     case "host-history-visibility": {
       const historyRequests = () => requests.filter(path => path === `/api/hosts/${hostId}/metrics`).length;
       const onOverview = historyRequests();

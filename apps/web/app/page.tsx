@@ -23,7 +23,7 @@ type MemoryRead = { records: Memory[]; error?: never } | { records?: never; erro
 
 const headings = {
   overview: ["Know what’s close to the edge.", "See which resources have reached their configured limits and how much headroom is left."],
-  hosts: ["Every host. One clear view.", "Monitor agent connectivity and resource usage across your Linux hosts."],
+  hosts: ["Hosts", "Monitor agent connectivity and resource usage against configured limits."],
   services: ["Services", "Workload state and endpoint reachability are measured separately from host health."],
   incidents: ["From signal to resolution.", "Review measured evidence, investigate, and record what fixed the incident."],
   drift: ["Configuration drift", "Recorded configuration hash changes. Correlation is not causation."],

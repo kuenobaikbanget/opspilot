@@ -8,6 +8,7 @@ import { Badge, Button, Input, Notice, Panel } from "./ui";
 import { hasFreshSample, percent, pressure, resourcePressure, resources, type Resource } from "../lib/host-pressure";
 import { WorkspaceIcon } from "./workspace-shell";
 import { HostSystemd } from "./host-systemd";
+import { deriveNetworkRates } from "../lib/host-network";
 
 type FleetIncident = {
   id: string;
@@ -56,7 +57,7 @@ function selectWithTransition(update: () => void) {
     update();
     return;
   }
-  document.startViewTransition(() => flushSync(update));
+  void document.startViewTransition(() => flushSync(update)).finished.catch(() => {});
 }
 
 async function request(path: string, signal?: AbortSignal, method = "GET") {
@@ -181,6 +182,42 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
   );
 }
 
+function NetworkHistory({ samples, maxInterval, current, cached }: { samples: HostMetric[]; maxInterval: number; current: boolean; cached: boolean }) {
+  const sliderId = useId();
+  const [cursorTime, setCursorTime] = useState<string | null>(null);
+  const rows = deriveNetworkRates(samples, maxInterval);
+  const valid = rows.filter(row => row.rxMbps !== null && row.txMbps !== null);
+  if (!valid.length) return <p className="empty">Network rates unavailable — two usable samples are required.</p>;
+  const index = Math.max(0, rows.findIndex(row => row.sampledAt === cursorTime));
+  const selectedIndex = cursorTime && rows.some(row => row.sampledAt === cursorTime) ? index : rows.length - 1;
+  const observation = rows[selectedIndex];
+  const usable = observation.rxMbps !== null && observation.txMbps !== null;
+  const latest = selectedIndex === rows.length - 1;
+  const label = !usable ? (latest ? "Latest interval unavailable" : "Unavailable") : cached ? "Cached" : latest && current && Date.now() - observation.timestampMs <= maxInterval * 1000 ? "Latest interval" : "Historical";
+  const format = (n: number | null) => n === null ? "Unavailable" : n > 0 && n < 0.001 ? "<0.001" : String(Number(n.toFixed(3)));
+  const start = rows[0].timestampMs, end = rows[rows.length - 1].timestampMs;
+  const x = (t: number) => 48 + (t - start) / (end - start || 1) * 464;
+  const top = Math.max(...valid.flatMap(row => [row.rxMbps!, row.txMbps!])) || 1;
+  const time = (s: string) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return <figure className="resource-history network-history">
+    <figcaption><h3>Network traffic</h3><span>Estimated aggregate traffic · excludes loopback</span></figcaption>
+    <div className="history-observation"><span>{label}</span><time dateTime={observation.sampledAt}>{stamp(observation.sampledAt)}</time></div>
+    <p>RX (download): <strong>{format(observation.rxMbps)}</strong> Mb/s · TX (upload): <strong>{format(observation.txMbps)}</strong> Mb/s</p>
+    <svg viewBox="0 0 548 250" role="img" aria-label="Estimated RX and TX rates over Hub receipt intervals. Unavailable intervals have no dots.">
+      {(["rxMbps", "txMbps"] as const).map((key, track) => <g key={key}>
+        <text x="0" y={track * 90 + 20}>{track ? "TX" : "RX"}</text>
+        <text x="48" y={track * 90 + 15}>{format(top)} Mb/s</text>
+        <line x1="48" x2="512" y1={track * 90 + 82} y2={track * 90 + 82} className="chart-grid" />
+        {valid.map(row => <circle key={row.sampledAt} cx={x(row.timestampMs)} cy={track * 90 + 82 - row[key]! / top * 62} r="4" className="chart-cursor-point"><title>{stamp(row.sampledAt)} · {format(row[key])} Mb/s</title></circle>)}
+      </g>)}
+      <line x1={x(observation.timestampMs)} x2={x(observation.timestampMs)} y1="10" y2="174" className="chart-cursor" />
+      <text x="48" y="220">{time(rows[0].sampledAt)}</text><text x="512" y="220" textAnchor="end">{time(rows[rows.length - 1].sampledAt)}</text>
+    </svg>
+    <div className="history-scrubber"><label htmlFor={sliderId}>Inspect network interval</label><span>{selectedIndex + 1} / {rows.length}</span><input id={sliderId} type="range" min={0} max={rows.length - 1} value={selectedIndex} onChange={event => setCursorTime(rows[Number(event.target.value)].sampledAt)} aria-valuetext={`${stamp(observation.sampledAt)}: ${usable ? `${observation.intervalSeconds} seconds, RX ${format(observation.rxMbps)} Mb/s, TX ${format(observation.txMbps)} Mb/s` : "Unavailable"}`} /></div>
+    <p className="tiny">Rates estimated from cumulative counters over Hub receipt intervals; gaps and ambiguous reads are unavailable.</p>
+  </figure>;
+}
+
 export function HostWorkspace({
   refreshKey,
   isVisible,
@@ -205,8 +242,9 @@ export function HostWorkspace({
   const loadedOnce = useRef(false);
   selectedRef.current = selected;
   const [history, setHistory] = useState<{ id: string; samples: HostMetric[] } | null>(null);
-  const [historyError, setHistoryError] = useState("");
-  const [resource, setResource] = useState<Resource>("disk_percent");
+  const [historyError, setHistoryError] = useState<{ id: string; message: string } | null>(null);
+  const [historyMode, setHistoryMode] = useState<"resource" | "network">("resource");
+  const [resource, setResource] = useState<Resource>("cpu_percent");
   const [now, setNow] = useState(Date.now());
   const inspectorHeading = useRef<HTMLHeadingElement>(null);
 
@@ -215,6 +253,7 @@ export function HostWorkspace({
     setSelected(inspectHost.id);
     setSelectionNotice("");
     setResource(inspectHost.resource ?? "cpu_percent");
+    setHistoryMode("resource");
   }
 
   useEffect(() => {
@@ -232,9 +271,11 @@ export function HostWorkspace({
         setFailure("");
         onFleet(next);
         onFleetError("");
-        if (!loadedOnce.current) {
+        if (!loadedOnce.current && next.hosts.length) {
           loadedOnce.current = true;
-          setSelected(current => current ?? next.hosts[0]?.id ?? null);
+          const loadTime = Date.now();
+          const ordered = next.hosts.map(host => ({ host, risk: pressure(host, next, loadTime) })).sort((a, b) => (a.risk?.headroom ?? Infinity) - (b.risk?.headroom ?? Infinity));
+          setSelected(current => current ?? ordered[0].host.id);
         }
         if (selectedRef.current && !next.hosts.some(h => h.id === selectedRef.current)) {
           setSelected(null);
@@ -267,8 +308,6 @@ export function HostWorkspace({
   }, [isVisible]);
 
   useEffect(() => {
-    setHistory(null);
-    setHistoryError("");
     if (!isVisible || !selected) return;
     let active = true;
     let pending = false;
@@ -281,13 +320,13 @@ export function HostWorkspace({
         const samples: HostMetric[] = await request(`/hosts/${selected}/metrics`, controller.signal);
         if (active) {
           setHistory({ id: selected!, samples });
-          setHistoryError("");
+          setHistoryError(null);
         }
       } catch (e) {
         if (!active) return;
         const message = e instanceof Error ? e.message : String(e);
         if (message === "Unauthorized") onUnauthorized();
-        else setHistoryError(message);
+        else setHistoryError({ id: selected!, message });
       } finally {
         pending = false;
       }
@@ -300,7 +339,7 @@ export function HostWorkspace({
       controller.abort();
       clearInterval(poll);
     };
-  }, [isVisible, selected, onUnauthorized]);
+  }, [isVisible, selected, refreshKey, onUnauthorized]);
 
   useEffect(() => {
     if (!inspectHost) return;
@@ -322,10 +361,12 @@ export function HostWorkspace({
     `${host.hostname} ${host.id}`.toLowerCase().includes(term) &&
     (status === "all" || host.status === status || (status === "attention" && !!risk && risk.state !== "within")),
   );
-  const attention = rows.filter(({ risk }) => risk && risk.state !== "within").length;
+  const counts = { exceeded: rows.filter(({ risk }) => risk?.state === "exceeded").length, near: rows.filter(({ risk }) => risk?.state === "near").length, within: rows.filter(({ risk }) => risk?.state === "within").length };
   const assessed = rows.filter(({ risk }) => risk !== null).length;
   const host = hosts.find(h => h.id === selected);
   const stale = (h: Host) => !fleet || !hasFreshSample(h, fleet, now);
+  const selectedRisk = host && fleet && !failure ? pressure(host, fleet, now) : null;
+  const activeHistoryError = historyError?.id === selected ? historyError.message : "";
   const relatedIncident = host ? incidents.find(i => i.agent_id === host.id && i.status === "open") : undefined;
 
   function selectHost(id: string) {
@@ -338,21 +379,9 @@ export function HostWorkspace({
 
   return (
     <section aria-labelledby="fleet-title" className="fleet-section">
-      <div className="host-inventory-toolbar">
-        <label className="sr-only" htmlFor="host-status-filter">Filter by host status</label>
-        <select className="ui-input" id="host-status-filter" value={status} onChange={e => setStatus(e.target.value)}>
-          <option value="all">All statuses</option><option value="online">Online</option><option value="offline">Offline</option><option value="attention">Needs attention</option>
-        </select>
-        <div className="host-search">
-          <label className="sr-only" htmlFor="host-search">Search hosts</label>
-          <Input id="host-search" type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search hosts or ID…" />
-        </div>
-      </div>
       <div className="host-inventory-summary">
-        <div><h2 id="fleet-title">{fleet ? `${fleet.online} of ${fleet.total} hosts online${failure ? " · cached" : ""}` : failure ? "Host inventory unavailable" : "Host inventory"}</h2>
-          <p>Agent connectivity and resource limits are measured independently of endpoint health.</p>
-        </div>
-        {fleet && !failure && <Badge tone={rows.some(({ risk }) => risk?.state === "exceeded") ? "danger" : attention ? "warning" : "neutral"}>{assessed ? `${attention} of ${assessed} assessed near or at limit` : "No hosts assessed"}</Badge>}
+        <div><h2 id="fleet-title">{fleet ? `${fleet.online} of ${fleet.total} hosts online${failure ? " · cached" : ""}` : failure ? "Host inventory unavailable" : "Host inventory"}</h2><p>Agent connectivity and resource limits are measured independently of endpoint health.</p></div>
+        {fleet && !failure && <div className="host-summary-counts">{assessed ? <><div><strong>{counts.exceeded}</strong> Limit reached</div><div><strong>{counts.near}</strong> Near limit</div><div><strong>{counts.within}</strong> Within limit</div><p>{assessed} of {hosts.length} loaded hosts assessed</p></> : <span>No hosts assessed</span>}</div>}
       </div>
 
       {failure && (
@@ -366,6 +395,13 @@ export function HostWorkspace({
 
       <div className="fleet-workspace">
         <div className="fleet-list">
+          <h2>Host inventory</h2>
+          <div className="host-inventory-toolbar">
+            <div className="host-search"><label className="sr-only" htmlFor="host-search">Search hosts</label><Input id="host-search" type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search hosts or ID…" /></div>
+            <label className="sr-only" htmlFor="host-status-filter">Filter by host status</label><select className="ui-input" id="host-status-filter" value={status} onChange={e => setStatus(e.target.value)}><option value="all">All statuses</option><option value="online">Online</option><option value="offline">Offline</option><option value="attention">Needs attention</option></select>
+            <span className="tiny">Highest risk first</span>
+          </div>
+          <div className="host-table-group">
           <div
             className="host-table-scroll"
             role="region"
@@ -378,11 +414,11 @@ export function HostWorkspace({
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Host / agent version</th>
-                  <th scope="col">Agent / last seen</th>
+                  <th scope="col">Host</th>
+                  <th scope="col">Agent</th>
                   <th scope="col">CPU / limit</th>
                   <th scope="col">Memory / limit</th>
-                  <th scope="col">Disk</th>
+                  <th scope="col">Disk / limit</th>
                   <th scope="col">Resource status</th>
                 </tr>
               </thead>
@@ -397,7 +433,7 @@ export function HostWorkspace({
                         aria-controls="host-inspector"
                         onClick={() => selectHost(h.id)}
                       >
-                        {h.hostname}
+                        <WorkspaceIcon name="hosts" />{h.hostname}
                         <svg className="host-selection-arrow" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M4 10h12m-5-5 5 5-5 5" /></svg>
                         <span className="sr-only">
                           {selected === h.id ? ", selected" : ", inspect host"}
@@ -437,8 +473,8 @@ export function HostWorkspace({
                       const reading = fleet && !failure ? resourcePressure(h, fleet, now, key) : null;
                       const limit = fleet?.thresholds?.[key] ?? null;
                       return <td key={key}>
-                        <span className={pressureClass(reading?.state)} aria-label={h[key] == null ? "No measurement" : undefined}>{percent(h[key])}{key !== "disk_percent" && ` / ${percent(limit)}`}</span>
-                        {reading && key === "cpu_percent" && <small>{reading.headroom > 0 ? `${Number(reading.headroom.toFixed(1))}% below limit` : reading.headroom < 0 ? `${Number((-reading.headroom).toFixed(1))}% over limit` : "At limit"}</small>}
+                        <span className={pressureClass(reading?.state)} aria-label={h[key] == null ? "No measurement" : undefined}>{percent(h[key])}{` / ${percent(limit)}`}</span>
+                        {reading && key === "cpu_percent" && <small>{reading.headroom > 0 ? `${Number(reading.headroom.toFixed(1))} pp below limit` : reading.headroom < 0 ? `${Number((-reading.headroom).toFixed(1))} pp over limit` : "At limit"}</small>}
                       </td>;
                     })}
                     <td><span className={pressureClass(risk?.state)}>{risk ? pressureLabel[risk.state] : failure ? "Cached" : h.status === "offline" ? "Historical" : stale(h) ? "No fresh sample" : "Unavailable"}</span></td>
@@ -448,7 +484,7 @@ export function HostWorkspace({
             </table>
           </div>
 
-          {fleet && !hosts.length && (
+          {fleet && !failure && !hosts.length && (
             <p className="empty">
               No hosts enrolled. Connect a server to see agent connectivity and measured resource usage.
             </p>
@@ -464,6 +500,7 @@ export function HostWorkspace({
             {fleet && `${visible.length} of ${hosts.length} loaded · ${fleet.total} enrolled · Sorted by resource risk`}
           </p>
 
+          </div>
           <p className="tiny fleet-freshness">
             {fleet && (
               <>
@@ -474,11 +511,11 @@ export function HostWorkspace({
           </p>
           {host && (
             <a className="inspector-jump" href="#host-inspector">
-              View {host.hostname} observations
+              View {host.hostname} details
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M10 3v14m-5-5 5 5 5-5" /></svg>
             </a>
           )}
-
+          <section className="host-guidance"><div><h2>Connect another server</h2><p className="muted">Install the Linux agent to add this server’s resource signals to the fleet.</p></div><Button onClick={onConnect}><WorkspaceIcon name="terminal" />Agent installation</Button></section>
         </div>
 
         <Panel className="host-inspector" id="host-inspector" role="region" aria-labelledby="host-inspector-title" tabIndex={-1}>
@@ -499,63 +536,18 @@ export function HostWorkspace({
             </p>
           ) : (
             <>
-              <div className="inspector-resources" role="group" aria-label="Resource history">
-                <span className="sr-only">Choose a resource to view its history</span>
-                {resources.map(({ key, label }) => (
-                  <Button
-                    key={key}
-                    variant="ghost"
-                    aria-pressed={resource === key}
-                    onClick={() => {
-                      if (resource !== key) selectWithTransition(() => setResource(key));
-                    }}
-                  >
-                    <span
-                      className={`resource-value ${pressureClass(fleet && !failure ? resourcePressure(host, fleet, now, key)?.state : undefined)}`}
-                      aria-label={host[key] == null ? "No measurement" : undefined}
-                    >
-                      {percent(host[key])}
-                    </span>
-                    <span className="resource-label">{label}</span>
-                  </Button>
-                ))}
+              <div className="inspector-headline">
+                {selectedRisk ? <><span>{selectedRisk.label}</span><p><strong>{percent(selectedRisk.value)}</strong> / {percent(selectedRisk.limit)} limit</p><Badge tone={selectedRisk.state === "exceeded" ? "danger" : selectedRisk.state === "near" ? "warning" : "neutral"}>{pressureLabel[selectedRisk.state]}</Badge></> : <><strong>Resource assessment unavailable</strong><p className="tiny">{failure ? "Cached fleet data" : host.status === "offline" ? "Offline; sample is historical" : stale(host) ? "No fresh sample" : "No configured comparable limit"}</p></>}
               </div>
-
-              <p className="tiny inspector-sample">
-                Sample <time dateTime={host.sampled_at ?? undefined}>{stamp(host.sampled_at)}</time> ·{" "}
-                {failure
-                  ? "Cached, not live"
-                  : host.status === "offline"
-                    ? "Historical, not live"
-                    : stale(host)
-                      ? "Stale / unavailable"
-                      : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}
-              </p>
-
+              <p className="tiny inspector-sample">Sample <time dateTime={host.sampled_at ?? undefined}>{stamp(host.sampled_at)}</time> · {failure ? "Cached, not live" : host.status === "offline" ? "Historical, not live" : stale(host) ? "Stale / unavailable" : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}</p>
+              <h3>Resource history</h3>
+              <div className="history-stage" id="host-history">
+                <div className="history-modes" role="group" aria-label="History view"><Button aria-pressed={historyMode === "resource"} aria-controls="host-history-chart" onClick={() => setHistoryMode("resource")}>Resource (%)</Button><Button aria-pressed={historyMode === "network"} aria-controls="host-history-chart" onClick={() => setHistoryMode("network")}>Network (Mb/s)</Button></div>
+                {historyMode === "resource" && <div className="inspector-resources" role="group" aria-label="Choose a resource to view its history">{resources.map(({ key, label }) => <Button key={key} variant="ghost" aria-pressed={resource === key} onClick={() => setResource(key)}><span className="resource-label">{label}</span></Button>)}</div>}
+                {activeHistoryError && <Notice tone="warning">Resource history refresh failed: {activeHistoryError}. {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}</Notice>}
+                <div id="host-history-chart">{history && history.id === host.id ? historyMode === "resource" ? <ResourceHistory key={host.id} samples={history.samples} resource={resource} /> : <NetworkHistory key={host.id} samples={history.samples} maxInterval={fleet?.stale_after_seconds ?? 60} current={!failure && !!fleet && hasFreshSample(host, fleet, now) && !activeHistoryError} cached={!!failure || !!activeHistoryError} /> : !activeHistoryError && <AsciiLoading label="Loading resource history…" variant="dither" lines={4} widths={["100%", "90%", "100%", "84%"]} />}</div>
+              </div>
               <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />
-
-              {historyError && (
-                <Notice tone="warning">
-                  Resource history refresh failed: {historyError}.{" "}
-                  {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}
-                </Notice>
-              )}
-              <div className="history-stage">
-                {history && history.id === host.id ? (
-                  <ResourceHistory key={host.id} samples={history.samples} resource={resource} />
-                ) : (
-                  !historyError && <AsciiLoading label="Loading resource history…" variant="dither" lines={4} widths={["100%", "90%", "100%", "84%"]} />
-                )}
-              </div>
-
-              <div className="inspector-network">
-                <p>
-                  RX / TX <span className="muted">Rates unavailable</span>
-                </p>
-                <p>
-                  Uptime <span className="muted">Not collected</span>
-                </p>
-              </div>
 
               <section className="inspector-incident" aria-labelledby="related-incident-title">
                 <h3 id="related-incident-title">Related incident</h3>
@@ -580,7 +572,7 @@ export function HostWorkspace({
 
               <details className="host-metadata">
                 <summary>Host identity &amp; last contact</summary>
-                <p className="tiny">OS and capacity unavailable · Not collected</p>
+                <p className="tiny">OS and capacity unavailable · Uptime: Not collected</p>
                 <dl className="host-facts">
                   <dt>Host ID</dt>
                   <dd>{host.id}</dd>
@@ -595,10 +587,6 @@ export function HostWorkspace({
             </>
           )}
         </Panel>
-        <section className="host-guidance">
-          <div><h2>Connect another server</h2><p className="muted">Install the Linux agent to add this server’s resource signals to the fleet.</p></div>
-          <Button onClick={onConnect}><WorkspaceIcon name="terminal" />Agent installation</Button>
-        </section>
       </div>
 
     </section>
