@@ -21,6 +21,8 @@ const timestamp = "2026-11-18T00:00:00.000Z";
 const sampleTime = currentSample ? new Date().toISOString() : timestamp;
 let historyAborted = false;
 let failHistory = false;
+let deferHistory = false;
+const deferredHistory = Promise.withResolvers<Response>();
 const secondHostId = "d0000000-0000-4000-8000-000000000004";
 const hostId = "d0000000-0000-4000-8000-000000000001";
 const incident = {
@@ -83,8 +85,13 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         return promise;
       }
       if (scenario === "host-network-history") {
+        if (deferHistory) return deferredHistory.promise;
         if (failHistory) { status = 503; value = { error: "Fixture history outage" }; }
-        else value = [{ sampled_at: sampleTime, cpu_percent: 94, memory_percent: 40, disk_percent: 25, network_rx_bytes: 2875000, network_tx_bytes: 1437500 }, { sampled_at: new Date(Date.parse(sampleTime) - 15000).toISOString(), cpu_percent: 90, memory_percent: 40, disk_percent: 25, network_rx_bytes: 1000000, network_tx_bytes: 500000 }];
+        else value = [
+          { sampled_at: sampleTime, cpu_percent: 94, memory_percent: 40, disk_percent: 25, network_rx_bytes: 2875000, network_tx_bytes: 1437500 },
+          { sampled_at: new Date(Date.parse(sampleTime) - 15000).toISOString(), cpu_percent: 90, memory_percent: 40, disk_percent: 25, network_rx_bytes: 1000000, network_tx_bytes: 500000 },
+          { sampled_at: new Date(Date.parse(sampleTime) - 30000).toISOString(), cpu_percent: 85, memory_percent: 40, disk_percent: 25, network_rx_bytes: 100000, network_tx_bytes: 50000 },
+        ];
       } else value = [];
       break;
     case `/api/hosts/${secondHostId}/metrics`: value = []; break;
@@ -232,11 +239,18 @@ try {
       failHistory = true;
       await click("Refresh");
       const cached = document.querySelector(".history-stage")?.textContent;
+      deferHistory = true;
+      await click("Refresh");
+      const pending = document.querySelector(".history-stage")?.textContent;
+      await act(async () => {
+        deferredHistory.resolve(Response.json({ error: "Fixture history outage" }, { status: 503 }));
+      });
+      const failedAgain = document.querySelector(".history-stage")?.textContent;
       const hostButton = [...document.querySelectorAll<HTMLButtonElement>(".host-table button")].find(button => button.textContent?.includes("Unsampled host"));
       if (!hostButton) throw new Error("Missing unsampled host");
       await act(async () => { hostButton.click(); });
       const other = document.querySelector(".history-stage")?.textContent;
-      console.log(JSON.stringify({ before, after, network, cached, other }));
+      console.log(JSON.stringify({ before, after, network, cached, pending, failedAgain, other }));
       break;
     }
     case "host-history-visibility": {
