@@ -77,10 +77,11 @@ type HistoryMode = Resource | "all";
 const hasReading = (value: number | null): value is number => value != null && Number.isFinite(value);
 
 function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resource: HistoryMode }) {
-  const sliderId = useId();
+  const instructionsId = useId();
   const marks = useRef<SVGGElement>(null);
   const [cursorTime, setCursorTime] = useState<string | null>(null);
   const [showTooltip, setShowTooltip] = useState(false);
+  const [announceSelection, setAnnounceSelection] = useState(false);
   useEffect(() => {
     if (!showTooltip) return;
     const dismiss = (event: KeyboardEvent) => {
@@ -133,6 +134,30 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
   const measuredSamples = rows.filter(({ sample }) => series.some(({ key }) => hasReading(sample[key]))).length;
   const time = (s: string) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const columnX = x(rows[index].timestamp);
+
+  function inspectPoint(svg: SVGSVGElement, clientX: number, clientY: number, hover: boolean) {
+    const bounds = svg.getBoundingClientRect();
+    const position = (clientX - bounds.left) / bounds.width * svgWidth;
+    const vertical = (clientY - bounds.top) / bounds.height * svgHeight;
+    if (vertical < top || vertical > baseline) {
+      setShowTooltip(false);
+      return;
+    }
+    const timestamp = first.timestamp + Math.max(0, Math.min(1, (position - left) / width)) * duration;
+    let nearest = 0;
+    for (let i = 1; i < rows.length; i++) {
+      if (Math.abs(rows[i].timestamp - timestamp) < Math.abs(rows[nearest].timestamp - timestamp)) nearest = i;
+    }
+    const distance = Math.abs(position - x(rows[nearest].timestamp));
+    const hit = hover ? distance <= barWidth / 2 + 2 : position >= left - barWidth && position <= left + width + barWidth;
+    setShowTooltip(hover && hit);
+    if (hit) {
+      if (!hover || !showTooltip) marks.current?.getAnimations()[0]?.finish();
+      setAnnounceSelection(false);
+      setCursorTime(rows[nearest].sample.sampled_at);
+    }
+  }
+
   const observationContent = (
     <>
       <div className="history-observation-meta">
@@ -156,33 +181,40 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
         <h3>{title}</h3>
         <span>{duration ? `${Math.round(duration / 60000)} min` : "Single sample"} · Raw samples</span>
       </figcaption>
-      <div className="history-observation">{observationContent}</div>
+      <p className="history-instructions tiny" id={instructionsId}>
+        {rows.length > 1 ? "Hover or tap a bar, or use arrow keys on the chart." : "Hover or tap the bar to inspect its sample."}
+      </p>
       {stacked && <p className="history-scale tiny">Stack height (percentage points) · Not overall host utilization</p>}
-      <div className="history-plot">
+      <div
+        className="history-plot"
+        role="group"
+        aria-label={`${title} chart`}
+        aria-describedby={instructionsId}
+        tabIndex={rows.length > 1 ? 0 : undefined}
+        onKeyDown={event => {
+          const next = event.key === "ArrowLeft" ? Math.max(index - 1, 0)
+            : event.key === "ArrowRight" ? Math.min(index + 1, rows.length - 1)
+            : event.key === "Home" ? 0
+            : event.key === "End" ? rows.length - 1
+            : null;
+          if (next === null) return;
+          event.preventDefault();
+          marks.current?.getAnimations()[0]?.finish();
+          setShowTooltip(false);
+          setAnnounceSelection(true);
+          setCursorTime(rows[next].sample.sampled_at);
+        }}
+      >
         <svg
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
           role="img"
           aria-label={`${title}, 0 to ${max} ${stacked ? "percentage points" : "percent"}. ${measuredSamples} samples with measurements from ${stamp(first.sample.sampled_at)} to ${stamp(last.sample.sampled_at)}. Each column is one observation; missing intervals remain empty.`}
           onPointerMove={event => {
-            if (event.pointerType !== "mouse") return;
-            const bounds = event.currentTarget.getBoundingClientRect();
-            const position = (event.clientX - bounds.left) / bounds.width * svgWidth;
-            const vertical = (event.clientY - bounds.top) / bounds.height * svgHeight;
-            if (vertical < top || vertical > baseline) {
-              setShowTooltip(false);
-              return;
-            }
-            const timestamp = first.timestamp + Math.max(0, Math.min(1, (position - left) / width)) * duration;
-            let nearest = 0;
-            for (let i = 1; i < rows.length; i++) {
-              if (Math.abs(rows[i].timestamp - timestamp) < Math.abs(rows[nearest].timestamp - timestamp)) nearest = i;
-            }
-            const overColumn = Math.abs(position - x(rows[nearest].timestamp)) <= barWidth / 2 + 2;
-            setShowTooltip(overColumn);
-            if (overColumn) {
-              if (!showTooltip) marks.current?.getAnimations()[0]?.finish();
-              setCursorTime(rows[nearest].sample.sampled_at);
-            }
+            if (event.pointerType === "mouse") inspectPoint(event.currentTarget, event.clientX, event.clientY, true);
+          }}
+          onClick={event => {
+            const mouse = "pointerType" in event.nativeEvent && event.nativeEvent.pointerType === "mouse";
+            inspectPoint(event.currentTarget, event.clientX, event.clientY, mouse);
           }}
           onPointerLeave={() => setShowTooltip(false)}
         >
@@ -261,25 +293,14 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
           </div>
         )}
       </div>
-      <div className="history-scrubber">
-        <label htmlFor={sliderId}>Inspect observation</label>
-        <span>{index + 1} / {rows.length}</span>
-        <input
-          id={sliderId}
-          type="range"
-          min={0}
-          max={rows.length - 1}
-          value={index}
-          disabled={rows.length === 1}
-          onChange={event => {
-            marks.current?.getAnimations()[0]?.finish();
-            setShowTooltip(false);
-            setCursorTime(rows[Number(event.target.value)].sample.sampled_at);
-          }}
-          aria-valuetext={`${observationTime}${partial ? ", partial observation" : ""}: ${readings.map(({ label, text }) => `${label} ${text}`).join(", ")}`}
-        />
+      <div className="history-observation">
+        <span className="history-observation-label">Selected sample</span>
+        {observationContent}
       </div>
-      <p className="tiny">
+      <p className="sr-only" role="status">
+        {announceSelection && `${observationTime}${partial ? ", partial observation" : ""}: ${readings.map(({ label, text }) => `${label} ${text}`).join(", ")}. Sample ${index + 1} of ${rows.length}.`}
+      </p>
+      <p className="tiny history-provenance">
         {measuredSamples} samples with measurements · No aggregation · {Intl.DateTimeFormat().resolvedOptions().timeZone}
         <br />
         <time dateTime={first.sample.sampled_at}>{stamp(first.sample.sampled_at)}</time> –{" "}
@@ -607,107 +628,100 @@ export function HostWorkspace({
               {selectionNotice || "Select a host to inspect its observations and resource history."}
             </p>
           ) : (
-            <>
-              <div className="inspector-resources" role="group" aria-label="Resource history">
-                <span className="sr-only">Choose one resource or view all three as stacked bars</span>
-                {resources.map(({ key, label }) => (
-                  <Button
-                    key={key}
-                    variant="ghost"
-                    aria-pressed={resource === key}
-                    onClick={() => setResource(key)}
-                  >
-                    <span
-                      className={`resource-value ${pressureClass(fleet && !failure ? resourcePressure(host, fleet, now, key)?.state : undefined)}`}
-                      aria-label={host[key] == null ? "No measurement" : undefined}
+            <div className="host-inspector-body">
+              <div className="inspector-history">
+                <div className="inspector-resources" role="group" aria-label="Resource history">
+                  {resources.map(({ key, label }) => (
+                    <Button
+                      key={key}
+                      variant="ghost"
+                      aria-pressed={resource === key}
+                      onClick={() => setResource(key)}
                     >
-                      {percent(host[key])}
-                    </span>
-                    <span className="resource-label">{label}</span>
-                  </Button>
-                ))}
-                <Button
-                  variant="ghost"
-                  className="all-resources"
-                  aria-pressed={resource === "all"}
-                  onClick={() => setResource("all")}
-                >
-                  <span className="resource-label">All</span>
-                </Button>
-              </div>
-
-              <p className="tiny inspector-sample">
-                Sample <time dateTime={host.sampled_at ?? undefined}>{stamp(host.sampled_at)}</time> ·{" "}
-                {failure
-                  ? "Cached, not live"
-                  : host.status === "offline"
-                    ? "Historical, not live"
-                    : stale(host)
-                      ? "Stale / unavailable"
-                      : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}
-              </p>
-
-              <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />
-
-              {historyError && (
-                <Notice tone="warning">
-                  Resource history refresh failed: {historyError}.{" "}
-                  {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}
-                </Notice>
-              )}
-              <div className="history-stage">
-                {history && history.id === host.id ? (
-                  <ResourceHistory key={host.id} samples={history.samples} resource={resource} />
-                ) : (
-                  !historyError && <AsciiLoading label="Loading resource history…" variant="dither" lines={4} widths={["100%", "90%", "100%", "84%"]} />
-                )}
-              </div>
-
-              <div className="inspector-network">
-                <p>
-                  RX / TX <span className="muted">Rates unavailable</span>
-                </p>
-                <p>
-                  Uptime <span className="muted">Not collected</span>
-                </p>
-              </div>
-
-              <section className="inspector-incident" aria-labelledby="related-incident-title">
-                <h3 id="related-incident-title">Related incident</h3>
-                {relatedIncident ? (
-                  <>
-                    <p>{relatedIncident.title}</p>
-                    <Button variant="primary" onClick={() => onOpenIncident(relatedIncident.id)}>
-                      Open investigation{" "}
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M5 12h14 M13 6l6 6-6 6" />
-                      </svg>
+                      <span className="resource-label">{label}</span>
+                      <span
+                        className={`resource-value ${pressureClass(fleet && !failure ? resourcePressure(host, fleet, now, key)?.state : undefined)}`}
+                        aria-label={host[key] == null ? "No measurement" : undefined}
+                      >
+                        {percent(host[key])}
+                      </span>
                     </Button>
-                  </>
-                ) : openIncidents === null && !incidentsStale ? (
-                  <AsciiLoading label="Loading related incidents…" />
-                ) : (
-                  <p className="muted small">{openIncidents === null ? "Related incident data is unavailable." : "No open incident for this host in the latest 100 records."}</p>
-                )}
-                {incidentsStale && openIncidents !== null && <p className="tiny">Cached incident records; the latest refresh failed.</p>}
-                <p className="tiny">Measured signals only. No root cause inferred.</p>
-              </section>
+                  ))}
+                  <Button variant="ghost" aria-pressed={resource === "all"} onClick={() => setResource("all")}>
+                    <span className="resource-label">All</span>
+                    <span className="resource-mode">Stacked</span>
+                  </Button>
+                </div>
+                <p className="tiny inspector-sample">
+                  Latest sample <time dateTime={host.sampled_at ?? undefined}>{stamp(host.sampled_at)}</time> ·{" "}
+                  {failure
+                    ? "Cached, not live"
+                    : host.status === "offline"
+                      ? "Historical, not live"
+                      : stale(host)
+                        ? "Stale / unavailable"
+                        : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}
+                </p>
 
-              <details className="host-metadata">
-                <summary>Host identity &amp; last contact</summary>
-                <p className="tiny">OS and capacity unavailable · Not collected</p>
-                <dl className="host-facts">
-                  <dt>Host ID</dt>
-                  <dd>{host.id}</dd>
-                  <dt>Agent version</dt>
-                  <dd>{host.version || "Unavailable"}</dd>
-                  <dt>Last agent contact</dt>
-                  <dd>
-                    {stamp(host.last_seen_at)} · {age(host.last_seen_at, now)}
-                  </dd>
-                </dl>
-              </details>
-            </>
+                {historyError && (
+                  <Notice tone="warning">
+                    Resource history refresh failed: {historyError}.{" "}
+                    {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}
+                  </Notice>
+                )}
+                <div className="history-stage">
+                  {history && history.id === host.id ? (
+                    <ResourceHistory key={host.id} samples={history.samples} resource={resource} />
+                  ) : (
+                    !historyError && <AsciiLoading label="Loading resource history…" variant="dither" lines={4} widths={["100%", "90%", "100%", "84%"]} />
+                  )}
+                </div>
+              </div>
+
+              <div className="inspector-context">
+                <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />
+                <section className="inspector-incident" aria-labelledby="related-incident-title">
+                  <h3 id="related-incident-title">Related incident</h3>
+                  {relatedIncident ? (
+                    <>
+                      <p>{relatedIncident.title}</p>
+                      <Button variant="primary" onClick={() => onOpenIncident(relatedIncident.id)}>
+                        Open investigation{" "}
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M5 12h14 M13 6l6 6-6 6" />
+                        </svg>
+                      </Button>
+                    </>
+                  ) : openIncidents === null && !incidentsStale ? (
+                    <AsciiLoading label="Loading related incidents…" />
+                  ) : (
+                    <p className="muted small">{openIncidents === null ? "Related incident data is unavailable." : "No open incident for this host in the latest 100 records."}</p>
+                  )}
+                  {incidentsStale && openIncidents !== null && <p className="tiny">Cached incident records; the latest refresh failed.</p>}
+                  <p className="tiny">Measured signals only. No root cause inferred.</p>
+                </section>
+
+                <div className="inspector-network">
+                  <p>RX / TX <span className="muted">Rates unavailable</span></p>
+                  <p>Uptime <span className="muted">Not collected</span></p>
+                </div>
+
+                <details className="host-metadata">
+                  <summary>Host identity &amp; last contact</summary>
+                  <p className="tiny">OS and capacity unavailable · Not collected</p>
+                  <dl className="host-facts">
+                    <dt>Host ID</dt>
+                    <dd>{host.id}</dd>
+                    <dt>Agent version</dt>
+                    <dd>{host.version || "Unavailable"}</dd>
+                    <dt>Last agent contact</dt>
+                    <dd>
+                      {stamp(host.last_seen_at)} · {age(host.last_seen_at, now)}
+                    </dd>
+                  </dl>
+                </details>
+              </div>
+            </div>
           )}
         </Panel>
         <section className="host-guidance">
