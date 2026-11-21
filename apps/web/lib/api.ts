@@ -5,14 +5,16 @@ export class ApiError extends Error {
   }
 }
 
-export async function api(path: string, method = "GET", payload?: unknown) {
+export async function api(path: string, method = "GET", payload?: unknown, signal?: AbortSignal) {
   const response = await fetch(`/api${path}`, {
     method,
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
     body: payload === undefined ? undefined : JSON.stringify(payload),
     cache: "no-store",
+    signal,
   });
+  signal?.throwIfAborted();
   if (response.status === 401) {
     window.dispatchEvent(new Event("opspilot-unauthorized"));
     throw new ApiError("Unauthorized", null, 401);

@@ -95,6 +95,25 @@ bun run dev:mock-agents  # Seed and keep local WebSocket mock agents connected t
 
 Both commands refuse `NODE_ENV=production` and non-loopback `DATABASE_URL` or `MOCK_HUB_URL` targets. Run `bun test tests/mock-agents.test.ts` for the safety negatives.
 
+## Web workspace routes
+
+`apps/web/app/(workspace)` shares the session gate, workspace shell, command palette, and polling for fleet, incident, and endpoint summaries. The route owns its detail reads and editor state; opening a host inspector or incident from another route hands off the selection in memory.
+
+| Path | View |
+| --- | --- |
+| `/` | Overview |
+| `/hosts` | Host inventory and history |
+| `/services` | Host workloads and endpoint checks |
+| `/incidents` | Incident queue and investigation |
+| `/drift` | Configuration drift |
+| `/memory` | Incident memory |
+| `/providers` | Provider settings |
+| `/connect` | Connect server setup |
+| `/new-monitor` | Add service setup |
+| `/design-system` | Public component catalog, outside the workspace |
+
+The workspace URLs can be loaded or refreshed directly. If signed out, sign-in is shown at the requested URL and opens that view after authentication.
+
 ## Design system preview
 
 Run `bun run dev:web`, then open `http://localhost:3100/design-system`. This public reference route requires no Hub, database, `.env`, login, or provider credentials. Its examples and interactions are explicitly synthetic and local-only.

@@ -4,11 +4,12 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 
 import { flushSync } from "react-dom";
 import type { Host, HostList, HostMetric } from "@opspilot/contracts";
 import { AsciiLoading } from "./ascii-card-reveal";
-import { Badge, Button, Input, Notice, Panel } from "./ui";
+import { Badge, Button, ButtonLink, Input, Notice, Panel } from "./ui";
 import { hasFreshSample, percent, pressure, resourcePressure, resources, type Resource } from "../lib/host-pressure";
 import { WorkspaceIcon } from "./workspace-shell";
 import { HostSystemd } from "./host-systemd";
-import { deriveNetworkRates } from "../lib/host-network";
+import { deriveNetworkRates, type NetworkRatePoint } from "../lib/host-network";
+import { api, ApiError } from "../lib/api";
 
 type FleetIncident = {
   id: string;
@@ -22,16 +23,14 @@ type FleetIncident = {
 
 type Props = {
   refreshKey: number;
-  isVisible: boolean;
-  onFleet: (fleet: HostList) => void;
-  onFleetError: (message: string) => void;
-  onUnauthorized: () => void;
+  fleet: HostList | null;
+  failure: string;
   openIncidents: number | null;
   incidentsStale: boolean;
   incidents: FleetIncident[];
   onOpenIncident: (id: string) => void;
   inspectHost: { id: string; resource?: Resource } | null;
-  onConnect: () => void;
+  onInspectionHandled: (inspection: NonNullable<Props["inspectHost"]>) => void;
 };
 
 const stamp = (s: string | null) => (s ? new Date(s).toLocaleString() : "Not observed");
@@ -60,25 +59,7 @@ function selectWithTransition(update: () => void) {
   void document.startViewTransition(() => flushSync(update)).finished.catch(() => {});
 }
 
-async function request(path: string, signal?: AbortSignal, method = "GET") {
-  const r = await fetch(`/api${path}`, {
-    credentials: "same-origin",
-    cache: "no-store",
-    signal,
-    method,
-  });
-  if (r.status === 401) throw new Error("Unauthorized");
-  const value = await r.json();
-  if (!r.ok) throw new Error(value.error || `HTTP ${r.status}`);
-  return value;
-}
-
-type HistoryPoint = {
-  sampledAt: string;
-  timestampMs: number;
-  values: readonly (number | null)[];
-  intervalSeconds?: number | null;
-};
+type HistoryMode = Resource | "all";
 
 const networkSeries = [{ label: "RX (download)", legend: "RX" }, { label: "TX (upload)", legend: "TX" }] as const;
 const formatRate = (value: number | null) => {
@@ -90,19 +71,10 @@ function HistorySeriesLabel({ label, index }: { label: string; index: number }) 
   return <span className="history-series-label"><span data-series={index} aria-hidden="true" />{label}</span>;
 }
 
-function HistoryColumns({
-  rows, title, caption, series, top, format, latestLabel, network, activeSeries, onSeriesChange,
-}: {
-  rows: readonly HistoryPoint[];
-  title: string;
-  caption: string;
-  series: readonly { label: string; legend?: string }[];
+function NetworkColumns({ rows, top, latestLabel }: {
+  rows: readonly NetworkRatePoint[];
   top: number;
-  format: (value: number | null) => string;
   latestLabel: string;
-  network?: boolean;
-  activeSeries?: number;
-  onSeriesChange?: (index: number) => void;
 }) {
   const sliderId = useId();
   const [cursorTime, setCursorTime] = useState<number | null>(null);
@@ -114,11 +86,11 @@ function HistoryColumns({
   const start = rows[0].timestampMs;
   const end = newest.timestampMs;
   const span = end - start;
-  const recorded = observation.values.some(value => value !== null);
+  const recorded = observation.rxMbps !== null;
   const status = index === latest ? latestLabel : recorded ? "Historical" : "Unavailable";
   const interval = observation.intervalSeconds;
   const valueText = recorded
-    ? `${interval != null ? `${interval} seconds, ` : ""}${series.map(({ label }, i) => `${label} ${format(observation.values[i])}`).join(", ")}`
+    ? `${interval} seconds, RX (download) ${formatRate(observation.rxMbps)}, TX (upload) ${formatRate(observation.txMbps)}`
     : "Unavailable";
   const showSeconds = span < 180_000;
   const timeFormat = useMemo(() => new Intl.DateTimeFormat(undefined, {
@@ -150,63 +122,57 @@ function HistoryColumns({
   }
 
   return (
-    <figure className={`resource-history${network ? " network-history" : ""}`}>
-      <figcaption><h3>{title}</h3><span>{caption}</span></figcaption>
+    <figure className="resource-history network-history">
+      <figcaption><h3>Network traffic</h3><span>Estimated aggregate traffic · excludes loopback</span></figcaption>
       <div className="history-card">
-        <div className="history-legend" role="group" aria-label={network ? "Newest interval" : "Emphasize a resource"}>
-          {series.map(({ label, legend }, i) => {
-            const content = <><HistorySeriesLabel label={legend ?? label} index={i} /><strong>{format(newest.values[i])}</strong></>;
-            return onSeriesChange ? (
-              <Button key={label} variant="ghost" aria-pressed={activeSeries === i} onClick={() => onSeriesChange(i)}>
-                {content}
-              </Button>
-            ) : <span key={label}>{content}</span>;
-          })}
+        <div className="history-legend" role="group" aria-label="Newest interval">
+          {networkSeries.map(({ label, legend }, i) => (
+            <span key={label}><HistorySeriesLabel label={legend} index={i} /><strong>{formatRate(i === 0 ? newest.rxMbps : newest.txMbps)}</strong></span>
+          ))}
         </div>
         <div className="history-reading">
           <div>
-            <p>Selected {network ? "interval" : "sample"}</p>
+            <p>Selected interval</p>
             <p className="history-hint tiny">Hover or tap a column</p>
           </div>
-          <div className="history-observation">
+          <div className="network-observation">
             <header>
               <span>{status}</span>
               <time dateTime={observation.sampledAt}>{stamp(observation.sampledAt)}</time>
               {recorded && interval != null && <span>{interval} s receipt interval</span>}
             </header>
             <dl>
-              {series.map(({ label }, i) => (
+              {networkSeries.map(({ label }, i) => (
                 <div key={label}>
                   <dt><HistorySeriesLabel label={`${label}:`} index={i} /></dt>{" "}
-                  <dd>{format(observation.values[i])}</dd>
+                  <dd>{formatRate(i === 0 ? observation.rxMbps : observation.txMbps)}</dd>
                 </div>
               ))}
             </dl>
           </div>
         </div>
         <div
-          className="history-plot"
+          className="network-plot"
           style={{ "--history-column": columnWidth } as CSSProperties}
           role="img"
-          aria-label={`${title} from ${stamp(rows[0].sampledAt)} to ${stamp(newest.sampledAt)}. Each segment uses its own scale; missing readings leave gaps.`}
+          aria-label={`Estimated network traffic from ${stamp(rows[0].sampledAt)} to ${stamp(newest.sampledAt)}. RX and TX use the same Mb/s scale; missing intervals leave gaps.`}
           onPointerMove={event => {
             if (event.pointerType === "mouse") inspectAt(event.currentTarget, event.clientX);
           }}
           onClick={event => inspectAt(event.currentTarget, event.clientX)}
         >
           <div className="history-axis" aria-hidden="true">
-            {rows.map(({ timestampMs, values }, i) => values.some(value => value !== null) && (
+            {rows.map(({ timestampMs, rxMbps, txMbps }, i) => rxMbps !== null && (
               <div
                 className="history-column"
                 key={i}
                 style={{ left: span ? `${((timestampMs - start) / span) * 100}%` : "50%" }}
                 data-selected={i === index}
               >
-                {values.map((value, j) => value !== null && (
+                {[rxMbps, txMbps].map((value, j) => value !== null && (
                   <span
                     key={j}
                     data-series={j}
-                    data-emphasized={j === activeSeries}
                     style={{ height: `max(2px, ${Math.min(value / top, 1) * 2.5}rem)` }}
                   />
                 ))}
@@ -217,10 +183,10 @@ function HistoryColumns({
         <div className="history-time-labels" aria-hidden="true">
           {marks.map(timestamp => <span key={timestamp}>{timeFormat.format(timestamp)}</span>)}
         </div>
-        <p className="history-scale tiny">Scale per metric: 0–{format(top)}</p>
+        <p className="network-scale tiny">Scale per direction: 0–{formatRate(top)}</p>
       </div>
       <div className="history-scrubber">
-        <label htmlFor={sliderId}>Inspect {network ? "network interval" : "observation"}</label>
+        <label htmlFor={sliderId}>Inspect network interval</label>
         <span>{index + 1} / {rows.length}</span>
         <input
           id={sliderId}
@@ -237,35 +203,240 @@ function HistoryColumns({
   );
 }
 
-function ResourceHistory({ samples, resource, onResourceChange }: {
-  samples: HostMetric[];
-  resource: Resource;
-  onResourceChange: (resource: Resource) => void;
-}) {
+const hasReading = (value: number | null): value is number => value != null && Number.isFinite(value);
+
+function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resource: HistoryMode }) {
+  const instructionsId = useId();
+  const marks = useRef<SVGGElement>(null);
+  const [cursorTime, setCursorTime] = useState<string | null>(null);
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [announceSelection, setAnnounceSelection] = useState(false);
+  useEffect(() => {
+    if (!showTooltip) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowTooltip(false);
+    };
+    window.addEventListener("keydown", dismiss);
+    return () => window.removeEventListener("keydown", dismiss);
+  }, [showTooltip]);
+  const stacked = resource === "all";
+  const series = stacked ? resources : resources.filter(r => r.key === resource);
+  const title = stacked ? "Resource history" : `${series[0].label} utilization`;
   const rows = useMemo(() => samples
-    .map(sample => ({
-      sampledAt: sample.sampled_at,
-      timestampMs: Date.parse(sample.sampled_at),
-      values: resources.map(({ key }) => Number.isFinite(sample[key]) ? sample[key] : null),
-    }))
-    .filter(row => Number.isFinite(row.timestampMs))
-    .sort((a, b) => a.timestampMs - b.timestampMs), [samples]);
-  if (!rows.some(row => row.values.some(value => value !== null))) {
-    return <p className="empty">No resource samples received yet. History is unavailable.</p>;
+    .map(sample => ({ sample, timestamp: Date.parse(sample.sampled_at) }))
+    .sort((a, b) => a.timestamp - b.timestamp), [samples]);
+  if (!rows.length) {
+    return <p className="empty">No {stacked ? "resource" : series[0].label} samples received yet. History is unavailable.</p>;
   }
-  const latest = rows[rows.length - 1];
+
+  const first = rows[0];
+  const last = rows[rows.length - 1];
+  const duration = last.timestamp - first.timestamp;
+  const svgWidth = 548;
+  const svgHeight = 232;
+  const left = 54;
+  const width = 528 - left;
+  const top = 16;
+  const height = 180;
+  const max = stacked ? 300 : 100;
+  const x = (t: number) => left + ((t - first.timestamp) / (duration || 1)) * width;
+  const y = (n: number) => top + height * (1 - n / max);
+  const baseline = y(0);
+  const cursorIndex = rows.findIndex(({ sample }) => sample.sampled_at === cursorTime);
+  const index = cursorIndex < 0 ? rows.length - 1 : cursorIndex;
+  const observation = rows[index].sample;
+  const observationTime = stamp(observation.sampled_at);
+  const readings = series.map(({ key, label }) => {
+    const reading = observation[key];
+    const value = hasReading(reading) ? reading : null;
+    return { key, label, value, text: value === null ? "Unavailable" : percent(value) };
+  });
+  const measured = readings.filter(({ value }) => value !== null).length;
+  const partial = stacked && measured > 0 && measured < series.length;
+
+  let interval = 15000;
+  for (let i = 1; i < rows.length; i++) {
+    const gap = rows[i].timestamp - rows[i - 1].timestamp;
+    if (gap > 0) interval = Math.min(interval, gap);
+  }
+  const barWidth = Math.min(24, duration ? (width * interval) / duration * 0.72 : 24);
+  const measuredSamples = rows.filter(({ sample }) => series.some(({ key }) => hasReading(sample[key]))).length;
+  const time = (s: string) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const columnX = x(rows[index].timestamp);
+
+  function inspectPoint(svg: SVGSVGElement, clientX: number, clientY: number, hover: boolean) {
+    const bounds = svg.getBoundingClientRect();
+    const position = (clientX - bounds.left) / bounds.width * svgWidth;
+    const vertical = (clientY - bounds.top) / bounds.height * svgHeight;
+    if (vertical < top || vertical > baseline) {
+      setShowTooltip(false);
+      return;
+    }
+    const timestamp = first.timestamp + Math.max(0, Math.min(1, (position - left) / width)) * duration;
+    let nearest = 0;
+    for (let i = 1; i < rows.length; i++) {
+      if (Math.abs(rows[i].timestamp - timestamp) < Math.abs(rows[nearest].timestamp - timestamp)) nearest = i;
+    }
+    const distance = Math.abs(position - x(rows[nearest].timestamp));
+    const hit = hover ? distance <= barWidth / 2 + 2 : position >= left - barWidth && position <= left + width + barWidth;
+    setShowTooltip(hover && hit);
+    if (hit) {
+      if (!hover || !showTooltip) marks.current?.getAnimations()[0]?.finish();
+      setAnnounceSelection(false);
+      setCursorTime(rows[nearest].sample.sampled_at);
+    }
+  }
+
+  const observationContent = (
+    <>
+      <div className="history-observation-meta">
+        <time dateTime={observation.sampled_at}>{observationTime}</time>
+        {partial && <span>Partial observation</span>}
+      </div>
+      <dl className="history-readings">
+        {readings.map(({ key, label, value, text }) => (
+          <div key={key} data-series={key}>
+            <dt>{label}</dt>
+            <dd className={value === null ? "measurement--unknown" : undefined}>{text}</dd>
+          </div>
+        ))}
+      </dl>
+    </>
+  );
+
   return (
-    <HistoryColumns
-      rows={rows}
-      title="Resource utilization"
-      caption="Raw samples · no aggregation"
-      series={resources}
-      top={100}
-      format={value => value === null ? "Unavailable" : percent(value)}
-      latestLabel={latest.values.some(value => value !== null) ? "Newest sample" : "Newest sample unavailable"}
-      activeSeries={resources.findIndex(({ key }) => key === resource)}
-      onSeriesChange={index => onResourceChange(resources[index].key)}
-    />
+    <figure className="resource-history">
+      <figcaption>
+        <h3>{title}</h3>
+        <span>{duration ? `${Math.round(duration / 60000)} min` : "Single sample"} · Raw samples</span>
+      </figcaption>
+      <p className="history-instructions tiny" id={instructionsId}>
+        {rows.length > 1 ? "Hover or tap a bar, or use arrow keys on the chart." : "Hover or tap the bar to inspect its sample."}
+      </p>
+      {stacked && <p className="history-scale tiny">Stack height (percentage points) · Not overall host utilization</p>}
+      <div
+        className="history-plot"
+        role="group"
+        aria-label={`${title} chart`}
+        aria-describedby={instructionsId}
+        tabIndex={rows.length > 1 ? 0 : undefined}
+        onKeyDown={event => {
+          const next = event.key === "ArrowLeft" ? Math.max(index - 1, 0)
+            : event.key === "ArrowRight" ? Math.min(index + 1, rows.length - 1)
+            : event.key === "Home" ? 0
+            : event.key === "End" ? rows.length - 1
+            : null;
+          if (next === null) return;
+          event.preventDefault();
+          marks.current?.getAnimations()[0]?.finish();
+          setShowTooltip(false);
+          setAnnounceSelection(true);
+          setCursorTime(rows[next].sample.sampled_at);
+        }}
+      >
+        <svg
+          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+          role="img"
+          aria-label={`${title}, 0 to ${max} ${stacked ? "percentage points" : "percent"}. ${measuredSamples} samples with measurements from ${stamp(first.sample.sampled_at)} to ${stamp(last.sample.sampled_at)}. Each column is one observation; missing intervals remain empty.`}
+          onPointerMove={event => {
+            if (event.pointerType === "mouse") inspectPoint(event.currentTarget, event.clientX, event.clientY, true);
+          }}
+          onClick={event => {
+            const mouse = "pointerType" in event.nativeEvent && event.nativeEvent.pointerType === "mouse";
+            inspectPoint(event.currentTarget, event.clientX, event.clientY, mouse);
+          }}
+          onPointerLeave={() => setShowTooltip(false)}
+        >
+          {(stacked ? [0, 100, 200, 300] : [0, 50, 100]).map(value => (
+            <g key={value}>
+              <text x="0" y={y(value) + 4}>{value}{stacked ? "" : "%"}</text>
+              <line x1={left - 14} x2="544" y1={y(value)} y2={y(value)} className="chart-grid" />
+            </g>
+          ))}
+          <g
+            key={resource}
+            ref={marks}
+            className="history-marks"
+            style={{ transformOrigin: `0 ${baseline}px` }}
+          >
+            {rows.map(({ sample, timestamp }, rowIndex) => {
+              const center = x(timestamp);
+              let level = 0;
+              let hasZero = false;
+              const segments = series.map(({ key }) => {
+                const value = sample[key];
+                if (!hasReading(value)) return null;
+                if (value === 0) {
+                  hasZero = true;
+                  return null;
+                }
+                level += value;
+                return (
+                  <rect
+                    key={key}
+                    x={center - barWidth / 2}
+                    y={y(level)}
+                    width={barWidth}
+                    height={height * value / max}
+                    rx={stacked ? undefined : 1.5}
+                    className="chart-bar"
+                    data-series={key}
+                  />
+                );
+              });
+              return (
+                <g key={sample.sampled_at}>
+                  {segments}
+                  {level === 0 && hasZero && (
+                    <line x1={center - barWidth / 2} x2={center + barWidth / 2} y1={baseline} y2={baseline} className="chart-zero" />
+                  )}
+                  {rowIndex === index && measured > 0 && (
+                    <rect
+                      x={center - barWidth / 2 - 1.5}
+                      y={y(level) - 2}
+                      width={barWidth + 3}
+                      height={baseline - y(level) + 4}
+                      rx="2"
+                      className="chart-selection"
+                    />
+                  )}
+                </g>
+              );
+            })}
+          </g>
+          {measured === 0 && <line x1={columnX} x2={columnX} y1={top} y2={baseline} className="chart-cursor" />}
+          <text x={left} y="224">{time(first.sample.sampled_at)}</text>
+          {duration > 0 && <text x={left + width} y="224" textAnchor="end">{time(last.sample.sampled_at)}</text>}
+        </svg>
+        {showTooltip && (
+          <div
+            className="history-tooltip"
+            data-side={columnX > svgWidth / 2 ? "left" : "right"}
+            aria-hidden="true"
+            style={{
+              "--column-x": `${columnX / svgWidth * 100}%`,
+              "--column-y": `${y(readings.reduce((level, { value }) => level + (value ?? 0), 0)) / svgHeight * 100}%`,
+            } as CSSProperties}
+          >
+            {observationContent}
+          </div>
+        )}
+      </div>
+      <div className="history-observation">
+        <span className="history-observation-label">Selected sample</span>
+        {observationContent}
+      </div>
+      <p className="sr-only" role="status">
+        {announceSelection && `${observationTime}${partial ? ", partial observation" : ""}: ${readings.map(({ label, text }) => `${label} ${text}`).join(", ")}. Sample ${index + 1} of ${rows.length}.`}
+      </p>
+      <p className="tiny history-provenance">
+        {measuredSamples} samples with measurements · No aggregation · {Intl.DateTimeFormat().resolvedOptions().timeZone}
+        <br />
+        <time dateTime={first.sample.sampled_at}>{stamp(first.sample.sampled_at)}</time> –{" "}
+        <time dateTime={last.sample.sampled_at}>{stamp(last.sample.sampled_at)}</time>
+      </p>
+      {!measuredSamples && <p>{stacked ? "Resource" : series[0].label} measurements unavailable for this range.</p>}
+    </figure>
   );
 }
 
@@ -277,63 +448,47 @@ function NetworkHistory({ samples, maxInterval, current, cached, now }: {
   now: number;
 }) {
   const { rows, top } = useMemo(() => {
+    const rows = deriveNetworkRates(samples, maxInterval);
     let top = 0;
-    const rows = deriveNetworkRates(samples, maxInterval).map(({ rxMbps, txMbps, ...point }) => {
-      top = Math.max(top, rxMbps ?? 0, txMbps ?? 0);
-      return { ...point, values: [rxMbps, txMbps] };
-    });
+    for (const { rxMbps, txMbps } of rows) top = Math.max(top, rxMbps ?? 0, txMbps ?? 0);
     return { rows, top };
   }, [samples, maxInterval]);
-  if (!rows.some(row => row.values[0] !== null)) {
+  if (!rows.some(row => row.rxMbps !== null)) {
     return <p className="empty">Network rates unavailable — two usable samples are required.</p>;
   }
   const latest = rows[rows.length - 1];
-  const latestLabel = latest.values[0] === null ? "Latest interval unavailable"
+  const latestLabel = latest.rxMbps === null ? "Latest interval unavailable"
     : cached ? "Cached"
       : current && now - latest.timestampMs <= maxInterval * 1000 ? "Latest interval" : "Historical";
-  return (
-    <HistoryColumns
-      rows={rows}
-      title="Network traffic"
-      caption="Estimated aggregate traffic · excludes loopback"
-      series={networkSeries}
-      top={top || 1}
-      format={formatRate}
-      latestLabel={latestLabel}
-      network
-    />
-  );
+  return <NetworkColumns rows={rows} top={top || 1} latestLabel={latestLabel} />;
 }
 
 export function HostWorkspace({
   refreshKey,
-  isVisible,
-  onFleet,
-  onFleetError,
-  onUnauthorized,
+  fleet,
+  failure,
   openIncidents,
   incidentsStale,
   incidents,
   onOpenIncident,
   inspectHost,
-  onConnect,
+  onInspectionHandled,
 }: Props) {
-  const [fleet, setFleet] = useState<HostList | null>(null);
-  const [failure, setFailure] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null | undefined>(undefined);
   const [selectionNotice, setSelectionNotice] = useState("");
   const [appliedInspection, setAppliedInspection] = useState<Props["inspectHost"]>(null);
-  const selectedRef = useRef(selected);
-  const loadedOnce = useRef(false);
-  selectedRef.current = selected;
   const [history, setHistory] = useState<{ id: string; samples: HostMetric[] } | null>(null);
   const [historyRequest, setHistoryRequest] = useState<{ id: string; pending: boolean; error: string | null } | null>(null);
   const [historyMode, setHistoryMode] = useState<"resource" | "network">("resource");
-  const [resource, setResource] = useState<Resource>("cpu_percent");
+  const [resource, setResource] = useState<HistoryMode>("cpu_percent");
   const [now, setNow] = useState(Date.now());
   const inspectorHeading = useRef<HTMLHeadingElement>(null);
+
+  const hosts = fleet?.hosts ?? [];
+  const rows = hosts.map(host => ({ host, risk: fleet && !failure ? pressure(host, fleet, now) : null }));
+  rows.sort((a, b) => (a.risk?.headroom ?? Infinity) - (b.risk?.headroom ?? Infinity));
 
   if (inspectHost && inspectHost !== appliedInspection) {
     setAppliedInspection(inspectHost);
@@ -341,63 +496,25 @@ export function HostWorkspace({
     setSelectionNotice("");
     setResource(inspectHost.resource ?? "cpu_percent");
     setHistoryMode("resource");
+  } else if (rows.length && selected === undefined) {
+    setSelected(rows[0].host.id);
+  } else if (fleet && selected && !fleet.hosts.some(host => host.id === selected)) {
+    setSelected(null);
+    setSelectionNotice("The selected host is no longer in the loaded host list. Select another host.");
   }
 
   useEffect(() => {
-    let active = true;
-    let pending = false;
-    const controller = new AbortController();
-
-    async function load() {
-      if (pending) return;
-      pending = true;
-      try {
-        const next: HostList = await request("/hosts", controller.signal);
-        if (!active) return;
-        setFleet(next);
-        setFailure("");
-        onFleet(next);
-        onFleetError("");
-        if (!loadedOnce.current && next.hosts.length) {
-          loadedOnce.current = true;
-          const loadTime = Date.now();
-          const ordered = next.hosts
-            .map(host => ({ host, risk: pressure(host, next, loadTime) }))
-            .sort((a, b) => (a.risk?.headroom ?? Infinity) - (b.risk?.headroom ?? Infinity));
-          setSelected(current => current ?? ordered[0].host.id);
-        }
-        if (selectedRef.current && !next.hosts.some(h => h.id === selectedRef.current)) {
-          setSelected(null);
-          setSelectionNotice("The selected host is no longer in the loaded host list. Select another host.");
-        }
-      } catch (e) {
-        if (!active) return;
-        const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") onUnauthorized();
-        else { setFailure(message); onFleetError(message); }
-      } finally {
-        pending = false;
-      }
-    }
-
-    void load();
-    const poll = setInterval(() => void load(), 10000);
-    return () => {
-      active = false;
-      controller.abort();
-      clearInterval(poll);
-    };
-  }, [refreshKey, onFleet, onFleetError, onUnauthorized]);
-
-  useEffect(() => {
-    if (!isVisible) return;
     setNow(Date.now());
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(clock);
-  }, [isVisible]);
+  }, []);
 
   useEffect(() => {
-    if (!isVisible || !selected) return;
+    // Keep cached history for same-host retries, but never carry it across host changes.
+    setHistory(previous => previous?.id === selected ? previous : null);
+    setHistoryRequest(previous => previous?.id === selected ? previous : null);
+    if (!selected) return;
+    const hostId = selected;
     let active = true;
     let pending = false;
     const controller = new AbortController();
@@ -405,18 +522,17 @@ export function HostWorkspace({
     async function load() {
       if (pending) return;
       pending = true;
-      setHistoryRequest(previous => ({ id: selected!, pending: true, error: previous?.id === selected ? previous.error : null }));
+      setHistoryRequest(previous => ({ id: hostId, pending: true, error: previous?.id === hostId ? previous.error : null }));
       try {
-        const samples: HostMetric[] = await request(`/hosts/${selected}/metrics`, controller.signal);
+        const samples: HostMetric[] = await api(`/hosts/${hostId}/metrics`, "GET", undefined, controller.signal);
         if (active) {
-          setHistory({ id: selected!, samples });
-          setHistoryRequest({ id: selected!, pending: false, error: null });
+          setHistory({ id: hostId, samples });
+          setHistoryRequest({ id: hostId, pending: false, error: null });
         }
       } catch (e) {
-        if (!active) return;
-        const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") onUnauthorized();
-        else setHistoryRequest({ id: selected!, pending: false, error: message });
+        if (active && !(e instanceof ApiError && e.status === 401)) {
+          setHistoryRequest({ id: hostId, pending: false, error: e instanceof Error ? e.message : String(e) });
+        }
       } finally {
         pending = false;
       }
@@ -429,23 +545,19 @@ export function HostWorkspace({
       controller.abort();
       clearInterval(poll);
     };
-  }, [isVisible, selected, refreshKey, onUnauthorized]);
+  }, [selected, refreshKey]);
 
   useEffect(() => {
     if (!inspectHost) return;
-    const frame = requestAnimationFrame(() => {
+    const frame = window.requestAnimationFrame(() => {
       inspectorHeading.current?.closest(".host-inspector")?.scrollIntoView({ block: "start" });
       inspectorHeading.current?.focus({ preventScroll: true });
+      onInspectionHandled(inspectHost);
     });
-    return () => cancelAnimationFrame(frame);
-  }, [inspectHost]);
+    return () => window.cancelAnimationFrame(frame);
+  }, [inspectHost, onInspectionHandled]);
 
-  if (!isVisible) return null;
-
-  const hosts = fleet?.hosts ?? [];
   const fleetLoading = !fleet && !failure;
-  const rows = hosts.map(host => ({ host, risk: fleet && !failure ? pressure(host, fleet, now) : null }));
-  rows.sort((a, b) => (a.risk?.headroom ?? Infinity) - (b.risk?.headroom ?? Infinity));
   const term = query.trim().toLowerCase();
   const visible = rows.filter(({ host, risk }) =>
     `${host.hostname} ${host.id}`.toLowerCase().includes(term) &&
@@ -639,7 +751,7 @@ export function HostWorkspace({
               <h2>Connect another server</h2>
               <p className="muted">Install the Linux agent to add this server’s resource signals to the fleet.</p>
             </div>
-            <Button onClick={onConnect}><WorkspaceIcon name="terminal" />Agent installation</Button>
+            <ButtonLink href="/connect"><WorkspaceIcon name="terminal" />Agent installation</ButtonLink>
           </section>
         </div>
 
@@ -660,96 +772,123 @@ export function HostWorkspace({
               {selectionNotice || "Select a host to inspect its observations and resource history."}
             </p>
           ) : (
-            <>
-              <div className="inspector-headline">
-                {selectedRisk ? (
-                  <>
-                    <span>{selectedRisk.label}</span>
-                    <p><strong>{percent(selectedRisk.value)}</strong> / {percent(selectedRisk.limit)} limit</p>
-                    <Badge tone={selectedRisk.state === "exceeded" ? "danger" : selectedRisk.state === "near" ? "warning" : "neutral"}>{pressureLabel[selectedRisk.state]}</Badge>
-                  </>
-                ) : (
-                  <>
-                    <strong>Resource assessment unavailable</strong>
-                    <p className="tiny">{failure ? "Cached fleet data" : host.status === "offline" ? "Offline; sample is historical" : stale(host) ? "No fresh sample" : "No configured comparable limit"}</p>
-                  </>
-                )}
-              </div>
-              <p className="tiny inspector-sample">
-                Sample <time dateTime={host.sampled_at ?? undefined}>{stamp(host.sampled_at)}</time> ·{" "}
-                {failure ? "Cached, not live" : host.status === "offline" ? "Historical, not live" : stale(host) ? "Stale / unavailable" : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}
-              </p>
-              <h3>Resource history</h3>
-              <div className="history-stage" id="host-history">
-                <div className="history-modes" role="group" aria-label="History view">
-                  <Button aria-pressed={historyMode === "resource"} aria-controls="host-history-chart" onClick={() => setHistoryMode("resource")}>Resource (%)</Button>
-                  <Button aria-pressed={historyMode === "network"} aria-controls="host-history-chart" onClick={() => setHistoryMode("network")}>Network (Mb/s)</Button>
+            <div className="host-inspector-body">
+              <div className="inspector-history">
+                <div className="inspector-headline">
+                  {selectedRisk ? (
+                    <>
+                      <span>{selectedRisk.label}</span>
+                      <p><strong>{percent(selectedRisk.value)}</strong> / {percent(selectedRisk.limit)} limit</p>
+                      <Badge tone={selectedRisk.state === "exceeded" ? "danger" : selectedRisk.state === "near" ? "warning" : "neutral"}>{pressureLabel[selectedRisk.state]}</Badge>
+                    </>
+                  ) : (
+                    <>
+                      <strong>Resource assessment unavailable</strong>
+                      <p className="tiny">{failure ? "Cached fleet data" : host.status === "offline" ? "Offline; sample is historical" : stale(host) ? "No fresh sample" : "No configured comparable limit"}</p>
+                    </>
+                  )}
                 </div>
-                {historyPending && activeHistoryError && history?.id === host.id ? (
-                  <Notice tone="warning">Refreshing history. Cached history below is stale.</Notice>
-                ) : !historyPending && activeHistoryError ? (
-                  <Notice tone="warning">
-                    Resource history refresh failed: {activeHistoryError}.{" "}
-                    {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}
-                  </Notice>
-                ) : null}
-                <div id="host-history-chart">
-                  {history?.id === host.id ? (
-                    historyMode === "resource" ? (
-                      <ResourceHistory key={host.id} samples={history.samples} resource={resource} onResourceChange={setResource} />
-                    ) : (
-                      <NetworkHistory
-                        key={host.id}
-                        samples={history.samples}
-                        maxInterval={fleet?.stale_after_seconds ?? 60}
-                        current={!failure && !!fleet && hasFreshSample(host, fleet, now) && !activeHistoryError}
-                        cached={!!failure || !!activeHistoryError}
-                        now={now}
-                      />
-                    )
-                  ) : !activeHistoryError || historyPending ? (
-                    <AsciiLoading label="Loading resource history…" variant="dither" lines={4} widths={["100%", "90%", "100%", "84%"]} />
+                <p className="tiny inspector-sample">
+                  Latest sample <time dateTime={host.sampled_at ?? undefined}>{stamp(host.sampled_at)}</time> ·{" "}
+                  {failure
+                    ? "Cached, not live"
+                    : host.status === "offline"
+                      ? "Historical, not live"
+                      : stale(host)
+                        ? "Stale / unavailable"
+                        : `Within ${fleet?.stale_after_seconds ?? 60}s freshness window`}
+                </p>
+                <div className="history-stage">
+                  <div className="history-modes" role="group" aria-label="History view">
+                    <Button aria-pressed={historyMode === "resource"} aria-controls="host-history-chart" onClick={() => setHistoryMode("resource")}>Resource (%)</Button>
+                    <Button aria-pressed={historyMode === "network"} aria-controls="host-history-chart" onClick={() => setHistoryMode("network")}>Network (Mb/s)</Button>
+                  </div>
+                  {historyMode === "resource" && (
+                    <div className="inspector-resources" role="group" aria-label="Resource history">
+                      {resources.map(({ key, label }) => (
+                        <Button key={key} variant="ghost" aria-pressed={resource === key} aria-controls="host-history-chart" onClick={() => setResource(key)}>
+                          <span className="resource-label">{label}</span>
+                          <span
+                            className={`resource-value ${pressureClass(fleet && !failure ? resourcePressure(host, fleet, now, key)?.state : undefined)}`}
+                            aria-label={host[key] == null ? "No measurement" : undefined}
+                          >
+                            {percent(host[key])}
+                          </span>
+                        </Button>
+                      ))}
+                      <Button variant="ghost" aria-pressed={resource === "all"} aria-controls="host-history-chart" onClick={() => setResource("all")}>
+                        <span className="resource-label">All</span>
+                        <span className="resource-mode">Stacked</span>
+                      </Button>
+                    </div>
+                  )}
+                  {historyPending && activeHistoryError && history?.id === host.id ? (
+                    <Notice tone="warning">Refreshing history. Cached history below is stale.</Notice>
+                  ) : !historyPending && activeHistoryError ? (
+                    <Notice tone="warning">
+                      Resource history refresh failed: {activeHistoryError}.{" "}
+                      {history?.id === host.id ? "Cached history below is stale." : "History unavailable."}
+                    </Notice>
                   ) : null}
+                  <div id="host-history-chart">
+                    {history?.id === host.id ? (
+                      historyMode === "resource" ? (
+                        <ResourceHistory key={host.id} samples={history.samples} resource={resource} />
+                      ) : (
+                        <NetworkHistory
+                          key={host.id}
+                          samples={history.samples}
+                          maxInterval={fleet?.stale_after_seconds ?? 60}
+                          current={!failure && !stale(host) && !activeHistoryError}
+                          cached={!!failure || !!activeHistoryError}
+                          now={now}
+                        />
+                      )
+                    ) : !activeHistoryError || historyPending ? (
+                      <AsciiLoading label="Loading resource history…" variant="dither" lines={4} widths={["100%", "90%", "100%", "84%"]} />
+                    ) : null}
+                  </div>
                 </div>
               </div>
-              <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />
 
-              <section className="inspector-incident" aria-labelledby="related-incident-title">
-                <h3 id="related-incident-title">Related incident</h3>
-                {relatedIncident ? (
-                  <>
-                    <p>{relatedIncident.title}</p>
-                    <Button variant="primary" onClick={() => onOpenIncident(relatedIncident.id)}>
-                      Open investigation{" "}
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M5 12h14 M13 6l6 6-6 6" />
-                      </svg>
-                    </Button>
-                  </>
-                ) : openIncidents === null && !incidentsStale ? (
-                  <AsciiLoading label="Loading related incidents…" />
-                ) : (
-                  <p className="muted small">{openIncidents === null ? "Related incident data is unavailable." : "No open incident for this host in the latest 100 records."}</p>
-                )}
-                {incidentsStale && openIncidents !== null && <p className="tiny">Cached incident records; the latest refresh failed.</p>}
-                <p className="tiny">Measured signals only. No root cause inferred.</p>
-              </section>
-
-              <details className="host-metadata">
-                <summary>Host identity &amp; last contact</summary>
-                <p className="tiny">OS and capacity unavailable · Uptime: Not collected</p>
-                <dl className="host-facts">
-                  <dt>Host ID</dt>
-                  <dd>{host.id}</dd>
-                  <dt>Agent version</dt>
-                  <dd>{host.version || "Unavailable"}</dd>
-                  <dt>Last agent contact</dt>
-                  <dd>
-                    {stamp(host.last_seen_at)} · {age(host.last_seen_at, now)}
-                  </dd>
-                </dl>
-              </details>
-            </>
+              <div className="inspector-context">
+                <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />
+                <section className="inspector-incident" aria-labelledby="related-incident-title">
+                  <h3 id="related-incident-title">Related incident</h3>
+                  {relatedIncident ? (
+                    <>
+                      <p>{relatedIncident.title}</p>
+                      <Button variant="primary" onClick={() => onOpenIncident(relatedIncident.id)}>
+                        Open investigation{" "}
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M5 12h14 M13 6l6 6-6 6" />
+                        </svg>
+                      </Button>
+                    </>
+                  ) : openIncidents === null && !incidentsStale ? (
+                    <AsciiLoading label="Loading related incidents…" />
+                  ) : (
+                    <p className="muted small">{openIncidents === null ? "Related incident data is unavailable." : "No open incident for this host in the latest 100 records."}</p>
+                  )}
+                  {incidentsStale && openIncidents !== null && <p className="tiny">Cached incident records; the latest refresh failed.</p>}
+                  <p className="tiny">Measured signals only. No root cause inferred.</p>
+                </section>
+                <details className="host-metadata">
+                  <summary>Host identity &amp; last contact</summary>
+                  <p className="tiny">OS and capacity unavailable · Uptime: Not collected</p>
+                  <dl className="host-facts">
+                    <dt>Host ID</dt>
+                    <dd>{host.id}</dd>
+                    <dt>Agent version</dt>
+                    <dd>{host.version || "Unavailable"}</dd>
+                    <dt>Last agent contact</dt>
+                    <dd>
+                      {stamp(host.last_seen_at)} · {age(host.last_seen_at, now)}
+                    </dd>
+                  </dl>
+                </details>
+              </div>
+            </div>
           )}
         </Panel>
       </div>

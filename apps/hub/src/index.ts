@@ -28,7 +28,7 @@ import {
 } from "./auth";
 import { audit, db } from "./db";
 import { createIncident, hostThresholds } from "./incidents";
-import { readAgentInstallConfig } from "./agent-install";
+import { isDevLoopbackInstallEnabled, readAgentInstallConfig } from "./agent-install";
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
 import { serviceRoutes } from "./services";
@@ -118,7 +118,7 @@ async function router(req: Request): Promise<Response> {
   }
 
   if (path === "/api/agents/install-config" && method === "GET") {
-    const config = readAgentInstallConfig(process.env);
+    const config = readAgentInstallConfig(process.env, server.port);
     return config ? j(config) : invalid("Agent installation is not configured", 503);
   }
 
@@ -360,7 +360,7 @@ async function router(req: Request): Promise<Response> {
 
 const server = Bun.serve<SocketData>({
   port,
-  hostname: "0.0.0.0",
+  hostname: isDevLoopbackInstallEnabled(process.env) ? "127.0.0.1" : "0.0.0.0",
   maxRequestBodySize: 64 * 1024,
   async fetch(req, server) {
     const url = new URL(req.url);

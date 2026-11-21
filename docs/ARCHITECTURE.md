@@ -149,7 +149,7 @@ opspilot/
 │   │   ├── AGENTS.md
 │   │   ├── app/
 │   │   │   ├── layout.tsx
-│   │   │   ├── page.tsx         # Dashboard, login, incidents, memory
+│   │   │   ├── (workspace)/     # Authenticated routes, shared session and shell
 │   │   │   ├── globals.css      # Base stylesheet importing tokens and styles/
 │   │   │   ├── tokens.css       # Semantic runtime design tokens
 │   │   │   ├── styles/          # Modular CSS partials

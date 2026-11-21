@@ -109,7 +109,7 @@ test("Hub refuses to start without SESSION_SECRET when auth is enabled", async (
   expect(result.output).toContain("SESSION_SECRET must have >= 32 chars");
 });
 
-test("Hub enforces 401 on admin routes when DISABLE_AUTH is false", async () => {
+test.each([false, true])("Hub enforces 401 on admin routes with loopback install opt-in %s", async (loopback) => {
   const port = freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const hub = spawnHub({
@@ -117,6 +117,11 @@ test("Hub enforces 401 on admin routes when DISABLE_AUTH is false", async () => 
     NODE_ENV: "development",
     DISABLE_AUTH: "false",
     SESSION_SECRET: sessionSecret,
+    ...(loopback ? {
+      OPSPILOT_DEV_LOOPBACK_INSTALL: "true",
+      OPSPILOT_PUBLIC_HUB_URL: baseUrl,
+      OPSPILOT_AGENT_VERSION: "v0.1.0-rc.2",
+    } : {}),
   });
   try {
     await waitHubReady(baseUrl, hub.child);

@@ -1,15 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import { readAgentInstallConfig } from "../apps/hub/src/agent-install";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAgentInstallCommand } from "../apps/web/lib/agent-install";
+import type { AgentInstallConfig } from "@opspilot/contracts";
+
+const loopbackSettings = {
+  NODE_ENV: "development",
+  OPSPILOT_DEV_LOOPBACK_INSTALL: "true",
+  OPSPILOT_PUBLIC_HUB_URL: "http://127.0.0.1:4321/",
+  OPSPILOT_AGENT_VERSION: "v0.1.0-rc.2",
+};
+const loopbackConfig = readAgentInstallConfig(loopbackSettings, 4321)!;
 
 const settings = { OPSPILOT_PUBLIC_HUB_URL: "https://hub.example:443/", OPSPILOT_AGENT_VERSION: "v1.2.3-rc.1" };
 
 describe("agent installation configuration", () => {
   test("canonicalizes explicit settings and defaults to the public repository", () => {
-    expect(readAgentInstallConfig(settings)).toEqual({ hubUrl: "https://hub.example", installerUrl: "https://hub.example/api/agents/install.sh", version: "v1.2.3-rc.1", repository: "kuenobaikbanget/opspilot" });
+    expect(readAgentInstallConfig(settings)).toEqual({ mode: "https", hubUrl: "https://hub.example", installerUrl: "https://hub.example/api/agents/install.sh", version: "v1.2.3-rc.1", repository: "kuenobaikbanget/opspilot" });
     expect(readAgentInstallConfig({ ...settings, OPSPILOT_AGENT_REPOSITORY: "my-org/my.repo" })?.repository).toBe("my-org/my.repo");
   });
   test("never infers installation metadata from internal or browser configuration", () => {
@@ -32,6 +41,39 @@ describe("agent installation configuration", () => {
       expect(readAgentInstallConfig({ ...settings, OPSPILOT_AGENT_REPOSITORY: value })).toBeNull();
     }
   });
+  test("only enables HTTP with exact opt-in and development environment", () => {
+    for (const flag of [undefined, "false", "1", "TRUE", "true "]) {
+      expect(readAgentInstallConfig({ ...loopbackSettings, OPSPILOT_DEV_LOOPBACK_INSTALL: flag }, 4321)).toBeNull();
+    }
+    for (const env of [undefined, "test", "production", "Development", "development "]) {
+      expect(readAgentInstallConfig({ ...loopbackSettings, NODE_ENV: env }, 4321)).toBeNull();
+    }
+    expect(readAgentInstallConfig({ ...loopbackSettings, ...settings }, 4321)).toEqual(readAgentInstallConfig(settings));
+    expect(readAgentInstallConfig({ ...loopbackSettings, OPSPILOT_AGENT_VERSION: "latest" }, 4321)).toBeNull();
+    expect(readAgentInstallConfig({ ...loopbackSettings, OPSPILOT_AGENT_REPOSITORY: "https://other.example/owner/repo" }, 4321)).toBeNull();
+  });
+  test("requires the literal IPv4 loopback origin and actual Hub port", () => {
+    expect(loopbackConfig).toEqual({
+      mode: "loopback-development", hubUrl: "http://127.0.0.1:4321", version: "v0.1.0-rc.2", repository: "kuenobaikbanget/opspilot",
+    });
+    expect(readAgentInstallConfig(loopbackSettings, 4322)).toBeNull();
+    expect(readAgentInstallConfig(loopbackSettings)).toBeNull();
+    const defaultPort = { ...loopbackSettings, OPSPILOT_PUBLIC_HUB_URL: "http://127.0.0.1/" };
+    expect(readAgentInstallConfig(defaultPort, 4321)).toBeNull();
+    expect(readAgentInstallConfig(defaultPort, 80)?.hubUrl).toBe("http://127.0.0.1");
+    expect(readAgentInstallConfig({ ...loopbackSettings, OPSPILOT_PUBLIC_HUB_URL: "http://127.0.0.1:65535" }, 65535)?.hubUrl).toBe("http://127.0.0.1:65535");
+    for (const raw of [
+      "http://localhost:4321", "http://127.1:4321", "http://127.0.0.2:4321",
+      "http://2130706433:4321", "http://0177.0.0.1:4321", "http://0x7f000001:4321",
+      "http://%31%32%37.0.0.1:4321", "http://127.0.0.1.:4321", "http://[::1]:4321",
+      "http://192.168.1.4:4321", "http://100.64.0.1:4321", "http://8.8.8.8:4321",
+      "HTTP://127.0.0.1:4321", "http://user@127.0.0.1:4321", "http://127.0.0.1:4321\\a",
+      "http://127.0.0.1:4321/.", "http://127.0.0.1:4321//", "http://127.0.0.1:4321?",
+      "http://127.0.0.1:4321/#", "http://127.0.0.1:4321\n", "http://127.0.0.1:04321",
+      "http://127.0.0.1:+4321", "http://127.0.0.1:4321.0", "http://127.0.0.1:0x10e1",
+      "http://127.0.0.1:", "http://127.0.0.1:0", "http://127.0.0.1:65536",
+    ]) expect(readAgentInstallConfig({ ...loopbackSettings, OPSPILOT_PUBLIC_HUB_URL: raw }, 4321)).toBeNull();
+  });
 });
 
 describe("generated command preserves literal arguments", () => {
@@ -41,7 +83,8 @@ describe("generated command preserves literal arguments", () => {
       try {
         const marker = join(dir, "injected");
         const malicious = `'; touch ${marker}; # $(touch ${marker})\n`;
-        const config = {
+        const config: AgentInstallConfig = {
+          mode: "https",
           hubUrl: `https://hub.example/${malicious}`,
           installerUrl: `https://hub.example/install.sh?${malicious}`,
           version: `v1.2.3-${malicious}`,
@@ -100,6 +143,107 @@ exit 22
       expect(existsSync(executed)).toBe(false);
       expect(existsSync(readFileSync(capture, "utf8"))).toBe(false);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("generated loopback command", () => {
+  test.each(["root", "failed-download", "wrong-hash", "duplicate-hash", "amd64", "arm64"])("%s", (scenario) => {
+    const dir = mkdtempSync(join(tmpdir(), "opspilot-loopback-command-"));
+    const runDir = join(dir, "run");
+    const marker = join(dir, "injected");
+    const capture = join(dir, "agent-ran");
+    const arch = scenario === "arm64" ? "arm64" : "amd64";
+    const archive = `opspilot-agent_0.1.0-rc.2_linux_${arch}.tar.gz`;
+    const base = "https://github.com/kuenobaikbanget/opspilot/releases/download/v0.1.0-rc.2";
+    const literal = `'; touch ${marker}; # $(touch ${marker})\n`;
+    const config = { ...loopbackConfig, hubUrl: `${loopbackConfig.hubUrl}/${literal}` };
+    try {
+      const executable = (name: string, command: string) => writeFileSync(join(dir, name), `#!/bin/bash\n${command}\n`, { mode: 0o700 });
+      executable("id", `echo ${scenario === "root" ? "0" : "1000"}`);
+      executable("uname", `echo Linux ${arch === "arm64" ? "aarch64" : "x86_64"}`);
+      executable("opspilot-agent", `
+        [ ! -e "\${OPSPILOT_AGENT_STATE_PATH}" ] && [ ! -e "\${0%/*}/extra" ] || exit 8
+        printf '%s\\0' "$OPSPILOT_HUB_URL" "$OPSPILOT_ENROLL_TOKEN" "$OPSPILOT_AGENT_STATE_PATH" "$#" "\${OPSPILOT_ENABLE_DOCKER-unset}" > ${JSON.stringify(capture)}
+      `);
+      writeFileSync(join(dir, "extra"), "not an executable");
+      const packed = Bun.spawnSync(["tar", "-czf", archive, "--", "opspilot-agent", "extra"], { cwd: dir });
+      expect(packed.exitCode).toBe(0);
+      const hash = new Bun.CryptoHasher("sha256").update(readFileSync(join(dir, archive))).digest("hex");
+      const valid = `${hash}  ${archive}\n`;
+      writeFileSync(join(dir, "SHA256SUMS"), scenario === "duplicate-hash" ? `${valid}${hash} *${archive}\n`
+        : scenario === "wrong-hash" ? `${"f".repeat(64)}  ${archive}\n` : valid);
+      mkdirSync(runDir);
+      executable("curl", `
+        set -eu
+        [[ "$*" == "-q --fail --silent --show-error --location --proto =https --proto-redir =https --noproxy * --connect-timeout 10 --max-time 120 --output "* ]]
+        printf '%s\\n' "\${!#}" >> ${JSON.stringify(join(dir, "calls"))}
+        case "\${!#}" in
+          '${base}/${archive}') file='${archive}' ;;
+          '${base}/SHA256SUMS') file=SHA256SUMS ;;
+          *) exit 99 ;;
+        esac
+        cp -- ${JSON.stringify(dir)}/"$file" "\${@: -2:1}"
+        ${scenario === "failed-download" ? "exit 22" : ""}
+      `);
+      const result = Bun.spawnSync(["bash", "-c", buildAgentInstallCommand(config, literal)], {
+        env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: runDir, OPSPILOT_ENABLE_DOCKER: "true" },
+        stdout: "pipe", stderr: "pipe", timeout: 5000,
+      });
+      const calls = join(dir, "calls");
+      if (scenario === "root") {
+        expect(result.stderr.toString()).toContain("non-root");
+        expect(existsSync(calls)).toBe(false);
+      } else {
+        expect(readFileSync(calls, "utf8")).toBe(`${base}/${archive}\n${scenario === "failed-download" ? "" : `${base}/SHA256SUMS\n`}`);
+      }
+      if (scenario === "amd64" || scenario === "arm64") {
+        expect(result.stderr.toString()).toBe("");
+        expect(result.exitCode).toBe(0);
+        const invocation = readFileSync(capture, "utf8").split("\0");
+        expect(invocation).toEqual([config.hubUrl, literal, expect.stringMatching(/\/run\/[^/]+\/identity\.json$/), "0", "unset", ""]);
+      } else {
+        expect(result.exitCode).not.toBe(0);
+        expect(existsSync(capture)).toBe(false);
+      }
+      expect(existsSync(marker)).toBe(false);
+      expect(readdirSync(runDir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("real curl refuses a TLS asset redirect to plain HTTP despite .curlrc", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "opspilot-loopback-redirect-"));
+    const fixture = (name: string) => new URL(`fixtures/provider-tls/${name}`, import.meta.url).pathname;
+    let tlsRequests = 0;
+    let httpRequests = 0;
+    const http = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { httpRequests++; return new Response("unexpected"); } });
+    const tls = Bun.serve({
+      hostname: "127.0.0.1", port: 0, tls: { key: Bun.file(fixture("server-key.pem")), cert: Bun.file(fixture("server.pem")) },
+      fetch(req) { tlsRequests++; return Response.redirect(`${http.url.origin}${new URL(req.url).pathname}`); },
+    });
+    try {
+      writeFileSync(join(dir, ".curlrc"), 'proto-redir = "=http,https"\n');
+      writeFileSync(join(dir, "id"), "#!/bin/bash\necho 1000\n", { mode: 0o700 });
+      // Route only the pinned initial URL to the trusted local TLS fixture; keep curl's real policy flags.
+      writeFileSync(join(dir, "curl"), `#!/bin/bash
+        case "\${!#}" in https://github.com/kuenobaikbanget/opspilot/releases/download/v0.1.0-rc.2/*) ;; *) exit 99 ;; esac
+        exec ${JSON.stringify(Bun.which("curl"))} "\${@:1:1}" --cacert ${JSON.stringify(fixture("ca.pem"))} \\
+          --resolve provider.example:${tls.port}:127.0.0.1 "\${@:2:$#-2}" "https://provider.example:${tls.port}/archive"
+      `, { mode: 0o700 });
+      const result = Bun.spawn(["bash", "-c", buildAgentInstallCommand(loopbackConfig, "unused-token")], {
+        env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir, TMPDIR: dir },
+        stdout: "pipe", stderr: "pipe", timeout: 5000,
+      });
+      expect(await new Response(result.stderr).text()).toMatch(/protocol.*http.*disabled/i);
+      expect(await result.exited).not.toBe(0);
+      expect(tlsRequests).toBe(1);
+      expect(httpRequests).toBe(0);
+    } finally {
+      tls.stop(true);
+      http.stop(true);
       rmSync(dir, { recursive: true, force: true });
     }
   });

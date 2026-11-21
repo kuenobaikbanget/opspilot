@@ -40,7 +40,7 @@ Do not run old binaries against the migrated schema. Legacy completed/failed rep
 
 ## Published release assets and container images
 
-**Current prerequisite (2026-11-18): GitHub has no published releases.** After merge, publish a reviewed release containing the new finite `opspilot-agent enroll` command and both architecture archives before configuring curl onboarding. Never use an older incompatible release or treat an example tag as an available installation. Publication is a deliberate maintainer action, not part of running the installer.
+[GitHub release `v0.1.0-rc.2`](https://github.com/kuenobaikbanget/opspilot/releases/tag/v0.1.0-rc.2) publishes both Linux archives and `SHA256SUMS`. Pin a reviewed compatible release; the remote installer requires the finite `opspilot-agent enroll` command. Publishing a release is a deliberate maintainer action, not part of running an install command.
 
 After a successful [tagged release](DEVELOPMENT.md#publish-a-version), archives are named `opspilot-agent_VERSION_linux_amd64.tar.gz` and `opspilot-agent_VERSION_linux_arm64.tar.gz` (VERSION omits the tag's leading `v`). Each contains `opspilot-agent`, `opspilot-agent.service` and `agent.env.example`; `SHA256SUMS` accompanies them. Checksums verify integrity under HTTPS/GitHub trust, not independent publisher authentication.
 
@@ -83,6 +83,31 @@ Finite enrollment runs as `opspilot`; the transient token is absent from the env
 Only missing files are installed. Same-version reruns require existing binary/unit/env to be byte-identical; conflicts stop with `Existing OpsPilot installation differs; refusing to overwrite`. There is no upgrade, force or uninstall mode. Never remove an existing identity to retry: a valid saved identity is reused without consuming a new token, while a corrupt one fails unchanged. Interrupted installs retain identity/files and remove only private download temporaries.
 
 If enrollment fails, the installer does not start the service. If the Hub consumed a token but the response/identity was lost, obtain a fresh dashboard token; there is no fabricated recovery or automatic orphan-record deletion. For startup failures use `sudo systemctl status opspilot-agent` and `sudo journalctl -u opspilot-agent` without dumping secret-bearing environment. Local `is-active` success is not WSS proof: verify the host is **Online** and has recent, increasing measurements in the dashboard.
+
+## Same-machine HTTP development
+
+Use the same **Connect server** wizard for an ephemeral local agent, not a remote, Tailscale or container-host installation. Use a separate local database and environment. Put these settings in the isolated Hub env file:
+
+```dotenv
+NODE_ENV=development
+OPSPILOT_DEV_LOOPBACK_INSTALL=true
+OPSPILOT_PUBLIC_HUB_URL=http://127.0.0.1:3211
+OPSPILOT_AGENT_VERSION=v0.1.0-rc.2
+```
+
+Supply the usual local database and admin credentials in that file, migrate the isolated database, then run:
+
+```bash
+bun --no-env-file run tools/dev-worktree.ts --web-port 3210 --hub-port 3211 --env-file .env.worktree
+```
+
+Use available ports and keep `--hub-port` equal to the origin port: the worktree runner sets the Hub's `PORT` from `--hub-port`, overriding any `PORT` in the env file. For a direct Hub launch, set `PORT` to the origin port instead. Omitting the URL port means 80, not the default Hub port. `localhost`, alternate IP forms and non-loopback addresses are not accepted.
+
+The Hub binds to `127.0.0.1` with the development opt-in. Keep the worktree runner's default Web host (`127.0.0.1`); do not use `--host 0.0.0.0`, an external proxy, or a port forward in this mode. A loopback Hub bind does not protect routes exposed through a proxy. Keep the existing HTTPS origin and leave the flag off in remote deployments.
+
+Sign in at `http://127.0.0.1:3210`, then generate and copy the command. Run it in Bash **as a regular user on the Hub machine**. It needs amd64/arm64 Linux, direct HTTPS access to GitHub release assets, trusted CA certificates, `curl`, `tar`, `awk`, `sha256sum`, and standard coreutils. It verifies the pinned archive checksum and runs only the agent binary in the foreground. No sudo, systemd, production identity or downloaded installer script is used.
+
+Keep the terminal open while verifying **Online** and recent telemetry. **Ctrl+C** stops the agent and removes its private temporary binary/downloads and identity on normal exit. A new run requires a new token and enrolls a new identity; the previous host and telemetry records remain in the development database. Abrupt termination (for example `SIGKILL`) can leave the private temporary directory behind.
 
 ## Manual binary agent installation on Ubuntu
 
@@ -135,7 +160,7 @@ This is intentionally a *limited capability* agent: `/proc` read-only mount may 
 
 ## Environment variables
 
-Hub: `DATABASE_URL`, `PORT`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, `ALLOWED_ORIGIN`, `COOKIE_SECURE`, `ALERT_*`, `AI_PROVIDER_ENCRYPTION_KEY`, and optional curl-onboarding settings `OPSPILOT_PUBLIC_HUB_URL`, `OPSPILOT_AGENT_VERSION`, `OPSPILOT_AGENT_REPOSITORY` described above. Worker: `DATABASE_URL`, `AI_PROVIDER_ENCRYPTION_KEY`, `INVESTIGATION_POLL_MS`. Web: `HUB_INTERNAL_URL` (server-side Next rewrite, never the public agent origin or master/provider keys). Agent: `OPSPILOT_HUB_URL`, transient `OPSPILOT_ENROLL_TOKEN`, `OPSPILOT_AGENT_STATE_PATH`, `OPSPILOT_ALLOWED_SERVICES`, `OPSPILOT_CONFIG_FILES`, `OPSPILOT_ENABLE_DOCKER`, `OPSPILOT_PROC_ROOT`, `OPSPILOT_DISK_PATH`, `OPSPILOT_INTERVAL_SECONDS`.
+Hub: `DATABASE_URL`, `PORT`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, `ALLOWED_ORIGIN`, `COOKIE_SECURE`, `ALERT_*`, `AI_PROVIDER_ENCRYPTION_KEY`, and optional onboarding settings `OPSPILOT_PUBLIC_HUB_URL`, `OPSPILOT_AGENT_VERSION`, `OPSPILOT_AGENT_REPOSITORY`, `OPSPILOT_DEV_LOOPBACK_INSTALL` described above. Worker: `DATABASE_URL`, `AI_PROVIDER_ENCRYPTION_KEY`, `INVESTIGATION_POLL_MS`. Web: `HUB_INTERNAL_URL` (server-side Next rewrite, never the public agent origin or master/provider keys). Agent: `OPSPILOT_HUB_URL`, transient `OPSPILOT_ENROLL_TOKEN`, `OPSPILOT_AGENT_STATE_PATH`, `OPSPILOT_ALLOWED_SERVICES`, `OPSPILOT_CONFIG_FILES`, `OPSPILOT_ENABLE_DOCKER`, `OPSPILOT_PROC_ROOT`, `OPSPILOT_DISK_PATH`, `OPSPILOT_INTERVAL_SECONDS`.
 
 ## Before external deployment
 

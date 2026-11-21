@@ -54,7 +54,7 @@ Dashboard direction: [Fleet & services contract](docs/UI-UX.md#fleet-services-da
 
 Dashboard **Enroll host** offers one copyable command for a headless Linux host with running systemd (amd64/arm64), root or sudo, and the required download/system utilities. The Hub must have explicit HTTPS installation metadata and a pinned compatible published release; see [deployment setup](docs/DEPLOYMENT.md#curl-based-headless-linux-installation).
 
-**Deployment prerequisite:** GitHub currently has no published releases. After merge, publish a reviewed release containing the new `opspilot-agent enroll` command before configuring dashboard onboarding. An example or older tag is not a working installer release.
+For development on the Hub machine, the same wizard can run a pinned release agent in the foreground without sudo or systemd. See [same-machine HTTP development](docs/DEPLOYMENT.md#same-machine-http-development).
 
 The command contains a one-use token, expires after 10 minutes, and may remain in shell history, clipboard and process arguments. Hiding it or generating another does not revoke earlier tokens. Verify **Online** and fresh measurements in the fleet table; an active local service alone is not connectivity proof.
 

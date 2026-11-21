@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { isDevLoopbackInstallEnabled } from "../apps/hub/src/agent-install";
 
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_WEB_PORT_START = 3200;
@@ -426,6 +427,9 @@ async function runCli(): Promise<void> {
       throw new Error(`Env file not found: ${resolvedEnvPath}`);
     }
     envFileVars = parseEnvFileContent(fs.readFileSync(resolvedEnvPath, "utf8"));
+  }
+  if (!args.mock && isDevLoopbackInstallEnabled(mergeCleanEnv(process.env, envFileVars)) && args.host !== DEFAULT_HOST) {
+    throw new Error("Loopback agent installation requires --host 127.0.0.1 for the Web proxy");
   }
 
   const { webPort, apiPort } = await resolveWorktreePorts({
