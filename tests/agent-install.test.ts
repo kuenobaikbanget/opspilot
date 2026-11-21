@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { readAgentInstallConfig } from "../apps/hub/src/agent-install";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAgentInstallCommand } from "../apps/web/lib/agent-install";
 import type { AgentInstallConfig } from "@opspilot/contracts";
+
+const repoRoot = new URL("../", import.meta.url).pathname;
+const tlsFixture = (name: string) => new URL(`fixtures/provider-tls/${name}`, import.meta.url).pathname;
 
 const loopbackSettings = {
   NODE_ENV: "development",
@@ -105,11 +110,11 @@ printf '%s\\0' "$@" > "$ARGS_CAPTURE"
 SCRIPT
 `, { mode: 0o755 });
         const env = {
-          PATH: `${dir}:/usr/bin:/bin`,
+          PATH: `${dir}:/usr/bin:/bin`, TMPDIR: dir,
           SUDO_USED: join(dir, "sudo-used"), URL_CAPTURE: join(dir, "url"),
           FILE_CAPTURE: join(dir, "file"), ARGS_CAPTURE: join(dir, "args"),
         };
-        const result = Bun.spawnSync([Bun.which("bash")!, "-c", buildAgentInstallCommand(config, malicious)], { env, stdout: "pipe", stderr: "pipe" });
+        const result = Bun.spawnSync([Bun.which("bash")!, "-c", buildAgentInstallCommand(config, malicious)], { cwd: dir, env, stdout: "pipe", stderr: "pipe" });
         expect(result.exitCode).toBe(0);
         expect(readFileSync(env.URL_CAPTURE, "utf8")).toBe(config.installerUrl);
         expect(readFileSync(env.ARGS_CAPTURE, "utf8").split("\0").slice(0, -1)).toEqual([
@@ -123,33 +128,45 @@ SCRIPT
       }
     });
   }
-  test("failed downloads never execute the partial script and remove the temporary file", () => {
+  test("a real truncated TLS download never executes and is cleaned up", async () => {
     const dir = mkdtempSync(join(tmpdir(), "opspilot-command-failure-"));
+    const runDir = join(dir, "run");
+    const executed = join(dir, "executed");
+    const partial = 'touch "$EXECUTED"\n';
+    const tls = createServer({ key: readFileSync(tlsFixture("server-key.pem")), cert: readFileSync(tlsFixture("server.pem")) }, (_req, res) => {
+      res.writeHead(200, { "Content-Length": partial.length + 100, Connection: "close" });
+      res.end(partial);
+    });
     try {
-      writeFileSync(join(dir, "curl"), `#!/bin/sh
-while [ "$#" -gt 0 ]; do
- if [ "$1" = --output ]; then shift; file=$1; fi
- shift
-done
-printf "%s" "$file" > "$FILE_CAPTURE"
-echo 'touch "$EXECUTED"' > "$file"
-exit 22
+      await once(tls.listen(0, "127.0.0.1"), "listening");
+      const address = tls.address();
+      if (!address || typeof address === "string") throw new Error("TLS fixture did not bind");
+      const { port } = address;
+      mkdirSync(runDir);
+      writeFileSync(join(dir, "id"), '#!/bin/sh\necho 0\n', { mode: 0o755 });
+      writeFileSync(join(dir, "curl"), `#!/bin/bash
+exec ${JSON.stringify(Bun.which("curl"))} "$1" --cacert ${JSON.stringify(tlsFixture("ca.pem"))} \\
+  --resolve provider.example:${port}:127.0.0.1 "\${@:2}"
 `, { mode: 0o755 });
-      const config = readAgentInstallConfig(settings)!;
-      const capture = join(dir, "file");
-      const executed = join(dir, "executed");
-      const result = Bun.spawnSync([Bun.which("bash")!, "-c", buildAgentInstallCommand(config, "a".repeat(43))], { env: { PATH: `${dir}:/usr/bin:/bin`, FILE_CAPTURE: capture, EXECUTED: executed } });
-      expect(result.exitCode).not.toBe(0);
+      const config = readAgentInstallConfig({ ...settings, OPSPILOT_PUBLIC_HUB_URL: `https://provider.example:${port}` })!;
+      // An OR-list suppresses Bash errexit inside the pasted subshell; curl must still gate execution.
+      const result = Bun.spawn(["bash", "-c", `${buildAgentInstallCommand(config, "a".repeat(43))} || exit "$?"`], {
+        env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: runDir, EXECUTED: executed },
+        stdout: "pipe", stderr: "pipe", timeout: 5000,
+      });
+      expect(await new Response(result.stderr).text()).toContain("curl: (18)");
+      expect(await result.exited).toBe(18);
       expect(existsSync(executed)).toBe(false);
-      expect(existsSync(readFileSync(capture, "utf8"))).toBe(false);
+      expect(readdirSync(runDir)).toEqual([]);
     } finally {
+      tls.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
 });
 
 describe("generated loopback command", () => {
-  test.each(["root", "failed-download", "wrong-hash", "duplicate-hash", "amd64", "arm64"])("%s", (scenario) => {
+  test.each(["root", "invalid-origin", "partial-archive", "partial-manifest", "wrong-hash", "duplicate-hash", "amd64", "arm64"])("%s", (scenario) => {
     const dir = mkdtempSync(join(tmpdir(), "opspilot-loopback-command-"));
     const runDir = join(dir, "run");
     const marker = join(dir, "injected");
@@ -158,7 +175,7 @@ describe("generated loopback command", () => {
     const archive = `opspilot-agent_0.1.0-rc.2_linux_${arch}.tar.gz`;
     const base = "https://github.com/kuenobaikbanget/opspilot/releases/download/v0.1.0-rc.2";
     const literal = `'; touch ${marker}; # $(touch ${marker})\n`;
-    const config = { ...loopbackConfig, hubUrl: `${loopbackConfig.hubUrl}/${literal}` };
+    const config = scenario === "invalid-origin" ? { ...loopbackConfig, hubUrl: `http://hub.example/${literal}` } : loopbackConfig;
     try {
       const executable = (name: string, command: string) => writeFileSync(join(dir, name), `#!/bin/bash\n${command}\n`, { mode: 0o700 });
       executable("id", `echo ${scenario === "root" ? "0" : "1000"}`);
@@ -184,10 +201,12 @@ describe("generated loopback command", () => {
           '${base}/SHA256SUMS') file=SHA256SUMS ;;
           *) exit 99 ;;
         esac
+        ${scenario === "partial-archive" ? `if [ "$file" = '${archive}' ]; then head -c 18 ${JSON.stringify(join(dir, archive))} > "\${@: -2:1}"; exit 18; fi` : ""}
         cp -- ${JSON.stringify(dir)}/"$file" "\${@: -2:1}"
-        ${scenario === "failed-download" ? "exit 22" : ""}
+        ${scenario === "partial-manifest" ? 'if [ "$file" = SHA256SUMS ]; then exit 18; fi' : ""}
       `);
       const result = Bun.spawnSync(["bash", "-c", buildAgentInstallCommand(config, literal)], {
+        cwd: repoRoot,
         env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: runDir, OPSPILOT_ENABLE_DOCKER: "true" },
         stdout: "pipe", stderr: "pipe", timeout: 5000,
       });
@@ -195,8 +214,11 @@ describe("generated loopback command", () => {
       if (scenario === "root") {
         expect(result.stderr.toString()).toContain("non-root");
         expect(existsSync(calls)).toBe(false);
+      } else if (scenario === "invalid-origin") {
+        expect(result.stderr.toString()).toContain("Expected an HTTP origin on 127.0.0.1");
+        expect(existsSync(calls)).toBe(false);
       } else {
-        expect(readFileSync(calls, "utf8")).toBe(`${base}/${archive}\n${scenario === "failed-download" ? "" : `${base}/SHA256SUMS\n`}`);
+        expect(readFileSync(calls, "utf8")).toBe(`${base}/${archive}\n${scenario === "partial-archive" ? "" : `${base}/SHA256SUMS\n`}`);
       }
       if (scenario === "amd64" || scenario === "arm64") {
         expect(result.stderr.toString()).toBe("");
@@ -216,12 +238,11 @@ describe("generated loopback command", () => {
 
   test("real curl refuses a TLS asset redirect to plain HTTP despite .curlrc", async () => {
     const dir = mkdtempSync(join(tmpdir(), "opspilot-loopback-redirect-"));
-    const fixture = (name: string) => new URL(`fixtures/provider-tls/${name}`, import.meta.url).pathname;
     let tlsRequests = 0;
     let httpRequests = 0;
     const http = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { httpRequests++; return new Response("unexpected"); } });
     const tls = Bun.serve({
-      hostname: "127.0.0.1", port: 0, tls: { key: Bun.file(fixture("server-key.pem")), cert: Bun.file(fixture("server.pem")) },
+      hostname: "127.0.0.1", port: 0, tls: { key: Bun.file(tlsFixture("server-key.pem")), cert: Bun.file(tlsFixture("server.pem")) },
       fetch(req) { tlsRequests++; return Response.redirect(`${http.url.origin}${new URL(req.url).pathname}`); },
     });
     try {
@@ -230,10 +251,11 @@ describe("generated loopback command", () => {
       // Route only the pinned initial URL to the trusted local TLS fixture; keep curl's real policy flags.
       writeFileSync(join(dir, "curl"), `#!/bin/bash
         case "\${!#}" in https://github.com/kuenobaikbanget/opspilot/releases/download/v0.1.0-rc.2/*) ;; *) exit 99 ;; esac
-        exec ${JSON.stringify(Bun.which("curl"))} "\${@:1:1}" --cacert ${JSON.stringify(fixture("ca.pem"))} \\
+        exec ${JSON.stringify(Bun.which("curl"))} "\${@:1:1}" --cacert ${JSON.stringify(tlsFixture("ca.pem"))} \\
           --resolve provider.example:${tls.port}:127.0.0.1 "\${@:2:$#-2}" "https://provider.example:${tls.port}/archive"
       `, { mode: 0o700 });
       const result = Bun.spawn(["bash", "-c", buildAgentInstallCommand(loopbackConfig, "unused-token")], {
+        cwd: repoRoot,
         env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir, TMPDIR: dir },
         stdout: "pipe", stderr: "pipe", timeout: 5000,
       });

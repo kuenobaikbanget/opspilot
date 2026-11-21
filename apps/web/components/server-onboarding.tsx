@@ -276,7 +276,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                 <div className="onboarding-step-body">
                   {installConfig.status === "ready" && (loopback ? (
                     <>
-                      <Notice tone="warning">Development only. Run the agent on the same machine as the Hub, not on a remote server or in a container.</Notice>
+                      <Notice tone="warning">Development only. Run from a trusted OpsPilot checkout on the Hub machine, not on a remote server or in a container.</Notice>
                       <p>Requires amd64 or arm64 Linux, Bash, curl, CA certificates, tar, awk, and sha256sum. No sudo or systemd.</p>
                     </>
                   ) : (
@@ -313,8 +313,8 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
               {active && index === 1 && (
                 <div className="onboarding-step-body">
                   <p>{loopback
-                    ? "Generate, copy, and run the command in Bash on this machine as your regular user. The verified agent runs in the foreground, without systemd. Ctrl+C stops it and removes its temporary local state."
-                    : "Open a terminal on the intended server, then generate, copy, and run the command there. The installer verifies the pinned binary and starts a non-root systemd service."}</p>
+                    ? "Run the command in Bash from the root of your OpsPilot checkout as a regular user. The verified agent runs in the foreground. Ctrl+C stops it and removes its temporary local state."
+                    : "Open Bash on the intended server, then generate, copy, and run the command there. The installer verifies the pinned release archive and starts a non-root systemd service."}</p>
                   {installConfig.status === "ready" && (
                     <dl className="onboarding-details">
                       <div><dt>Hub address</dt><dd>{installConfig.value.hubUrl}</dd></div>
