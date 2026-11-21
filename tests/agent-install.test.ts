@@ -99,7 +99,7 @@ describe("generated command preserves literal arguments", () => {
         writeFileSync(join(dir, "sudo"), '#!/bin/sh\nprintf used > "$SUDO_USED"\nexec "$@"\n', { mode: 0o755 });
         writeFileSync(join(dir, "curl"), `#!/bin/sh
 while [ "$#" -gt 0 ]; do
- if [ "$1" = --output ]; then shift; file=$1; fi
+ if [ "$1" = -o ]; then shift; file=$1; fi
  last=$1; shift
 done
 printf "%s" "$last" > "$URL_CAPTURE"
@@ -128,14 +128,24 @@ SCRIPT
       }
     });
   }
-  test("a real truncated TLS download never executes and is cleaned up", async () => {
+  test("real curl refuses partial TLS transfers, HTTP URLs, and TLS downgrades", async () => {
     const dir = mkdtempSync(join(tmpdir(), "opspilot-command-failure-"));
     const runDir = join(dir, "run");
     const executed = join(dir, "executed");
     const partial = 'touch "$EXECUTED"\n';
-    const tls = createServer({ key: readFileSync(tlsFixture("server-key.pem")), cert: readFileSync(tlsFixture("server.pem")) }, (_req, res) => {
-      res.writeHead(200, { "Content-Length": partial.length + 100, Connection: "close" });
-      res.end(partial);
+    let httpRequests = 0;
+    let tlsRequests = 0;
+    const http = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch() { httpRequests++; return new Response(partial); },
+    });
+    const tls = createServer({ key: readFileSync(tlsFixture("server-key.pem")), cert: readFileSync(tlsFixture("server.pem")) }, (req, res) => {
+      tlsRequests++;
+      if (req.url === "/downgrade") {
+        res.writeHead(302, { Location: http.url.href }).end();
+      } else {
+        res.writeHead(200, { "Content-Length": partial.length + 100, Connection: "close" }).end(partial);
+      }
     });
     try {
       await once(tls.listen(0, "127.0.0.1"), "listening");
@@ -148,18 +158,56 @@ SCRIPT
 exec ${JSON.stringify(Bun.which("curl"))} "$1" --cacert ${JSON.stringify(tlsFixture("ca.pem"))} \\
   --resolve provider.example:${port}:127.0.0.1 "\${@:2}"
 `, { mode: 0o755 });
-      const config = readAgentInstallConfig({ ...settings, OPSPILOT_PUBLIC_HUB_URL: `https://provider.example:${port}` })!;
-      // An OR-list suppresses Bash errexit inside the pasted subshell; curl must still gate execution.
-      const result = Bun.spawn(["bash", "-c", `${buildAgentInstallCommand(config, "a".repeat(43))} || exit "$?"`], {
+      const config = readAgentInstallConfig({ ...settings, OPSPILOT_PUBLIC_HUB_URL: `https://provider.example:${port}` });
+      if (config?.mode !== "https") throw new Error("Fixture requires HTTPS installation metadata");
+      for (const [installerUrl, exitCode, error] of [
+        [config.installerUrl, 18, /curl: \(18\)/],
+        [http.url.href, 1, /protocol.*http.*disabled/i],
+        [`${config.hubUrl}/downgrade`, 1, /protocol.*http.*disabled/i],
+      ] as const) {
+        const command = buildAgentInstallCommand({ ...config, installerUrl }, "a".repeat(43));
+        expect(command).not.toMatch(/[\r\n]/);
+        // An OR-list suppresses Bash errexit inside the pasted subshell; curl must still gate execution.
+        const result = Bun.spawn(["bash", "-c", `${command} || exit "$?"`], {
+          env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: runDir, EXECUTED: executed },
+          stdout: "pipe", stderr: "pipe", timeout: 5000,
+        });
+        expect(await new Response(result.stderr).text()).toMatch(error);
+        expect(await result.exited).toBe(exitCode);
+        expect(existsSync(executed)).toBe(false);
+        expect(readdirSync(runDir)).toEqual([]);
+      }
+      expect(tlsRequests).toBe(2);
+      expect(httpRequests).toBe(0);
+    } finally {
+      tls.close();
+      http.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["HUP", "INT", "TERM"])("cleans up a download interrupted by SIG%s", (signal) => {
+    const dir = mkdtempSync(join(tmpdir(), "opspilot-command-signal-"));
+    const runDir = join(dir, "run");
+    const executed = join(dir, "executed");
+    try {
+      mkdirSync(runDir);
+      writeFileSync(join(dir, "id"), "#!/bin/sh\necho 0\n", { mode: 0o755 });
+      writeFileSync(join(dir, "curl"), `#!/bin/sh
+while [ "$1" != -o ]; do shift; done
+printf '%s\\n' 'touch "$EXECUTED"' > "$2"
+printf '%s\\n' "$2"
+kill -${signal} "$PPID" "$$"
+`, { mode: 0o755 });
+      const result = Bun.spawnSync(["bash", "-c", buildAgentInstallCommand(readAgentInstallConfig(settings)!, "a".repeat(43))], {
         env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: runDir, EXECUTED: executed },
         stdout: "pipe", stderr: "pipe", timeout: 5000,
       });
-      expect(await new Response(result.stderr).text()).toContain("curl: (18)");
-      expect(await result.exited).toBe(18);
+      expect(result.stdout.toString().trim()).toStartWith(`${runDir}/`);
+      expect(result.exitCode).not.toBe(0);
       expect(existsSync(executed)).toBe(false);
       expect(readdirSync(runDir)).toEqual([]);
     } finally {
-      tls.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
