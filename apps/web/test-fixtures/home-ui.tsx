@@ -1,10 +1,16 @@
 import { closeDom } from "../../../tests/fixtures/home-dom";
-import { act, createElement } from "react";
+import { act } from "react";
 import { createRoot } from "react-dom/client";
-import Home from "../app/page";
+import { AppRouterContext, type AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import { PathnameContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
+import WorkspaceLayout from "../app/(workspace)/layout";
+import OverviewPage from "../app/(workspace)/page";
+import HostsPage from "../app/(workspace)/hosts/page";
+import IncidentsPage from "../app/(workspace)/incidents/page";
+import MemoryPage from "../app/(workspace)/memory/page";
 
 const scenario = process.argv[2];
-let sessionStatus = scenario === "unauthorized" ? 401 : scenario === "session-recovery" ? 503 : 200;
+let sessionStatus = scenario === "unauthorized" || scenario === "deep-link-login" ? 401 : scenario === "session-recovery" ? 503 : 200;
 let incidentStatus = scenario === "cold-failure" || scenario === "recovery" ? 503 : 200;
 const requests: string[] = [];
 const hostOnline = scenario === "overview-services" || scenario === "overview-services-error" || scenario === "ascii-loading-transition";
@@ -44,6 +50,15 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         status === 200
           ? { authenticated: true, role: "admin", ...(scenario === "auth-disabled" ? { authDisabled: true } : {}) }
           : { error: "Fixture session failure" };
+      break;
+    case "/api/auth/login":
+      if (scenario !== "deep-link-login" || init?.method !== "POST" || JSON.parse(String(init.body)).password !== "fixture-password") {
+        status = 401;
+        value = { error: "Invalid fixture password" };
+      } else {
+        sessionStatus = 200;
+        value = { ok: true };
+      }
       break;
     case "/api/incidents":
       status = incidentStatus;
@@ -141,6 +156,38 @@ const container = window.document.createElement("div");
 window.document.body.append(container);
 const root = createRoot(container);
 const document = window.document;
+
+// Supply route segments to the real layout and pages without a Next server in happy-dom.
+// Actual Link clicks, App Router history, and focus are verified in the browser.
+const routes = { "/": OverviewPage, "/hosts": HostsPage, "/incidents": IncidentsPage, "/memory": MemoryPage };
+const router: AppRouterInstance = {
+  push: renderRoute,
+  replace() { throw new Error("Unexpected fixture replace"); },
+  back() { throw new Error("Unexpected fixture back"); },
+  forward() { throw new Error("Unexpected fixture forward"); },
+  refresh() { throw new Error("Unexpected fixture router refresh"); },
+  prefetch() {},
+  bfcacheId: "fixture",
+};
+
+function renderRoute(pathname: string) {
+  const Page = routes[pathname as keyof typeof routes];
+  if (!Page) throw new Error(`Unexpected fixture route: ${pathname}`);
+  window.history.pushState(null, "", pathname);
+  root.render(
+    <AppRouterContext.Provider value={router}>
+      <PathnameContext.Provider value={pathname}>
+        <WorkspaceLayout><Page /></WorkspaceLayout>
+      </PathnameContext.Provider>
+    </AppRouterContext.Provider>,
+  );
+}
+
+async function follow(href: keyof typeof routes) {
+  const link = document.querySelector<HTMLAnchorElement>(`a.ui-button[href="${href}"]`);
+  if (!link) throw new Error(`Missing link: ${href}`);
+  await act(async () => renderRoute(new URL(link.href).pathname));
+}
 const snapshot = () => {
   const incidentReading = [...document.querySelectorAll("dt")].find(element => element.textContent?.startsWith("Open incidents"));
   return {
@@ -160,13 +207,13 @@ async function click(label: string) {
 }
 
 try {
-  await act(async () => { root.render(createElement(Home)); });
+  await act(async () => renderRoute(scenario === "deep-link-login" ? "/incidents" : "/"));
   const initial = snapshot();
   switch (scenario) {
     case "cold-failure": {
-      await click("Hosts");
+      await follow("/hosts");
       const { relatedIncident: related } = snapshot();
-      await click("Incidents");
+      await follow("/incidents");
       console.log(JSON.stringify({ initial, related, incidentList: document.querySelector(".list")?.textContent }));
       break;
     }
@@ -181,9 +228,9 @@ try {
       incidentStatus = 503;
       await click("Refresh");
       const cached = snapshot();
-      await click("Hosts");
+      await follow("/hosts");
       const { relatedIncident: related } = snapshot();
-      await click("Overview");
+      await follow("/");
       incidentStatus = 200;
       await click("Retry incidents");
       console.log(JSON.stringify({ initial, cached, related, recovered: snapshot() }));
@@ -191,6 +238,20 @@ try {
     case "unauthorized":
       console.log(JSON.stringify({ initial, requests }));
       break;
+    case "deep-link-login": {
+      const initialPath = window.location.pathname;
+      const beforeLogin = [...requests];
+      const password = document.querySelector<HTMLInputElement>("#admin-password")!;
+      password.value = "fixture-password";
+      await act(async () => { password.form!.requestSubmit(); });
+      console.log(JSON.stringify({
+        initial, initialPath, beforeLogin, signedIn: snapshot(),
+        finalPath: window.location.pathname,
+        heading: document.querySelector("main h1")?.textContent,
+        detailHeading: document.getElementById("incident-detail-title")?.textContent,
+      }));
+      break;
+    }
     case "session-recovery":
       const beforeRetry = [...requests];
       sessionStatus = 200;
@@ -219,9 +280,9 @@ try {
     case "host-history-visibility": {
       const historyRequests = () => requests.filter(path => path === `/api/hosts/${hostId}/metrics`).length;
       const onOverview = historyRequests();
-      await click("Hosts");
+      await follow("/hosts");
       const onHosts = historyRequests();
-      await click("Overview");
+      await follow("/");
       console.log(JSON.stringify({ onOverview, onHosts, afterLeaving: historyRequests(), historyAborted }));
       break;
     }
@@ -311,10 +372,10 @@ try {
         text: document.querySelector('[aria-labelledby="memory-title"]')?.textContent,
       });
       async function reopenMemory() {
-        await click("Overview");
-        await click("Incident memory");
+        await follow("/");
+        await follow("/memory");
       }
-      await click("Incident memory");
+      await follow("/memory");
       const pending = memory();
       await reopenMemory();
       await act(async () => { deferredMemory[1].resolve(Response.json({ error: "Fixture memory outage" }, { status: 503 })); });

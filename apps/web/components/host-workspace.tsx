@@ -4,10 +4,11 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 
 import { flushSync } from "react-dom";
 import type { Host, HostList, HostMetric } from "@opspilot/contracts";
 import { AsciiLoading } from "./ascii-card-reveal";
-import { Badge, Button, Input, Notice, Panel } from "./ui";
+import { Badge, Button, ButtonLink, Input, Notice, Panel } from "./ui";
 import { hasFreshSample, percent, pressure, resourcePressure, resources, type Resource } from "../lib/host-pressure";
 import { WorkspaceIcon } from "./workspace-shell";
 import { HostSystemd } from "./host-systemd";
+import { api, ApiError } from "../lib/api";
 
 type FleetIncident = {
   id: string;
@@ -21,16 +22,14 @@ type FleetIncident = {
 
 type Props = {
   refreshKey: number;
-  isVisible: boolean;
-  onFleet: (fleet: HostList) => void;
-  onFleetError: (message: string) => void;
-  onUnauthorized: () => void;
+  fleet: HostList | null;
+  failure: string;
   openIncidents: number | null;
   incidentsStale: boolean;
   incidents: FleetIncident[];
   onOpenIncident: (id: string) => void;
   inspectHost: { id: string; resource?: Resource } | null;
-  onConnect: () => void;
+  onInspectionHandled: (inspection: NonNullable<Props["inspectHost"]>) => void;
 };
 
 const stamp = (s: string | null) => (s ? new Date(s).toLocaleString() : "Not observed");
@@ -57,19 +56,6 @@ function selectWithTransition(update: () => void) {
     return;
   }
   document.startViewTransition(() => flushSync(update));
-}
-
-async function request(path: string, signal?: AbortSignal, method = "GET") {
-  const r = await fetch(`/api${path}`, {
-    credentials: "same-origin",
-    cache: "no-store",
-    signal,
-    method,
-  });
-  if (r.status === 401) throw new Error("Unauthorized");
-  const value = await r.json();
-  if (!r.ok) throw new Error(value.error || `HTTP ${r.status}`);
-  return value;
 }
 
 type HistoryMode = Resource | "all";
@@ -313,27 +299,20 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
 
 export function HostWorkspace({
   refreshKey,
-  isVisible,
-  onFleet,
-  onFleetError,
-  onUnauthorized,
+  fleet,
+  failure,
   openIncidents,
   incidentsStale,
   incidents,
   onOpenIncident,
   inspectHost,
-  onConnect,
+  onInspectionHandled,
 }: Props) {
-  const [fleet, setFleet] = useState<HostList | null>(null);
-  const [failure, setFailure] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null | undefined>(undefined);
   const [selectionNotice, setSelectionNotice] = useState("");
   const [appliedInspection, setAppliedInspection] = useState<Props["inspectHost"]>(null);
-  const selectedRef = useRef(selected);
-  const loadedOnce = useRef(false);
-  selectedRef.current = selected;
   const [history, setHistory] = useState<{ id: string; samples: HostMetric[] } | null>(null);
   const [historyError, setHistoryError] = useState("");
   const [resource, setResource] = useState<HistoryMode>("disk_percent");
@@ -345,61 +324,24 @@ export function HostWorkspace({
     setSelected(inspectHost.id);
     setSelectionNotice("");
     setResource(inspectHost.resource ?? "cpu_percent");
+  } else if (fleet && selected === undefined) {
+    setSelected(fleet.hosts[0]?.id ?? null);
+  } else if (fleet && selected && !fleet.hosts.some(host => host.id === selected)) {
+    setSelected(null);
+    setSelectionNotice("The selected host is no longer in the loaded host list. Select another host.");
   }
 
   useEffect(() => {
-    let active = true;
-    let pending = false;
-    const controller = new AbortController();
-
-    async function load() {
-      if (pending) return;
-      pending = true;
-      try {
-        const next: HostList = await request("/hosts", controller.signal);
-        if (!active) return;
-        setFleet(next);
-        setFailure("");
-        onFleet(next);
-        onFleetError("");
-        if (!loadedOnce.current) {
-          loadedOnce.current = true;
-          setSelected(current => current ?? next.hosts[0]?.id ?? null);
-        }
-        if (selectedRef.current && !next.hosts.some(h => h.id === selectedRef.current)) {
-          setSelected(null);
-          setSelectionNotice("The selected host is no longer in the loaded host list. Select another host.");
-        }
-      } catch (e) {
-        if (!active) return;
-        const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") onUnauthorized();
-        else { setFailure(message); onFleetError(message); }
-      } finally {
-        pending = false;
-      }
-    }
-
-    void load();
-    const poll = setInterval(() => void load(), 10000);
-    return () => {
-      active = false;
-      controller.abort();
-      clearInterval(poll);
-    };
-  }, [refreshKey, onFleet, onFleetError, onUnauthorized]);
-
-  useEffect(() => {
-    if (!isVisible) return;
     setNow(Date.now());
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(clock);
-  }, [isVisible]);
+  }, []);
 
   useEffect(() => {
     setHistory(null);
     setHistoryError("");
-    if (!isVisible || !selected) return;
+    if (!selected) return;
+    const hostId = selected;
     let active = true;
     let pending = false;
     const controller = new AbortController();
@@ -408,16 +350,15 @@ export function HostWorkspace({
       if (pending) return;
       pending = true;
       try {
-        const samples: HostMetric[] = await request(`/hosts/${selected}/metrics`, controller.signal);
+        const samples: HostMetric[] = await api(`/hosts/${hostId}/metrics`, "GET", undefined, controller.signal);
         if (active) {
-          setHistory({ id: selected!, samples });
+          setHistory({ id: hostId, samples });
           setHistoryError("");
         }
       } catch (e) {
-        if (!active) return;
-        const message = e instanceof Error ? e.message : String(e);
-        if (message === "Unauthorized") onUnauthorized();
-        else setHistoryError(message);
+        if (active && !(e instanceof ApiError && e.status === 401)) {
+          setHistoryError(e instanceof Error ? e.message : String(e));
+        }
       } finally {
         pending = false;
       }
@@ -430,18 +371,17 @@ export function HostWorkspace({
       controller.abort();
       clearInterval(poll);
     };
-  }, [isVisible, selected, onUnauthorized]);
+  }, [selected]);
 
   useEffect(() => {
     if (!inspectHost) return;
-    const frame = requestAnimationFrame(() => {
+    const frame = window.requestAnimationFrame(() => {
       inspectorHeading.current?.closest(".host-inspector")?.scrollIntoView({ block: "start" });
       inspectorHeading.current?.focus({ preventScroll: true });
+      onInspectionHandled(inspectHost);
     });
-    return () => cancelAnimationFrame(frame);
-  }, [inspectHost]);
-
-  if (!isVisible) return null;
+    return () => window.cancelAnimationFrame(frame);
+  }, [inspectHost, onInspectionHandled]);
 
   const hosts = fleet?.hosts ?? [];
   const fleetLoading = !fleet && !failure;
@@ -726,7 +666,7 @@ export function HostWorkspace({
         </Panel>
         <section className="host-guidance">
           <div><h2>Connect another server</h2><p className="muted">Install the Linux agent to add this server’s resource signals to the fleet.</p></div>
-          <Button onClick={onConnect}><WorkspaceIcon name="terminal" />Agent installation</Button>
+          <ButtonLink href="/connect"><WorkspaceIcon name="terminal" />Agent installation</ButtonLink>
         </section>
       </div>
 

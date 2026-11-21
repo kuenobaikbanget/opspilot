@@ -4,7 +4,7 @@ import type { AgentInstallConfig, HostList } from "@opspilot/contracts";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { buildAgentInstallCommand } from "../lib/agent-install";
 import { AsciiLoading } from "./ascii-card-reveal";
-import { Button, Field, Notice, Select } from "./ui";
+import { Button, ButtonLink, Field, Notice, Select } from "./ui";
 
 type Props = {
   onBack: () => void;
@@ -239,7 +239,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
 
   return (
     <section className="onboarding" aria-labelledby={`${id}-title`}>
-      <Button size="sm" className="onboarding-back" onClick={backToHosts}><Icon name="left" /> Back to Hosts</Button>
+      <ButtonLink href="/hosts" size="sm" className="onboarding-back" onNavigate={leave}><Icon name="left" /> Back to Hosts</ButtonLink>
       <header className="onboarding-header">
         <h1 id={`${id}-title`}>Connect server</h1>
         <p>{loopback ? "Run the OpsPilot agent on this Linux machine and check that the local Hub receives telemetry." : "Install the OpsPilot agent on a Linux server and check that the Hub receives telemetry."}</p>
@@ -304,7 +304,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                     </dl>
                   )}
                   <div className="onboarding-actions">
-                    <Button size="sm" onClick={backToHosts}>Cancel</Button>
+                    <ButtonLink href="/hosts" size="sm" onNavigate={leave}>Cancel</ButtonLink>
                     <Button variant="primary" size="sm" disabled={installConfig.status !== "ready"} aria-describedby={installConfig.status !== "ready" ? `${id}-config-status` : undefined} onClick={() => goTo(1)}>Continue to installation <Icon name="right" /></Button>
                   </div>
                 </div>
