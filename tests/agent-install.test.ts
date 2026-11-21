@@ -85,50 +85,47 @@ describe("agent installation configuration", () => {
 });
 
 describe("generated command preserves literal arguments", () => {
-  for (const uid of ["0", "1000"]) {
-    test(`downloads completely and executes safely for UID ${uid}`, () => {
-      const dir = mkdtempSync(join(tmpdir(), "opspilot-command-"));
-      try {
-        const marker = join(dir, "injected");
-        const malicious = `'; touch ${marker}; # $(touch ${marker})\n`;
-        const config: AgentInstallConfig = {
-          mode: "https",
-          hubUrl: `https://hub.example/${malicious}`,
-          installerUrl: `https://hub.example/install.sh?${malicious}`,
-          version: `v1.2.3-${malicious}`,
-          repository: `owner/repo${malicious}`,
-        };
-        writeFileSync(join(dir, "id"), `#!/bin/sh\nprintf '%s\\n' '${uid}'\n`, { mode: 0o755 });
-        writeFileSync(join(dir, "sudo"), '#!/bin/sh\nprintf used > "$SUDO_USED"\nexec "$@"\n', { mode: 0o755 });
-        writeFileSync(join(dir, "curl"), `#!/bin/sh
+  test("downloads completely before Bash and passes only the literal token", () => {
+    const dir = mkdtempSync(join(tmpdir(), "opspilot-command-"));
+    try {
+      const marker = join(dir, "injected");
+      const malicious = `'; touch ${marker}; # $(touch ${marker})\n`;
+      const config: AgentInstallConfig = {
+        mode: "https",
+        hubUrl: `https://hub.example/${malicious}`,
+        installerUrl: "https://hub.example/api/agents/install.sh",
+        version: `v1.2.3-${malicious}`,
+        repository: `owner/repo${malicious}`,
+      };
+      writeFileSync(join(dir, "sudo"), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+      writeFileSync(join(dir, "curl"), `#!/bin/sh
+printf '%s\\0' "$@" > "$CURL_ARGS"
 while [ "$#" -gt 0 ]; do
  if [ "$1" = -o ]; then shift; file=$1; fi
- last=$1; shift
+ shift
 done
-printf "%s" "$last" > "$URL_CAPTURE"
 printf "%s" "$file" > "$FILE_CAPTURE"
 cat > "$file" <<'SCRIPT'
 #!/bin/bash
 printf '%s\\0' "$@" > "$ARGS_CAPTURE"
 SCRIPT
 `, { mode: 0o755 });
-        const env = {
-          PATH: `${dir}:/usr/bin:/bin`, TMPDIR: dir,
-          SUDO_USED: join(dir, "sudo-used"), URL_CAPTURE: join(dir, "url"),
-          FILE_CAPTURE: join(dir, "file"), ARGS_CAPTURE: join(dir, "args"),
-        };
-        const result = Bun.spawnSync([Bun.which("bash")!, "-c", buildAgentInstallCommand(config, malicious)], { cwd: dir, env, stdout: "pipe", stderr: "pipe" });
-        expect(result.exitCode).toBe(0);
-        expect(readFileSync(env.URL_CAPTURE, "utf8")).toBe(config.installerUrl);
-        expect(readFileSync(env.ARGS_CAPTURE, "utf8").split("\0").slice(0, -1)).toEqual(["--token", malicious]);
-        expect(existsSync(marker)).toBe(false);
-        expect(existsSync(readFileSync(env.FILE_CAPTURE, "utf8"))).toBe(false);
-        expect(existsSync(env.SUDO_USED)).toBe(uid !== "0");
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-    });
-  }
+      const env = {
+        PATH: `${dir}:/usr/bin:/bin`, TMPDIR: dir, CURL_ARGS: join(dir, "curl-args"),
+        FILE_CAPTURE: join(dir, "file"), ARGS_CAPTURE: join(dir, "args"),
+      };
+      const result = Bun.spawnSync([Bun.which("bash")!, "-c", buildAgentInstallCommand(config, malicious)], { cwd: dir, env, stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(0);
+      const curlArgs = readFileSync(env.CURL_ARGS, "utf8").split("\0").slice(0, -1);
+      expect(curlArgs.at(-1)).toBe(config.installerUrl);
+      expect(curlArgs.join(" ")).not.toContain(malicious);
+      expect(readFileSync(env.ARGS_CAPTURE, "utf8").split("\0").slice(0, -1)).toEqual(["--token", malicious]);
+      expect(existsSync(marker)).toBe(false);
+      expect(existsSync(readFileSync(env.FILE_CAPTURE, "utf8"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   test("real curl refuses partial TLS transfers, HTTP URLs, and TLS downgrades", async () => {
     const dir = mkdtempSync(join(tmpdir(), "opspilot-command-failure-"));
     const runDir = join(dir, "run");
@@ -154,7 +151,6 @@ SCRIPT
       if (!address || typeof address === "string") throw new Error("TLS fixture did not bind");
       const { port } = address;
       mkdirSync(runDir);
-      writeFileSync(join(dir, "id"), '#!/bin/sh\necho 0\n', { mode: 0o755 });
       writeFileSync(join(dir, "curl"), `#!/bin/bash
 exec ${JSON.stringify(Bun.which("curl"))} "$1" --cacert ${JSON.stringify(tlsFixture("ca.pem"))} \\
   --resolve provider.example:${port}:127.0.0.1 "\${@:2}"
@@ -193,7 +189,6 @@ exec ${JSON.stringify(Bun.which("curl"))} "$1" --cacert ${JSON.stringify(tlsFixt
     const executed = join(dir, "executed");
     try {
       mkdirSync(runDir);
-      writeFileSync(join(dir, "id"), "#!/bin/sh\necho 0\n", { mode: 0o755 });
       writeFileSync(join(dir, "curl"), `#!/bin/sh
 while [ "$1" != -o ]; do shift; done
 printf '%s\\n' 'touch "$EXECUTED"' > "$2"

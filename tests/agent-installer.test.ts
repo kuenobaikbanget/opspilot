@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadHttpsAgentInstaller, readAgentInstallConfig } from "../apps/hub/src/agent-install";
@@ -52,6 +52,60 @@ describe("installer refuses invalid input before mutation", () => {
     writeFileSync(join(path, "uname"), `#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo ${arch} ;; esac\n`, { mode: 0o755 });
     const result = Bun.spawnSync([bash, script, ...valid], { env: { PATH: path }, stderr: "pipe" });
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr.toString()).toMatch(/Run this installer as root|Missing dependency: bash/);
+    expect(result.stderr.toString()).toContain(process.geteuid?.() === 0 ? "Missing dependency: bash" : "sudo is required");
+  });
+});
+
+test.skipIf(process.geteuid?.() !== 0)("root uses the delivered installer without sudo", () => {
+  const path = join(fixture, "root");
+  mkdirSync(path);
+  writeFileSync(join(path, "uname"), '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n', { mode: 0o755 });
+  writeFileSync(join(path, "sudo"), '#!/bin/sh\necho "unexpected sudo" >&2\nexit 99\n', { mode: 0o755 });
+  const result = Bun.spawnSync([bash, script, ...valid], { env: { PATH: path }, stderr: "pipe" });
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr.toString()).toContain("Missing dependency: bash");
+  expect(result.stderr.toString()).not.toContain("unexpected sudo");
+});
+
+describe.skipIf(process.geteuid?.() === 0)("delivered installer privilege handoff", () => {
+  test.each(["denied", "not-root"])("stops when sudo is %s, without leaking or leaving the token", (scenario) => {
+    const path = mkdtempSync(join(fixture, "sudo case '"));
+    const localScript = join(path, "installer ' copy.sh");
+    const scratch = join(path, "tmp");
+    const recorded = join(path, "sudo calls");
+    mkdirSync(scratch);
+    writeFileSync(localScript, configured!, { mode: 0o600 });
+    writeFileSync(join(path, "uname"), '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n', { mode: 0o755 });
+    for (const tool of ["bash", "mktemp", "rm", "stat"]) symlinkSync(Bun.which(tool)!, join(path, tool));
+    // Simulate denial, or run the exact sudo payload without elevating.
+    writeFileSync(join(path, "sudo"), `#!${bash}
+set -eu
+printf '%s\\0' "$@" >> "$SUDO_CALLS"
+[[ "$1 $2 $3" == '-u root --' ]] || exit 95
+[[ "\${@: -2:1}" == "$LOCAL_SCRIPT" ]] || exit 96
+handoff=\${!#}
+[[ "$handoff" == "$TMPDIR/"* && "$(stat -c %a "$handoff")" == 600 ]] || exit 97
+[[ $(<"$handoff") == "$EXPECTED_TOKEN" ]] || exit 98
+if IFS= read -r line; then exit 99; fi
+if [[ "$CASE" == denied ]]; then
+  printf 'sudo: permission denied\\n' >&2
+  exit 1
+fi
+shift 3
+exec "$@"
+`, { mode: 0o755 });
+    const result = Bun.spawnSync([bash, localScript, ...valid], {
+      env: { PATH: path, TMPDIR: scratch, SUDO_CALLS: recorded, LOCAL_SCRIPT: localScript, EXPECTED_TOKEN: token, CASE: scenario },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000,
+    });
+    expect(result.exitCode).toBe(1);
+    const error = result.stderr.toString();
+    expect(error).toContain(scenario === "denied" ? "sudo: permission denied" : "sudo did not grant root privileges");
+    const calls = readFileSync(recorded, "utf8").split("\0");
+    expect(calls.filter(arg => arg === localScript)).toHaveLength(1);
+    expect(calls.join(" ")).not.toContain(token);
+    expect(error).not.toContain(token);
+    expect(result.stdout.toString()).toBe("");
+    expect(readdirSync(scratch)).toEqual([]);
   });
 });

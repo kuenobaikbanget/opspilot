@@ -11,7 +11,6 @@ export function buildAgentInstallCommand(config: AgentInstallConfig, token: stri
   }
   // curl's --proto allowlist also applies to redirects.
   return `(tmp=$(mktemp) || exit; trap 'rm -f -- "$tmp"' EXIT; trap 'exit 1' HUP INT TERM; ` +
-    `run=(bash); [[ $(id -u) == 0 ]] || run=(sudo bash); ` +
     `curl -q -fsSL --proto =https --connect-timeout 10 -m 120 -o "$tmp" -- ${quote(config.installerUrl)} ` +
-    `&& "\${run[@]}" "$tmp" --token ${quote(token)})`;
+    `&& bash -- "$tmp" --token ${quote(token)})`;
 }

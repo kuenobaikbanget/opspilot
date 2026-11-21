@@ -18,7 +18,32 @@ case "$(uname -m)" in
   aarch64|arm64) arch=arm64 ;;
   *) fail 'Unsupported architecture; use Linux amd64 or arm64' ;;
 esac
-(( EUID == 0 )) || fail 'Run this installer as root (sudo bash agent.sh ...)'
+if (( EUID != 0 )); then
+  command -v sudo >/dev/null || fail 'sudo is required to install as a non-root user'
+  # Keep the token out of sudo's logged arguments and standard input.
+  token_file=$(mktemp) || fail 'Could not create a private sudo handoff file'
+  trap 'rm -f -- "$token_file"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  printf '%s\n' "$token" > "$token_file"
+  unset token
+  script=$0
+  [[ "$script" == /* ]] || script="$PWD/$script"
+  [[ "$token_file" == /* ]] || token_file="$PWD/$token_file"
+  sudo -u root -- bash -p -c '
+    if (( EUID != 0 )); then
+      printf "%s\n" "OpsPilot: sudo did not grant root privileges" >&2
+      exit 1
+    fi
+    if ! IFS= read -r token < "$1"; then
+      printf "%s\n" "OpsPilot: Could not read the private sudo handoff file" >&2
+      exit 1
+    fi
+    exec bash -p -- "$0" --token "$token"
+  ' "$script" "$token_file"
+  exit
+fi
 for dependency in bash curl tar sha256sum install cmp mktemp systemctl useradd groupadd getent runuser env chown chmod uname mkdir rm cat; do
   command -v "$dependency" >/dev/null 2>&1 || fail "Missing dependency: $dependency; install it with your distribution package manager"
 done
