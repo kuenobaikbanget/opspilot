@@ -47,8 +47,8 @@ async function waitHubReady(baseUrl: string, child: Bun.Subprocess) {
       throw new Error(`Hub exited early with code ${child.exitCode}`);
     }
     try {
-      const res = await fetch(`${baseUrl}/api/agents/install.sh`, { signal: AbortSignal.timeout(300) });
-      if (res.status === 200) return;
+      const res = await fetch(`${baseUrl}/api/auth/me`, { signal: AbortSignal.timeout(300) });
+      if (res.status === 200 || res.status === 401) return;
     } catch {
       // keep polling until listener is ready
     }
@@ -109,7 +109,7 @@ test("Hub refuses to start without SESSION_SECRET when auth is enabled", async (
   expect(result.output).toContain("SESSION_SECRET must have >= 32 chars");
 });
 
-test.each([false, true])("Hub enforces 401 on admin routes with loopback install opt-in %s", async (loopback) => {
+test.each(["missing", "invalid", "loopback"])("Hub starts and fails the public installer closed with %s HTTPS configuration", async (scenario) => {
   const port = freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const hub = spawnHub({
@@ -117,9 +117,12 @@ test.each([false, true])("Hub enforces 401 on admin routes with loopback install
     NODE_ENV: "development",
     DISABLE_AUTH: "false",
     SESSION_SECRET: sessionSecret,
-    ...(loopback ? {
+    ...(scenario === "loopback" ? {
       OPSPILOT_DEV_LOOPBACK_INSTALL: "true",
       OPSPILOT_PUBLIC_HUB_URL: baseUrl,
+      OPSPILOT_AGENT_VERSION: "v0.1.0-rc.2",
+    } : scenario === "invalid" ? {
+      OPSPILOT_PUBLIC_HUB_URL: "https://hub.example%27",
       OPSPILOT_AGENT_VERSION: "v0.1.0-rc.2",
     } : {}),
   });
@@ -129,6 +132,51 @@ test.each([false, true])("Hub enforces 401 on admin routes with loopback install
     expect(me.status).toBe(401);
     const installConfig = await fetch(`${baseUrl}/api/agents/install-config`);
     expect(installConfig.status).toBe(401);
+    const installer = await fetch(`${baseUrl}/api/agents/install.sh`);
+    expect(installer.status).toBe(503);
+    expect(await installer.json()).toEqual({ error: "HTTPS agent installation is not configured" });
+  } finally {
+    await hub.stop();
+  }
+});
+
+test("public HTTPS installer uses deployment settings, never request metadata", async () => {
+  const port = freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const hub = spawnHub({
+    PORT: String(port),
+    NODE_ENV: "development",
+    SESSION_SECRET: sessionSecret,
+    OPSPILOT_PUBLIC_HUB_URL: "https://Hub.Example:8443/",
+    OPSPILOT_AGENT_VERSION: "v1.2.3-rc.2",
+    OPSPILOT_AGENT_REPOSITORY: "reviewed-org/agent.repo",
+  });
+  try {
+    await waitHubReady(baseUrl, hub.child);
+    const endpoint = `${baseUrl}/api/agents/install.sh`;
+    const response = await fetch(endpoint);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/x-shellscript; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    const script = await response.text();
+    expect(script).toContain("hub_url='https://hub.example:8443' version='v1.2.3-rc.2' repository='reviewed-org/agent.repo'");
+    expect(script).not.toContain(sessionSecret);
+
+    const headers = {
+      host: "untrusted.invalid",
+      forwarded: "host=untrusted.invalid;proto=http",
+      "x-forwarded-host": "untrusted.invalid",
+      "x-forwarded-proto": "http",
+      origin: "http://untrusted.invalid",
+      "user-agent": "Linux aarch64",
+    };
+    const hostile = await fetch(`${endpoint}?arch=arm64&version=v99.0.0`, { headers });
+    expect(hostile.status).toBe(200);
+    expect(await hostile.text()).toBe(script);
+    const post = await fetch(endpoint, { method: "POST", headers });
+    expect(post.status).toBe(405);
+    expect(post.headers.get("allow")).toBe("GET");
   } finally {
     await hub.stop();
   }

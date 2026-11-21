@@ -36,6 +36,19 @@ export function readAgentInstallConfig(
     return null;
   }
   if (url.protocol !== "https:" || !url.hostname || url.username || url.password || raw.includes("@")) return null;
+  // The installer also writes this origin as a plain value in the systemd environment file.
+  if (!/^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?|\[[0-9a-f:]+\])$/.test(url.hostname) || url.port === "0") return null;
   const hubUrl = url.origin;
   return { mode: "https", hubUrl, installerUrl: `${hubUrl}/api/agents/install.sh`, version, repository };
+}
+
+const installerTemplate = new URL("../../../infra/install/agent.sh", import.meta.url);
+const configLine = "\nhub_url='' version='' repository=''\n";
+const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+export async function loadHttpsAgentInstaller(config: Extract<AgentInstallConfig, { mode: "https" }>): Promise<string | null> {
+  const template = await Bun.file(installerTemplate).text().catch(() => "");
+  const script = template.replace(configLine, () =>
+    `\nhub_url=${quote(config.hubUrl)} version=${quote(config.version)} repository=${quote(config.repository)}\n`);
+  return script === template ? null : script;
 }

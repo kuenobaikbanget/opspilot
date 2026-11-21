@@ -35,6 +35,9 @@ describe("agent installation configuration", () => {
     for (const value of ["http://hub.example", "https://user:pass@hub.example", "https://@hub.example", "https://hub.example/path", "https://hub.example/..", "https://hub.example?", "https://hub.example#", "https://hub.example\\evil", " https://hub.example", "https://hub.example/$(touch /tmp/injected)", "https://hub.example:';exit'"]) {
       expect(readAgentInstallConfig({ ...settings, OPSPILOT_PUBLIC_HUB_URL: value })).toBeNull();
     }
+    for (const value of ["https://hub.example:0", "https://hub.example%27", "https://hub.example%24", "https://bad_host.example"]) {
+      expect(readAgentInstallConfig({ ...settings, OPSPILOT_PUBLIC_HUB_URL: value })).toBeNull();
+    }
   });
   test("requires pinned workflow-compatible SemVer", () => {
     for (const value of ["latest", "1.2.3", "v01.2.3", "v1.2.3+build", "v1.2.3-01", "v1.2.3-rc..1", "v1.2.3;echo injected", `v1.2.3-${"a".repeat(129)}`]) {
@@ -117,9 +120,7 @@ SCRIPT
         const result = Bun.spawnSync([Bun.which("bash")!, "-c", buildAgentInstallCommand(config, malicious)], { cwd: dir, env, stdout: "pipe", stderr: "pipe" });
         expect(result.exitCode).toBe(0);
         expect(readFileSync(env.URL_CAPTURE, "utf8")).toBe(config.installerUrl);
-        expect(readFileSync(env.ARGS_CAPTURE, "utf8").split("\0").slice(0, -1)).toEqual([
-          "--hub-url", config.hubUrl, "--version", config.version, "--repository", config.repository, "--token", malicious,
-        ]);
+        expect(readFileSync(env.ARGS_CAPTURE, "utf8").split("\0").slice(0, -1)).toEqual(["--token", malicious]);
         expect(existsSync(marker)).toBe(false);
         expect(existsSync(readFileSync(env.FILE_CAPTURE, "utf8"))).toBe(false);
         expect(existsSync(env.SUDO_USED)).toBe(uid !== "0");
