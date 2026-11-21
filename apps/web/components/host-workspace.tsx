@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 import type { Host, HostList, HostMetric } from "@opspilot/contracts";
 import { AsciiLoading } from "./ascii-card-reveal";
@@ -73,204 +73,235 @@ async function request(path: string, signal?: AbortSignal, method = "GET") {
   return value;
 }
 
-function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resource: Resource }) {
+type HistoryPoint = {
+  sampledAt: string;
+  timestampMs: number;
+  values: readonly (number | null)[];
+  intervalSeconds?: number | null;
+};
+
+const networkSeries = [{ label: "RX (download)", legend: "RX" }, { label: "TX (upload)", legend: "TX" }] as const;
+const formatRate = (value: number | null) => {
+  if (value === null) return "Unavailable";
+  return `${value > 0 && value < 0.001 ? "<0.001" : Number(value.toFixed(3))} Mb/s`;
+};
+
+function HistorySeriesLabel({ label, index }: { label: string; index: number }) {
+  return <span className="history-series-label"><span data-series={index} aria-hidden="true" />{label}</span>;
+}
+
+function HistoryColumns({
+  rows, title, caption, series, top, format, latestLabel, network, activeSeries, onSeriesChange,
+}: {
+  rows: readonly HistoryPoint[];
+  title: string;
+  caption: string;
+  series: readonly { label: string; legend?: string }[];
+  top: number;
+  format: (value: number | null) => string;
+  latestLabel: string;
+  network?: boolean;
+  activeSeries?: number;
+  onSeriesChange?: (index: number) => void;
+}) {
   const sliderId = useId();
-  const [cursorTime, setCursorTime] = useState<string | null>(null);
-  const label = resources.find(r => r.key === resource)!.label;
-  const rows = [...samples].sort((a, b) => Date.parse(a.sampled_at) - Date.parse(b.sampled_at));
-  const valid = rows.filter(r => r[resource] != null && Number.isFinite(r[resource]));
-  if (!rows.length) {
-    return <p className="empty">No {label} samples received yet. History is unavailable.</p>;
-  }
-
-  const start = Date.parse(rows[0].sampled_at);
-  const end = Date.parse(rows[rows.length - 1].sampled_at);
-  const duration = end - start;
-  const width = 480;
-  const height = 180;
-  const x = (t: number) => 48 + ((t - start) / (duration || 1)) * width;
-  const y = (n: number) => 16 + height * (1 - n / 100);
-  const cursorIndex = rows.findIndex(r => r.sampled_at === cursorTime);
-  const index = cursorIndex < 0 ? rows.length - 1 : cursorIndex;
+  const [cursorTime, setCursorTime] = useState<number | null>(null);
+  const latest = rows.length - 1;
+  const cursorIndex = rows.findIndex(row => row.timestampMs === cursorTime);
+  const index = cursorIndex < 0 ? latest : cursorIndex;
   const observation = rows[index];
-  const cursorX = x(Date.parse(observation.sampled_at));
-  const measured = observation[resource] != null && Number.isFinite(observation[resource]);
+  const newest = rows[latest];
+  const start = rows[0].timestampMs;
+  const end = newest.timestampMs;
+  const span = end - start;
+  const recorded = observation.values.some(value => value !== null);
+  const status = index === latest ? latestLabel : recorded ? "Historical" : "Unavailable";
+  const interval = observation.intervalSeconds;
+  const valueText = recorded
+    ? `${interval != null ? `${interval} seconds, ` : ""}${series.map(({ label }, i) => `${label} ${format(observation.values[i])}`).join(", ")}`
+    : "Unavailable";
+  const showSeconds = span < 180_000;
+  const timeFormat = useMemo(() => new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit", minute: "2-digit", ...(showSeconds ? { second: "2-digit" } : {}),
+  }), [showSeconds]);
+  const marks = span >= 180_000 ? [start, start + span / 3, end - span / 3, end] : span ? [start, end] : [start];
+  const columnWidth = useMemo(() => {
+    let spacing = span;
+    for (let i = 1; i < rows.length; i++) {
+      const delta = rows[i].timestampMs - rows[i - 1].timestampMs;
+      if (delta > 0) spacing = Math.min(spacing, delta);
+    }
+    // Cap the mark width so a data gap doesn't turn adjacent observations into wide blocks.
+    return span ? `min(${(75 * spacing) / span}%, 3.5rem)` : "3.5rem";
+  }, [rows, span]);
 
-  let interval = 15000;
-  for (let i = 1; i < rows.length; i++) {
-    const gap = Date.parse(rows[i].sampled_at) - Date.parse(rows[i - 1].sampled_at);
-    if (gap > 0) interval = Math.min(interval, gap);
+  function select(index: number) {
+    setCursorTime(index === latest ? null : rows[index].timestampMs);
   }
-  const barWidth = Math.max(1, Math.min(24, duration ? (width * interval) / duration * 0.72 : 24));
-  const time = (s: string) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  function inspectAt(track: HTMLDivElement, clientX: number) {
+    const axis = track.firstElementChild!.getBoundingClientRect();
+    const cursor = start + span * Math.max(0, Math.min(1, (clientX - axis.left) / axis.width));
+    let nearest = 0;
+    for (let i = 1; i < rows.length; i++) {
+      if (Math.abs(rows[i].timestampMs - cursor) < Math.abs(rows[nearest].timestampMs - cursor)) nearest = i;
+    }
+    select(nearest);
+  }
 
   return (
-    <figure className="resource-history">
-      <figcaption>
-        <h3>{label} utilization</h3>
-        <span>{duration ? `${Math.round(duration / 60000)} min` : "Single sample"} · Raw samples</span>
-      </figcaption>
-      <div className="history-observation">
-        <strong>{percent(observation[resource])}</strong>
-        <time dateTime={observation.sampled_at}>{stamp(observation.sampled_at)}</time>
-      </div>
-      <div className="history-chart resource-chart">
-        <div className="history-scale" aria-hidden="true"><span>100%</span><span>50%</span><span>0%</span></div>
-        <svg
-          viewBox="0 0 548 212"
+    <figure className={`resource-history${network ? " network-history" : ""}`}>
+      <figcaption><h3>{title}</h3><span>{caption}</span></figcaption>
+      <div className="history-card">
+        <div className="history-legend" role="group" aria-label={network ? "Newest interval" : "Emphasize a resource"}>
+          {series.map(({ label, legend }, i) => {
+            const content = <><HistorySeriesLabel label={legend ?? label} index={i} /><strong>{format(newest.values[i])}</strong></>;
+            return onSeriesChange ? (
+              <Button key={label} variant="ghost" aria-pressed={activeSeries === i} onClick={() => onSeriesChange(i)}>
+                {content}
+              </Button>
+            ) : <span key={label}>{content}</span>;
+          })}
+        </div>
+        <div className="history-reading">
+          <div>
+            <p>Selected {network ? "interval" : "sample"}</p>
+            <p className="history-hint tiny">Hover or tap a column</p>
+          </div>
+          <div className="history-observation">
+            <header>
+              <span>{status}</span>
+              <time dateTime={observation.sampledAt}>{stamp(observation.sampledAt)}</time>
+              {recorded && interval != null && <span>{interval} s receipt interval</span>}
+            </header>
+            <dl>
+              {series.map(({ label }, i) => (
+                <div key={label}>
+                  <dt><HistorySeriesLabel label={`${label}:`} index={i} /></dt>{" "}
+                  <dd>{format(observation.values[i])}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+        <div
+          className="history-plot"
+          style={{ "--history-column": columnWidth } as CSSProperties}
           role="img"
-          aria-label={`${label} usage, 0 to 100 percent. ${valid.length} measured samples from ${stamp(rows[0].sampled_at)} to ${stamp(rows[rows.length - 1].sampled_at)}. Each bar is one observation; missing intervals remain empty.`}
+          aria-label={`${title} from ${stamp(rows[0].sampledAt)} to ${stamp(newest.sampledAt)}. Each segment uses its own scale; missing readings leave gaps.`}
           onPointerMove={event => {
-            if (event.pointerType !== "mouse") return;
-            const bounds = event.currentTarget.getBoundingClientRect();
-            const position = (event.clientX - bounds.left) / bounds.width * 548;
-            const timestamp = start + Math.max(0, Math.min(1, (position - 48) / width)) * duration;
-            let nearest = 0;
-            for (let i = 1; i < rows.length; i++) {
-              if (Math.abs(Date.parse(rows[i].sampled_at) - timestamp) < Math.abs(Date.parse(rows[nearest].sampled_at) - timestamp)) nearest = i;
-            }
-            setCursorTime(rows[nearest].sampled_at);
+            if (event.pointerType === "mouse") inspectAt(event.currentTarget, event.clientX);
           }}
+          onClick={event => inspectAt(event.currentTarget, event.clientX)}
         >
-          {[0, 50, 100].map(value => (
-            <g key={value}>
-              <line x1="48" x2="544" y1={y(value)} y2={y(value)} className="chart-grid" />
-            </g>
-          ))}
-          {valid.map(r => (
-            <rect
-              key={r.sampled_at}
-              x={x(Date.parse(r.sampled_at)) - barWidth / 2}
-              y={y(r[resource])}
-              width={barWidth}
-              height={(height * r[resource]) / 100}
-              rx="1.5"
-              className="chart-bar"
-              data-active={r.sampled_at === observation.sampled_at}
-            >
-              <title>{stamp(r.sampled_at)} · {percent(r[resource])}</title>
-            </rect>
-          ))}
-          <line x1={cursorX} x2={cursorX} y1="16" y2="196" className="chart-cursor" />
-          {measured && <circle cx={cursorX} cy={y(observation[resource])} r="4" className="chart-cursor-point" />}
-        </svg>
-      </div>
-      <div className="history-time-labels" aria-hidden="true">
-        <span>{time(rows[0].sampled_at)}</span>
-        {duration > 0 && <span>{time(rows[rows.length - 1].sampled_at)}</span>}
+          <div className="history-axis" aria-hidden="true">
+            {rows.map(({ timestampMs, values }, i) => values.some(value => value !== null) && (
+              <div
+                className="history-column"
+                key={i}
+                style={{ left: span ? `${((timestampMs - start) / span) * 100}%` : "50%" }}
+                data-selected={i === index}
+              >
+                {values.map((value, j) => value !== null && (
+                  <span
+                    key={j}
+                    data-series={j}
+                    data-emphasized={j === activeSeries}
+                    style={{ height: `max(2px, ${Math.min(value / top, 1) * 2.5}rem)` }}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="history-time-labels" aria-hidden="true">
+          {marks.map(timestamp => <span key={timestamp}>{timeFormat.format(timestamp)}</span>)}
+        </div>
+        <p className="history-scale tiny">Scale per metric: 0–{format(top)}</p>
       </div>
       <div className="history-scrubber">
-        <label htmlFor={sliderId}>Inspect observation</label>
+        <label htmlFor={sliderId}>Inspect {network ? "network interval" : "observation"}</label>
         <span>{index + 1} / {rows.length}</span>
         <input
           id={sliderId}
           type="range"
           min={0}
-          max={rows.length - 1}
+          max={latest}
           value={index}
-          disabled={rows.length === 1}
-          onChange={event => setCursorTime(rows[Number(event.target.value)].sampled_at)}
-          aria-valuetext={`${stamp(observation.sampled_at)}: ${measured ? percent(observation[resource]) : "No measurement"}`}
+          disabled={latest === 0}
+          onChange={event => select(Number(event.target.value))}
+          aria-valuetext={`${stamp(observation.sampledAt)}: ${valueText}`}
         />
       </div>
-      <p className="tiny">
-        {valid.length} measurements · No aggregation · {Intl.DateTimeFormat().resolvedOptions().timeZone}
-        <br />
-        <time dateTime={rows[0].sampled_at}>{stamp(rows[0].sampled_at)}</time> –{" "}
-        <time dateTime={rows[rows.length - 1].sampled_at}>{stamp(rows[rows.length - 1].sampled_at)}</time>
-      </p>
-      {!valid.length && <p>{label} measurements unavailable for this range.</p>}
     </figure>
   );
 }
 
-function NetworkHistory({
-  samples,
-  maxInterval,
-  current,
-  cached,
-}: {
+function ResourceHistory({ samples, resource, onResourceChange }: {
+  samples: HostMetric[];
+  resource: Resource;
+  onResourceChange: (resource: Resource) => void;
+}) {
+  const rows = useMemo(() => samples
+    .map(sample => ({
+      sampledAt: sample.sampled_at,
+      timestampMs: Date.parse(sample.sampled_at),
+      values: resources.map(({ key }) => Number.isFinite(sample[key]) ? sample[key] : null),
+    }))
+    .filter(row => Number.isFinite(row.timestampMs))
+    .sort((a, b) => a.timestampMs - b.timestampMs), [samples]);
+  if (!rows.some(row => row.values.some(value => value !== null))) {
+    return <p className="empty">No resource samples received yet. History is unavailable.</p>;
+  }
+  const latest = rows[rows.length - 1];
+  return (
+    <HistoryColumns
+      rows={rows}
+      title="Resource utilization"
+      caption="Raw samples · no aggregation"
+      series={resources}
+      top={100}
+      format={value => value === null ? "Unavailable" : percent(value)}
+      latestLabel={latest.values.some(value => value !== null) ? "Newest sample" : "Newest sample unavailable"}
+      activeSeries={resources.findIndex(({ key }) => key === resource)}
+      onSeriesChange={index => onResourceChange(resources[index].key)}
+    />
+  );
+}
+
+function NetworkHistory({ samples, maxInterval, current, cached, now }: {
   samples: HostMetric[];
   maxInterval: number;
   current: boolean;
   cached: boolean;
+  now: number;
 }) {
-  const sliderId = useId();
-  const [cursorTime, setCursorTime] = useState<string | null>(null);
-  const rows = deriveNetworkRates(samples, maxInterval);
-  const valid = rows.filter(row => row.rxMbps !== null && row.txMbps !== null);
-  if (!valid.length) return <p className="empty">Network rates unavailable — two usable samples are required.</p>;
-
-  const cursorIndex = rows.findIndex(row => row.sampledAt === cursorTime);
-  const selectedIndex = cursorIndex < 0 ? rows.length - 1 : cursorIndex;
-  const observation = rows[selectedIndex];
-  const usable = observation.rxMbps !== null && observation.txMbps !== null;
-  const latest = selectedIndex === rows.length - 1;
-  const label = !usable
-    ? latest ? "Latest interval unavailable" : "Unavailable"
-    : !latest ? "Historical"
-      : cached ? "Cached"
-        : current && Date.now() - observation.timestampMs <= maxInterval * 1000 ? "Latest interval" : "Historical";
-  const format = (n: number | null) =>
-    n === null ? "Unavailable" : n > 0 && n < 0.001 ? "<0.001" : String(Number(n.toFixed(3)));
-  const start = rows[0].timestampMs;
-  const end = rows[rows.length - 1].timestampMs;
-  const x = (t: number) => 48 + (t - start) / (end - start || 1) * 464;
-  const top = Math.max(...valid.flatMap(row => [row.rxMbps!, row.txMbps!])) || 1;
-  const time = (s: string) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const valueText = usable
-    ? `${observation.intervalSeconds} seconds, RX ${format(observation.rxMbps)} Mb/s, TX ${format(observation.txMbps)} Mb/s`
-    : "Unavailable";
-
+  const { rows, top } = useMemo(() => {
+    let top = 0;
+    const rows = deriveNetworkRates(samples, maxInterval).map(({ rxMbps, txMbps, ...point }) => {
+      top = Math.max(top, rxMbps ?? 0, txMbps ?? 0);
+      return { ...point, values: [rxMbps, txMbps] };
+    });
+    return { rows, top };
+  }, [samples, maxInterval]);
+  if (!rows.some(row => row.values[0] !== null)) {
+    return <p className="empty">Network rates unavailable — two usable samples are required.</p>;
+  }
+  const latest = rows[rows.length - 1];
+  const latestLabel = latest.values[0] === null ? "Latest interval unavailable"
+    : cached ? "Cached"
+      : current && now - latest.timestampMs <= maxInterval * 1000 ? "Latest interval" : "Historical";
   return (
-    <figure className="resource-history network-history">
-      <figcaption>
-        <h3>Network traffic</h3>
-        <span>Estimated aggregate traffic · excludes loopback</span>
-      </figcaption>
-      <div className="history-observation">
-        <span>{label}</span>
-        <time dateTime={observation.sampledAt}>{stamp(observation.sampledAt)}</time>
-      </div>
-      <p>RX (download): <strong>{format(observation.rxMbps)}</strong> Mb/s · TX (upload): <strong>{format(observation.txMbps)}</strong> Mb/s</p>
-      <div className="history-chart network-chart">
-        <div className="network-scale" aria-hidden="true">
-          <span>RX <span>{format(top)} Mb/s</span></span>
-          <span>TX <span>{format(top)} Mb/s</span></span>
-        </div>
-        <svg viewBox="0 0 548 190" role="img" aria-label="Estimated RX and TX rates over Hub receipt intervals. Unavailable intervals have no dots.">
-          {(["rxMbps", "txMbps"] as const).map((key, track) => (
-            <g key={key}>
-              <line x1="48" x2="512" y1={track * 90 + 92} y2={track * 90 + 92} className="chart-grid" />
-              {valid.map(row => (
-                <circle key={row.sampledAt} cx={x(row.timestampMs)} cy={track * 90 + 92 - row[key]! / top * 62} r="4" className="chart-cursor-point">
-                  <title>{stamp(row.sampledAt)} · {format(row[key])} Mb/s</title>
-                </circle>
-              ))}
-            </g>
-          ))}
-          <line x1={x(observation.timestampMs)} x2={x(observation.timestampMs)} y1="30" y2="182" className="chart-cursor" />
-        </svg>
-      </div>
-      <div className="history-time-labels" aria-hidden="true">
-        <span>{time(rows[0].sampledAt)}</span>
-        <span>{time(rows[rows.length - 1].sampledAt)}</span>
-      </div>
-      <div className="history-scrubber">
-        <label htmlFor={sliderId}>Inspect network interval</label>
-        <span>{selectedIndex + 1} / {rows.length}</span>
-        <input
-          id={sliderId}
-          type="range"
-          min={0}
-          max={rows.length - 1}
-          value={selectedIndex}
-          onChange={event => setCursorTime(rows[Number(event.target.value)].sampledAt)}
-          aria-valuetext={`${stamp(observation.sampledAt)}: ${valueText}`}
-        />
-      </div>
-      <p className="tiny">Rates estimated from cumulative counters over Hub receipt intervals; gaps and ambiguous reads are unavailable.</p>
-    </figure>
+    <HistoryColumns
+      rows={rows}
+      title="Network traffic"
+      caption="Estimated aggregate traffic · excludes loopback"
+      series={networkSeries}
+      top={top || 1}
+      format={formatRate}
+      latestLabel={latestLabel}
+      network
+    />
   );
 }
 
@@ -654,15 +685,6 @@ export function HostWorkspace({
                   <Button aria-pressed={historyMode === "resource"} aria-controls="host-history-chart" onClick={() => setHistoryMode("resource")}>Resource (%)</Button>
                   <Button aria-pressed={historyMode === "network"} aria-controls="host-history-chart" onClick={() => setHistoryMode("network")}>Network (Mb/s)</Button>
                 </div>
-                {historyMode === "resource" && (
-                  <div className="inspector-resources" role="group" aria-label="Choose a resource to view its history">
-                    {resources.map(({ key, label }) => (
-                      <Button key={key} variant="ghost" aria-pressed={resource === key} onClick={() => setResource(key)}>
-                        <span className="resource-label">{label}</span>
-                      </Button>
-                    ))}
-                  </div>
-                )}
                 {historyPending && activeHistoryError && history?.id === host.id ? (
                   <Notice tone="warning">Refreshing history. Cached history below is stale.</Notice>
                 ) : !historyPending && activeHistoryError ? (
@@ -674,7 +696,7 @@ export function HostWorkspace({
                 <div id="host-history-chart">
                   {history?.id === host.id ? (
                     historyMode === "resource" ? (
-                      <ResourceHistory key={host.id} samples={history.samples} resource={resource} />
+                      <ResourceHistory key={host.id} samples={history.samples} resource={resource} onResourceChange={setResource} />
                     ) : (
                       <NetworkHistory
                         key={host.id}
@@ -682,6 +704,7 @@ export function HostWorkspace({
                         maxInterval={fleet?.stale_after_seconds ?? 60}
                         current={!failure && !!fleet && hasFreshSample(host, fleet, now) && !activeHistoryError}
                         cached={!!failure || !!activeHistoryError}
+                        now={now}
                       />
                     )
                   ) : !activeHistoryError || historyPending ? (
