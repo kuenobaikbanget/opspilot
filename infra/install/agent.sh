@@ -3,39 +3,11 @@ set -euo pipefail
 umask 077
 
 fail() { printf 'OpsPilot: %s\n' "$1" >&2; exit 1; }
-usage='Usage: agent.sh --hub-url ORIGIN --version TAG --repository OWNER/REPO --token TOKEN'
-hub_url='' version='' repository='' token=''
-seen_hub=0 seen_version=0 seen_repository=0 seen_token=0
-while (( $# )); do
-  case "$1" in
-    --hub-url) (( seen_hub == 0 )) || fail 'Duplicate --hub-url'; seen_hub=1; key=hub_url ;;
-    --version) (( seen_version == 0 )) || fail 'Duplicate --version'; seen_version=1; key=version ;;
-    --repository) (( seen_repository == 0 )) || fail 'Duplicate --repository'; seen_repository=1; key=repository ;;
-    --token) (( seen_token == 0 )) || fail 'Duplicate --token'; seen_token=1; key=token ;;
-    *) fail "Unknown argument; $usage" ;;
-  esac
-  (( $# >= 2 )) && [[ -n "$2" && "$2" != --* ]] || fail "Missing argument value; $usage"
-  printf -v "$key" '%s' "$2"
-  shift 2
-done
-(( seen_hub && seen_version && seen_repository && seen_token )) || fail "$usage"
-origin_pattern='^https://([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(:([0-9]{1,5}))?/?$'
-[[ "$hub_url" =~ $origin_pattern ]] || fail 'Hub URL must be an HTTPS origin without credentials, path, query or fragment'
-port="${BASH_REMATCH[4]}"
-if [[ -n "$port" ]]; then
-  (( 10#$port >= 1 && 10#$port <= 65535 )) || fail 'Hub URL has an invalid port'
-fi
-hub_url="${hub_url%/}"
-version_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?$'
-[[ "$version" =~ $version_pattern && ${#version} -le 129 ]] || fail 'Version must be a pinned vMAJOR.MINOR.PATCH release tag'
-if [[ "$version" == *-* ]]; then
-  IFS='.' read -r -a identifiers <<< "${version#*-}"
-  for identifier in "${identifiers[@]}"; do
-    [[ ! "$identifier" =~ ^0[0-9]+$ ]] || fail 'Version numeric prerelease identifiers cannot have leading zeroes'
-  done
-fi
-repository_pattern='^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}$'
-[[ "$repository" =~ $repository_pattern && "${repository#*/}" != . && "${repository#*/}" != .. ]] || fail 'Repository must be a GitHub OWNER/REPO'
+# The Hub replaces these empty assignments with validated deployment settings.
+hub_url='' version='' repository=''
+[[ -n "$hub_url" && -n "$version" && -n "$repository" ]] || fail 'Download the configured installer from your HTTPS Hub'
+(( $# == 2 )) && [[ "$1" == --token ]] || fail 'Usage: bash agent.sh --token TOKEN'
+token=$2
 [[ "$token" =~ ^[A-Za-z0-9_-]{43}$ ]] || fail 'Token must be a 43-character base64url enrollment token'
 # Do not retain a second copy in the positional arguments.
 set --
@@ -46,7 +18,32 @@ case "$(uname -m)" in
   aarch64|arm64) arch=arm64 ;;
   *) fail 'Unsupported architecture; use Linux amd64 or arm64' ;;
 esac
-(( EUID == 0 )) || fail 'Run this installer as root (sudo bash agent.sh ...)'
+if (( EUID != 0 )); then
+  command -v sudo >/dev/null || fail 'sudo is required to install as a non-root user'
+  # Keep the token out of sudo's logged arguments and standard input.
+  token_file=$(mktemp) || fail 'Could not create a private sudo handoff file'
+  trap 'rm -f -- "$token_file"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  printf '%s\n' "$token" > "$token_file"
+  unset token
+  script=$0
+  [[ "$script" == /* ]] || script="$PWD/$script"
+  [[ "$token_file" == /* ]] || token_file="$PWD/$token_file"
+  sudo -u root -- bash -p -c '
+    if (( EUID != 0 )); then
+      printf "%s\n" "OpsPilot: sudo did not grant root privileges" >&2
+      exit 1
+    fi
+    if ! IFS= read -r token < "$1"; then
+      printf "%s\n" "OpsPilot: Could not read the private sudo handoff file" >&2
+      exit 1
+    fi
+    exec bash -p -- "$0" --token "$token"
+  ' "$script" "$token_file"
+  exit
+fi
 for dependency in bash curl tar sha256sum install cmp mktemp systemctl useradd groupadd getent runuser env chown chmod uname mkdir rm cat; do
   command -v "$dependency" >/dev/null 2>&1 || fail "Missing dependency: $dependency; install it with your distribution package manager"
 done
