@@ -35,7 +35,7 @@ The [Monochrome workspace](UI-UX.md#fleet-services-dashboard-contract-target) im
 - [ ] Define typed host/workload/endpoint read models, source timestamps, capability/unavailable reasons, stale policy and correctly scoped aggregate counts. Keep collection within the existing Hub/Worker/Go-agent module boundaries.
 - [ ] Implement opt-in, locally validated, bounded read-only Docker/systemd inventory and resource collection. Update `packages/contracts`, Go agent, API documentation and interoperability/negative tests together for any wire change; do not infer continuous inventory from `docker_status`.
 - [ ] Implement persisted HTTP monitor configuration/results and bounded scheduling in the existing Hub/Worker boundary, with an actual named probe location. Complete SSRF, DNS/redirect, egress, authorization and audit controls before enabling checks; no generic URL-fetch diagnostic or new microservice by default.
-- [ ] Add network counter-delta rates, covering gaps, resets and stale samples. Host history and current CPU/memory/disk limits are exposed.
+- [x] Add network counter-delta estimates from adjacent Hub receipt samples, with gaps, resets, ambiguous zero reads and stale samples marked unavailable or historical. Per-host sampling cadence and per-interface rates remain unavailable.
 - [ ] Connect Services, Add service and endpoint investigation to supported workload/endpoint APIs. The current screens explicitly report unavailable capabilities.
 - [ ] Verify independent process/endpoint states, offline-agent/reachable-endpoint behavior, truthful freshness and no causality claims; verify actual browser layout and keyboard access at 1440px, 1024px and 390px using the [acceptance scenarios](TESTING.md#fleet-services-dashboard-acceptance-planned).
 

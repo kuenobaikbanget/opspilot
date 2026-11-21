@@ -175,3 +175,27 @@ test("incident memory shows ASCII while searching and distinguishes a failed rea
   expect(empty.pending).toBe(false);
   expect(empty.text).toContain("No matching resolved incidents");
 });
+
+test("network history stays cached on retry and isolated by host", async () => {
+  const { coldFailure, coldPending, coldFailedAgain, before, after, network, cached, pending, failedAgain, other } = await scenario("host-network-history");
+  expect(coldFailure).toContain("refresh failed: Fixture history outage");
+  expect(coldFailure).toContain("History unavailable");
+  expect(coldPending).toContain("Loading resource history");
+  expect(coldPending).not.toContain("Cached history");
+  expect(coldPending).not.toContain("refresh failed");
+  expect(coldFailedAgain).toContain("refresh failed: Fixture history outage");
+  expect(coldFailedAgain).toContain("History unavailable");
+  expect(after).toBe(before);
+  expect(network).toContain("RX (download): 1 Mb/s");
+  expect(network).toContain("TX (upload): 0.5 Mb/s");
+  expect(cached).toContain("Cached history below is stale");
+  expect(cached).toContain("RX (download): 1 Mb/s");
+  expect(pending).toContain("Refreshing history. Cached history below is stale.");
+  expect(pending).toContain("Cached");
+  expect(pending).not.toContain("refresh failed");
+  expect(pending).not.toContain("Latest interval");
+  expect(failedAgain).toContain("refresh failed: Fixture history outage");
+  expect(other).toContain("Network rates unavailable");
+  expect(other).not.toContain("Fixture history outage");
+  expect(other).not.toContain("RX (download): 1 Mb/s");
+});

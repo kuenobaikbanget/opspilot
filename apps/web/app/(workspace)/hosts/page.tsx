@@ -15,7 +15,7 @@ export default function HostsPage() {
   }, [inspectHost, consumeSelection]);
 
   return <>
-    <WorkspaceHeader title="Every host. One clear view." description="Monitor agent connectivity and resource usage across your Linux hosts." summary="fleet" actions={
+    <WorkspaceHeader title="Hosts" description="Monitor agent connectivity and resource usage against configured limits." summary="fleet" actions={
       <ButtonLink href="/connect" variant="primary"><WorkspaceIcon name="terminal" />Connect server</ButtonLink>
     } />
     <HostWorkspace refreshKey={hostRefresh} fleet={fleet} failure={fleetError} openIncidents={openIncidents} incidentsStale={!!incidentsError} incidents={incidents} onOpenIncident={openIncident} inspectHost={inspectHost} onInspectionHandled={onInspectionHandled} />
