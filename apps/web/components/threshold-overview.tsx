@@ -4,7 +4,7 @@ import { api } from "../lib/api";
 import { hasFreshSample, percent, pressure, resources, type Pressure, type Resource } from "../lib/host-pressure";
 import { HostSystemd, isSystemdReportCurrent, systemdCollection, systemdStates } from "./host-systemd";
 import { AsciiCardReveal, AsciiCardSkeleton, AsciiLoading } from "./ascii-card-reveal";
-import { Badge, Button } from "./ui";
+import { Badge, Button, ButtonLink } from "./ui";
 
 type OverviewIncidentSummary = {
   id: string;
@@ -48,7 +48,6 @@ type Props = {
   onCheckEndpoint: (id: string) => void;
   onOpenIncident: (id: string) => void;
   onInspectHost: (id: string, resource?: Resource) => void;
-  onBrowseHosts: () => void;
   refreshKey?: number;
 };
 
@@ -491,7 +490,6 @@ export function ThresholdOverview({
   onCheckEndpoint,
   onOpenIncident,
   onInspectHost,
-  onBrowseHosts,
   refreshKey = 0,
 }: Props) {
   const [clock, setClock] = useState(Date.now);
@@ -764,7 +762,7 @@ export function ThresholdOverview({
           </div>
           {offlineOnly
             ? <Button size="sm" onClick={() => { setOfflineOnly(false); inventoryHeading.current?.focus(); }}>Show all devices</Button>
-            : <Button size="sm" onClick={onBrowseHosts}>Browse hosts <OverviewIcon name="arrow" /></Button>}
+            : <ButtonLink size="sm" href="/hosts">Browse hosts <OverviewIcon name="arrow" /></ButtonLink>}
         </div>
         {visibleDevices?.length ? (
           <AsciiCardReveal lazy={true} revealOnMount={true}>

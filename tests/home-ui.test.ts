@@ -53,6 +53,18 @@ test("a rejected session shows login without fetching protected dashboard data",
   expect(requests).toEqual(["/api/auth/me"]);
 });
 
+test("a signed-out incident deep link loads no protected data until login, then opens the intended queue and detail", async () => {
+  const { initial, initialPath, beforeLogin, signedIn, finalPath, heading, detailHeading } = await scenario("deep-link-login");
+  expect(initial.protectedVisible).toBe(false);
+  expect(initial.loginVisible).toBe(true);
+  expect(initialPath).toBe("/incidents");
+  expect(beforeLogin).toEqual(["/api/auth/me"]);
+  expect(signedIn.loginVisible).toBe(false);
+  expect(finalPath).toBe("/incidents");
+  expect(heading).toBe("From signal to resolution.");
+  expect(detailHeading).toBe("Fixture CPU incident");
+});
+
 test("a failed session check offers recovery without treating the outage as authentication", async () => {
   const { initial, beforeRetry, recovered } = await scenario("session-recovery");
   expect(initial.protectedVisible).toBe(false);

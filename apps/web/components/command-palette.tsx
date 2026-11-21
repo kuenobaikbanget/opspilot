@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import type { Host } from "@opspilot/contracts";
 import { Button, Input } from "./ui";
-import type { WorkspacePage } from "./workspace-shell";
+import type { WorkspacePath } from "../lib/workspace-path";
 
 const filters = [
   ["all", "All"],
@@ -18,7 +18,7 @@ type ResourceCategory = "hosts" | "incidents";
 export type PaletteIncident = { id: string; title: string; hostname: string; status: string };
 type Target =
   | { category: ResourceCategory; id: string }
-  | { category: "actions"; id: WorkspacePage };
+  | { category: "actions"; id: WorkspacePath };
 
 const icons = {
   search: "m21 21-4.4-4.4M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z",
@@ -37,23 +37,23 @@ type Icon = keyof typeof icons;
 type Entry = Target & { key: string; title: string; description: string; label: string; icon: Icon; search: string };
 type Group = { title: string; entries: Entry[] };
 
-function page(id: WorkspacePage, title: string, description: string, icon: Icon, keywords = "", label = "Page"): Entry {
+function page(id: WorkspacePath, title: string, description: string, icon: Icon, keywords = "", label = "Page"): Entry {
   return { category: "actions", id, key: id, title, description, label, icon, search: `${title.toLowerCase()} ${keywords}` };
 }
 
 const quickActions = [
-  page("connect", "Connect server", "Set up a Linux host with OpsPilot", "enroll", "enroll host add", "Action"),
-  page("providers", "Provider settings", "Manage AI connections and models", "providers", "ai connections models", "Settings"),
-  page("memory", "Incident memory", "Browse human-confirmed resolutions", "memory", "resolutions", "Action"),
+  page("/connect", "Connect server", "Set up a Linux host with OpsPilot", "enroll", "enroll host add", "Action"),
+  page("/providers", "Provider settings", "Manage AI connections and models", "providers", "ai connections models", "Settings"),
+  page("/memory", "Incident memory", "Browse human-confirmed resolutions", "memory", "resolutions", "Action"),
 ];
-const services = page("services", "Services", "View selected-host systemd status and endpoint checks", "services", "workload systemd endpoint");
+const services = page("/services", "Services", "View selected-host systemd status and endpoint checks", "services", "workload systemd endpoint");
 const pages = [
-  page("overview", "Overview", "View fleet readings against configured limits", "overview", "dashboard fleet"),
+  page("/", "Overview", "View fleet readings against configured limits", "overview", "dashboard fleet"),
   services,
-  page("hosts", "Hosts", "Browse hosts and resource history", "host", "inventory"),
-  page("incidents", "Incidents", "Review the incident queue and evidence", "incident"),
-  page("new-monitor", "New monitor", "Open Add service setup", "enroll", "add service endpoint"),
-  page("drift", "Configuration drift", "Review recorded configuration hash changes", "drift"),
+  page("/hosts", "Hosts", "Browse hosts and resource history", "host", "inventory"),
+  page("/incidents", "Incidents", "Review the incident queue and evidence", "incident"),
+  page("/new-monitor", "New monitor", "Open Add service setup", "enroll", "add service endpoint"),
+  page("/drift", "Configuration drift", "Review recorded configuration hash changes", "drift"),
 ];
 const actions = [...quickActions, ...pages];
 
@@ -85,7 +85,7 @@ export function CommandPalette({ id, ref, hosts, incidents, onInspectHost, onOpe
   incidents: PaletteIncident[];
   onInspectHost: (id: string) => void;
   onOpenIncident: (id: string) => void;
-  onNavigate: (page: WorkspacePage) => void;
+  onNavigate: (href: WorkspacePath) => void;
 }) {
   const resultsId = `${id}-results`;
   const dialog = useRef<HTMLDialogElement>(null);

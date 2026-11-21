@@ -4,7 +4,8 @@ import { useId, useRef, type ComponentRef, type MouseEvent, type ReactNode } fro
 import type { Host } from "@opspilot/contracts";
 import { BrandMark } from "./brand-mark";
 import { CommandPalette, type PaletteIncident } from "./command-palette";
-import { Button } from "./ui";
+import { Button, ButtonLink } from "./ui";
+import type { WorkspacePath } from "../lib/workspace-path";
 
 const icons = {
   overview: "M3 3h7v10H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 17h7v4H3z",
@@ -27,15 +28,13 @@ export function WorkspaceIcon({ name }: { name: keyof typeof icons }) {
 }
 
 const dock = [
-  { id: "overview", label: "Overview" }, { id: "services", label: "Services" },
-  { id: "hosts", label: "Hosts" }, { id: "incidents", label: "Incidents" },
+  { href: "/", icon: "overview", label: "Overview" }, { href: "/services", icon: "services", label: "Services" },
+  { href: "/hosts", icon: "hosts", label: "Hosts" }, { href: "/incidents", icon: "incidents", label: "Incidents" },
 ] as const;
 
-export type WorkspacePage = (typeof dock)[number]["id"] | "connect" | "new-monitor" | "drift" | "memory" | "providers";
-
 type Props = {
-  page: WorkspacePage;
-  onNavigate: (page: WorkspacePage) => void;
+  pathname: string;
+  onNavigate: (href: WorkspacePath) => void;
   onInspectHost: (id: string) => void;
   onOpenIncident: (id: string) => void;
   hosts: Host[];
@@ -47,7 +46,7 @@ type Props = {
   children: ReactNode;
 };
 
-export function WorkspaceShell({ page, onNavigate, onInspectHost, onOpenIncident, hosts, incidents, openIncidents, incidentsStale, busy, onSignOut, children }: Props) {
+export function WorkspaceShell({ pathname, onNavigate, onInspectHost, onOpenIncident, hosts, incidents, openIncidents, incidentsStale, busy, onSignOut, children }: Props) {
   const paletteId = useId();
   const palette = useRef<ComponentRef<typeof CommandPalette>>(null);
   const account = useRef<HTMLDetailsElement>(null);
@@ -61,44 +60,44 @@ export function WorkspaceShell({ page, onNavigate, onInspectHost, onOpenIncident
     },
   } as const;
 
-  function navigate(next: WorkspacePage) {
+  const isSetup = pathname === "/connect" || pathname === "/new-monitor";
+  function closeAccount() {
     if (account.current) account.current.open = false;
-    onNavigate(next);
   }
 
   return (
-    <div className="shell" data-setup={page === "connect" || page === "new-monitor"}>
+    <div className="shell" data-setup={isSetup}>
       <a className="skip-link" href="#main-content">Skip to content</a>
       <header className="workspace-header">
         <div className="workspace-header-inner">
-          <Button variant="ghost" className="workspace-brand" onClick={() => navigate("overview")}><BrandMark size={25} />opspilot</Button>
+          <ButtonLink href="/" variant="ghost" className="workspace-brand" onNavigate={closeAccount}><BrandMark size={25} />opspilot</ButtonLink>
           <span className="workspace-scope"><span aria-hidden="true">/</span> Local workspace</span>
           <div className="workspace-tools">
             <Button variant="ghost" className="workspace-jump" aria-label="Jump to…" {...searchTrigger}>
               <WorkspaceIcon name="search" /><span>Jump to…</span><kbd aria-hidden="true">Ctrl K</kbd>
             </Button>
-            <Button variant="ghost" className="workspace-settings" aria-label="Provider settings" title="Provider settings" onClick={() => navigate("providers")}><WorkspaceIcon name="settings" /></Button>
+            <ButtonLink href="/providers" variant="ghost" className="workspace-settings" aria-label="Provider settings" title="Provider settings" aria-current={pathname === "/providers" ? "page" : undefined} onNavigate={closeAccount}><WorkspaceIcon name="settings" /></ButtonLink>
             <details className="workspace-account" ref={account}>
               <summary title="Admin menu" aria-label="Admin menu">AD</summary>
               <div className="workspace-account-menu">
-                <Button variant="ghost" onClick={() => navigate("drift")}>Configuration drift</Button>
-                <Button variant="ghost" onClick={() => navigate("memory")}>Incident memory</Button>
-                {onSignOut && <Button variant="ghost" disabled={busy} onClick={() => { if (account.current) account.current.open = false; onSignOut(); }}>Sign out</Button>}
+                <ButtonLink href="/drift" variant="ghost" aria-current={pathname === "/drift" ? "page" : undefined} onNavigate={closeAccount}>Configuration drift</ButtonLink>
+                <ButtonLink href="/memory" variant="ghost" aria-current={pathname === "/memory" ? "page" : undefined} onNavigate={closeAccount}>Incident memory</ButtonLink>
+                {onSignOut && <Button variant="ghost" disabled={busy} onClick={() => { closeAccount(); onSignOut(); }}>Sign out</Button>}
               </div>
             </details>
           </div>
         </div>
       </header>
       {children}
-      {page !== "connect" && page !== "new-monitor" && <nav className="workspace-dock" aria-label="Main navigation">
-        {dock.map(item => <Button key={item.id} variant="ghost" className={`dock-item${item.id === "incidents" && !!openIncidents && !incidentsStale ? " dock-risk" : ""}`} aria-current={page === item.id ? "page" : undefined} onClick={() => navigate(item.id)}>
-          <WorkspaceIcon name={item.id} /><span>{item.label}{item.id === "incidents" && !!openIncidents && <small className="dock-count" data-cached={incidentsStale}><span aria-hidden="true">{openIncidents}</span><span className="sr-only">{`, ${openIncidents} open${incidentsStale ? " (cached)" : ""}`}</span></small>}</span>
-        </Button>)}
+      {!isSetup && <nav className="workspace-dock" aria-label="Main navigation">
+        {dock.map(({ href, icon, label }) => <ButtonLink key={href} href={href} variant="ghost" className={`dock-item${href === "/incidents" && !!openIncidents && !incidentsStale ? " dock-risk" : ""}`} aria-current={pathname === href ? "page" : undefined} onNavigate={closeAccount}>
+          <WorkspaceIcon name={icon} /><span>{label}{href === "/incidents" && !!openIncidents && <small className="dock-count" data-cached={incidentsStale}><span aria-hidden="true">{openIncidents}</span><span className="sr-only">{`, ${openIncidents} open${incidentsStale ? " (cached)" : ""}`}</span></small>}</span>
+        </ButtonLink>)}
         <span className="dock-divider" aria-hidden="true" />
         <Button variant="ghost" className="dock-item dock-search" aria-label="Open command search" {...searchTrigger}><WorkspaceIcon name="search" /><kbd aria-hidden="true">Ctrl K</kbd></Button>
-        <Button variant="primary" className="dock-add" aria-label="New monitor" title="New monitor" onClick={() => navigate("new-monitor")}><WorkspaceIcon name="add" /></Button>
+        <ButtonLink href="/new-monitor" variant="primary" className="dock-add" aria-label="New monitor" title="New monitor" onNavigate={closeAccount}><WorkspaceIcon name="add" /></ButtonLink>
       </nav>}
-      <CommandPalette id={paletteId} ref={palette} hosts={hosts} incidents={incidents} onInspectHost={onInspectHost} onOpenIncident={onOpenIncident} onNavigate={navigate} />
+      <CommandPalette id={paletteId} ref={palette} hosts={hosts} incidents={incidents} onInspectHost={onInspectHost} onOpenIncident={onOpenIncident} onNavigate={href => { closeAccount(); onNavigate(href); }} />
     </div>
   );
 }

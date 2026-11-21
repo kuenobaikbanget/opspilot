@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ComponentPropsWithRef, CSSProperties, ReactNode } from "react";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info";
@@ -6,9 +7,16 @@ function classes(...values: (string | undefined | false)[]) {
   return values.filter(Boolean).join(" ");
 }
 
-type ButtonProps = ComponentPropsWithRef<"button"> & {
+type ButtonStyle = {
   variant?: "primary" | "secondary" | "ghost" | "danger";
   size?: "sm" | "md";
+};
+
+function buttonClass(variant: NonNullable<ButtonStyle["variant"]>, size: NonNullable<ButtonStyle["size"]>, className?: string) {
+  return classes("ui-button", `ui-button--${variant}`, `ui-button--${size}`, className);
+}
+
+type ButtonProps = ComponentPropsWithRef<"button"> & ButtonStyle & {
   loading?: boolean;
 };
 
@@ -29,12 +37,16 @@ export function Button({
       type={type}
       disabled={disabled || loading}
       aria-busy={loading || ariaBusy}
-      className={classes("ui-button", `ui-button--${variant}`, `ui-button--${size}`, className)}
+      className={buttonClass(variant, size, className)}
     >
       {children}
       {loading && <span className="sr-only"> — in progress</span>}
     </button>
   );
+}
+
+export function ButtonLink({ variant = "secondary", size = "md", className, ...props }: ComponentPropsWithRef<typeof Link> & ButtonStyle) {
+  return <Link {...props} className={buttonClass(variant, size, className)} />;
 }
 
 export function Input({ className, ...props }: ComponentPropsWithRef<"input">) {
