@@ -368,7 +368,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                   {installBaseline !== null && (
                     <div className="onboarding-contact-status" id={`${id}-contact-status`} role="status">
                       {!fleetError && !newHostListed && !commandExpired && <BrailleSpinner />}
-                      <span>{fleetError ? "Can’t check for new agents while fleet data is unavailable."
+                      <span>{fleetError ? "Can’t check for new agents. Continue to verification to refresh the fleet."
                         : newHostListed ? "A new host appeared in the fleet. Verify its hostname in the next step."
                         : commandExpired ? "No new host observed. Check the installation or regenerate the command."
                         : "Waiting for an agent to contact the Hub…"}</span>
@@ -376,7 +376,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                   )}
                   <div className="onboarding-actions">
                     <Button size="sm" onClick={() => goTo(0)}><Icon name="left" /> Back</Button>
-                    <Button variant="primary" size="sm" disabled={!newHostListed || generating} aria-describedby={installBaseline !== null ? `${id}-contact-status` : undefined} onClick={() => goTo(2)}>Continue to verification <Icon name="right" /></Button>
+                    <Button variant="primary" size="sm" disabled={installBaseline === null || generating} aria-describedby={installBaseline !== null ? `${id}-contact-status` : undefined} onClick={() => goTo(2)}>Continue to verification <Icon name="right" /></Button>
                   </div>
                 </div>
               )}
