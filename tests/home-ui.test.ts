@@ -136,9 +136,14 @@ test("overview dashboard cards show ASCII skeletons while loading and clear clea
   expect(loadingState.inventorySkeletons).toBeGreaterThan(0);
   expect(loadingState.animatedSkeletons).toBe(0);
   expect(loadingState.overlays).toBe(0);
+  expect(loadingState.asciiMarks.revealSurfaceRoots).toBe(0);
   expect(loadingState.asciiMarks.summarySurface).toBe(1);
+  expect(loadingState.asciiMarks.summaryInReveal).toBe(1);
   expect(loadingState.asciiMarks.endpointSurface).toBe(1);
+  expect(loadingState.asciiMarks.endpointInReveal).toBe(1);
   expect(loadingState.asciiMarks.inventorySurface).toBe(1);
+  expect(loadingState.asciiMarks.inventoryInReveal).toBe(1);
+  expect(loadingState.asciiMarks.surfacesInReveals).toBe(3);
   expect(loadingState.asciiMarks.riskSurfaces).toBe(0);
   expect(loadingState.asciiMarks.inspectorSurfaces).toBe(0);
 
@@ -152,10 +157,13 @@ test("overview dashboard cards show ASCII skeletons while loading and clear clea
   expect(midState.advisoryBrailleSkeletons).toBeGreaterThan(0);
   expect(midState.advisoryStatus).toContain("AI hypothesis (advisory)");
   expect(midState.advisoryStatus).toContain("Loading recorded AI analysis…");
+  expect(midState.asciiMarks.revealSurfaceRoots).toBe(0);
   expect(midState.asciiMarks.riskSurfaces).toBe(1);
+  expect(midState.asciiMarks.riskInReveal).toBe(1);
   expect(midState.asciiMarks.riskGauges).toBe(1);
   expect(midState.asciiMarks.riskFades).toBeGreaterThan(0);
   expect(midState.asciiMarks.inspectorSurfaces).toBe(1);
+  expect(midState.asciiMarks.inspectorInReveal).toBe(1);
   expect(midState.asciiMarks.inspectorGauges).toBe(1);
   expect(midState.asciiMarks.aiCardSurface).toBe(1);
 
@@ -164,16 +172,23 @@ test("overview dashboard cards show ASCII skeletons while loading and clear clea
   expect(loadedState.advisory).toContain("AI hypothesis (advisory)");
   expect(loadedState.advisory).toContain("Sustained worker load saturated CPU.");
   const marks = loadedState.asciiMarks;
+  expect(marks.revealSurfaceRoots).toBe(0);
+  expect(marks.surfacesInReveals).toBe(6);
   expect(marks.summarySurface).toBe(1);
+  expect(marks.summaryInReveal).toBe(1);
   expect(marks.riskSurfaces).toBe(1);
+  expect(marks.riskInReveal).toBe(1);
   expect(marks.riskGauges).toBe(1);
   expect(marks.riskFades).toBeGreaterThanOrEqual(3);
   expect(marks.endpointSurface).toBe(1);
+  expect(marks.endpointInReveal).toBe(1);
   expect(marks.inspectorSurfaces).toBe(1);
+  expect(marks.inspectorInReveal).toBe(1);
   expect(marks.inspectorGauges).toBe(1);
   expect(marks.inspectorFades).toBeGreaterThanOrEqual(3);
   expect(marks.aiCardSurface).toBe(1);
   expect(marks.inventorySurface).toBe(1);
+  expect(marks.inventoryInReveal).toBe(1);
   expect(marks.inventoryFades).toBeGreaterThanOrEqual(2);
 });
 

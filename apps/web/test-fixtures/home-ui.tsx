@@ -340,17 +340,24 @@ try {
     }
     case "ascii-loading-transition": {
       const asciiMarks = () => ({
+        revealSurfaceRoots: document.querySelectorAll('.overview-ascii-reveal[data-ascii="surface"]').length,
+        surfacesInReveals: document.querySelectorAll('.overview-ascii-reveal > [data-ascii="surface"]').length,
         summarySurface: document.querySelectorAll('.overview-summary[data-ascii="surface"]').length,
+        summaryInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-summary[data-ascii="surface"]').length,
         riskSurfaces: document.querySelectorAll('.overview-risk-card[data-ascii="surface"]').length,
+        riskInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-risk-card[data-ascii="surface"]').length,
         riskGauges: document.querySelectorAll('.overview-risk-card .overview-pressure-gauge[data-ascii="media"]').length,
         riskFades: document.querySelectorAll('.overview-risk-card [data-ascii="fade"]').length,
         endpointSurface: document.querySelectorAll('.overview-endpoint-scope[data-ascii="surface"]').length,
+        endpointInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-endpoint-scope[data-ascii="surface"]').length,
         endpointFades: document.querySelectorAll('.overview-endpoint-scope [data-ascii="fade"]').length,
-        inspectorSurfaces: document.querySelectorAll('.overview-inspector > [data-ascii="surface"]').length,
+        inspectorSurfaces: document.querySelectorAll('.overview-inspector .overview-inspector-surface[data-ascii="surface"]').length,
+        inspectorInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-inspector-surface[data-ascii="surface"]').length,
         inspectorGauges: document.querySelectorAll('.overview-inspector .overview-pressure-gauge[data-ascii="media"]').length,
         inspectorFades: document.querySelectorAll('.overview-inspector [data-ascii="fade"]').length,
         aiCardSurface: document.querySelectorAll('.overview-ai-card[data-ascii="surface"]').length,
         inventorySurface: document.querySelectorAll('.overview-inventory[data-ascii="surface"]').length,
+        inventoryInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-inventory[data-ascii="surface"]').length,
         inventoryFades: document.querySelectorAll('.overview-inventory [data-ascii="fade"]').length,
       });
       const loadingState = {
