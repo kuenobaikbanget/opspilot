@@ -24,6 +24,13 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
+  --ascii-surface: var(--color-surface);
+}
+
+/* The inspector card itself stays sticky; the reveal surface wraps its content inside. */
+.overview-inspector-surface {
+  min-width: 0;
+  --ascii-surface: var(--color-surface);
 }
 
 .overview-summary {
@@ -479,6 +486,7 @@
   min-width: 0;
   padding-top: var(--space-5);
   border-top: 1px solid var(--color-border);
+  --ascii-surface: var(--color-canvas);
 }
 
 .overview-inventory .overview-section-head {
