@@ -3,7 +3,7 @@
 import type { AgentInstallConfig, HostList } from "@opspilot/contracts";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { buildAgentInstallCommand } from "../lib/agent-install";
-import { AsciiLoading } from "./ascii-card-reveal";
+import { AsciiCardSkeleton, AsciiLoading } from "./ascii-card-reveal";
 import { Button, ButtonLink, Field, Notice, Select } from "./ui";
 
 type Props = {
@@ -66,7 +66,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
   const [generationError, setGenerationError] = useState("");
   const [copyStatus, setCopyStatus] = useState<CopyStatus>("idle");
   const [commandExpired, setCommandExpired] = useState(false);
-  const [generated, setGenerated] = useState(false);
+  const [installBaseline, setInstallBaseline] = useState<number | null>(null);
   const [selectedHostId, setSelectedHostId] = useState("");
   const [verifyAfter, setVerifyAfter] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now);
@@ -153,8 +153,9 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
   }, [step]);
 
   async function generateCommand() {
-    if (!pageActive.current || step !== 1 || installConfig.status !== "ready" || tokenRequest.current) return;
+    if (!pageActive.current || installConfig.status !== "ready" || tokenRequest.current) return;
     clearCommand();
+    setInstallBaseline(null);
     const current = generation.current;
     const controller = new AbortController();
     tokenRequest.current = controller;
@@ -172,7 +173,8 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
       const next = { text: buildAgentInstallCommand(installConfig.value, result.token), expires };
       commandRef.current = next;
       setCommand(next);
-      setGenerated(true);
+      const observed = Date.parse(fleet?.observed_at ?? "");
+      setInstallBaseline(Number.isFinite(observed) ? observed : startedAt);
     } catch (error) {
       if (generation.current !== current) return;
       if (error instanceof UnauthorizedError) unauthorized();
@@ -209,7 +211,8 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
 
   function goTo(next: Step) {
     if (next === step) return;
-    clearCommand();
+    if (next === 1) void generateCommand();
+    else clearCommand();
     setStep(next);
     setSelectedHostId("");
     if (next === 2) {
@@ -226,6 +229,8 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
   const fleetCurrent = !fleetError && Number.isFinite(observedAt) && now - observedAt <= staleAfter
     && (verifyAfter === null || observedAt > verifyAfter);
   const selectedHost = fleet?.hosts.find(host => host.id === selectedHostId);
+  // A new enrollment is a cue to verify, not proof it used this command.
+  const newHostListed = installBaseline !== null && fleet?.hosts.some(host => Date.parse(host.created_at) > installBaseline);
   const sampledAt = Date.parse(selectedHost?.sampled_at ?? "");
   const verificationReason = fleetError ? "Fleet data is unavailable. Refresh the fleet to continue."
     : !fleetCurrent ? "Waiting for a current fleet observation."
@@ -300,7 +305,6 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                     <dl className="onboarding-details">
                       <div><dt>Hub address</dt><dd>{installConfig.value.hubUrl}</dd></div>
                       <div><dt>Pinned release</dt><dd>{installConfig.value.version}</dd></div>
-                      <div><dt>Release repository</dt><dd>{installConfig.value.repository}</dd></div>
                     </dl>
                   )}
                   <div className="onboarding-actions">
@@ -313,12 +317,12 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
               {active && index === 1 && (
                 <div className="onboarding-step-body">
                   <p>{loopback
-                    ? "Run the command in Bash from the root of your OpsPilot checkout as a regular user. The verified agent runs in the foreground. Ctrl+C stops it and removes its temporary local state."
-                    : "Open Bash on the intended server, then generate, copy, and run the command there. The installer verifies the pinned release archive and starts a non-root systemd service."}</p>
+                    ? "Run the command in Bash from the root of your OpsPilot checkout as a regular user. Keep the agent running while you verify. Ctrl+C stops it and removes its temporary local state."
+                    : "Copy the command and run it in Bash on the intended server. The installer verifies the pinned release archive and starts a non-root systemd service."}</p>
                   {installConfig.status === "ready" && (
                     <dl className="onboarding-details">
                       <div><dt>Hub address</dt><dd>{installConfig.value.hubUrl}</dd></div>
-                      <div><dt>Pinned release</dt><dd>{installConfig.value.version} · {installConfig.value.repository}</dd></div>
+                      <div><dt>Pinned release</dt><dd>{installConfig.value.version}</dd></div>
                     </dl>
                   )}
                   <div className="onboarding-terminal">
@@ -329,21 +333,30 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                     {command ? (
                       <pre tabIndex={0} aria-label="Install command"><code>{command.text}</code></pre>
                     ) : (
-                      <p id={`${id}-command-status`} role="status">{generating ? "Generating a one-time install command…" : commandExpired ? "The command display timer ended. Generate a new one if installation did not finish." : "Generate a one-time install command to copy it."}</p>
+                      <p id={`${id}-command-status`} role="status">{generating ? "Preparing your install command…" : commandExpired ? "Command expired. Generate another if you still need to install." : generationError ? "Install command unavailable." : "Install command hidden."}</p>
                     )}
                   </div>
-                  {command && <p className="onboarding-caption">Use this command once, before approximately <time dateTime={new Date(command.expires).toISOString()}>{new Date(command.expires).toLocaleTimeString()}</time>. It contains a secret that may remain in your clipboard and shell history. Hiding it does not revoke its token or clear those copies.</p>}
+                  {command && <p className="onboarding-caption">Use once before approximately <time dateTime={new Date(command.expires).toISOString()}>{new Date(command.expires).toLocaleTimeString()}</time>. Hiding or regenerating the command won’t revoke this token or clear it from your clipboard or shell history.</p>}
                   <div className="onboarding-inline-actions">
-                    <Button size="sm" variant={command ? "secondary" : "primary"} loading={generating} disabled={installConfig.status !== "ready"} onClick={command ? clearCommand : () => void generateCommand()}>{command ? "Hide command" : "Generate install command"}</Button>
+                    <Button size="sm" loading={generating} disabled={installConfig.status !== "ready"} onClick={() => void generateCommand()}>{generationError ? "Retry command" : "Regenerate command"}</Button>
+                    {command && <Button size="sm" onClick={clearCommand}>Hide command</Button>}
                     {copyStatus === "copied" && <span className="onboarding-caption" role="status">Install command copied.</span>}
                   </div>
                   {generationError && <Notice tone="danger" role="alert">{generationError}. Try generating the install command again.</Notice>}
                   {copyStatus === "failed" && <Notice tone="warning" role="alert">Clipboard unavailable. Select and copy the install command manually.</Notice>}
+                  {installBaseline !== null && (
+                    <div className="onboarding-contact-status" role="status">
+                      {!fleetError && !newHostListed && !commandExpired && <AsciiCardSkeleton as="span" lines={1} widths={["100%"]} aria-hidden="true" />}
+                      <span>{fleetError ? "Can’t check for new agents. Continue to verification to refresh the fleet."
+                        : newHostListed ? "A new host appeared in the fleet. Verify its hostname in the next step."
+                        : commandExpired ? "No new host observed. Check the installation or regenerate the command."
+                        : "Waiting for an agent to contact the Hub…"}</span>
+                    </div>
+                  )}
                   <div className="onboarding-actions">
                     <Button size="sm" onClick={() => goTo(0)}><Icon name="left" /> Back</Button>
-                    <Button variant={generated ? "primary" : "secondary"} size="sm" disabled={!generated || generating} aria-describedby={`${id}-continue-status`} onClick={() => goTo(2)}>Continue to verification <Icon name="right" /></Button>
+                    <Button variant="primary" size="sm" disabled={installBaseline === null || generating} onClick={() => goTo(2)}>Continue to verification <Icon name="right" /></Button>
                   </div>
-                  <p id={`${id}-continue-status`} className="onboarding-caption">{generated ? (loopback ? "Keep the agent running while you verify. Leaving this step hides the command; it does not revoke the token." : "Continue after the command finishes. Leaving this step hides the command; it does not revoke the token.") : "Generate and run the install command before continuing."}</p>
                 </div>
               )}
 

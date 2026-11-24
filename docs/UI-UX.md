@@ -111,7 +111,7 @@ Open and resolved queues share an inspector with host context, a measured eviden
 Simple FTS query, prior confirmed resolution list. A later UI should show which previous case was retrieved, how similar, and provenance/recency.
 
 ### Enrollment
-`Connect server` reviews pinned installation configuration, generates a one-time command, then verifies real connectivity and telemetry for the operator-selected host. The host list does not link IDs to token issuance. Expiry and leaving the install step clear the visible command but do not revoke the token or erase shell history/clipboard copies.
+`Connect server` reviews the Hub address and pinned release. Entering **Install agent** prepares one command automatically; **Regenerate command** requests another. An ASCII indicator waits for a new enrollment in the polled fleet. A new host is a prompt to verify, not proof that it used this command. The operator selects the host and checks its connectivity and fresh telemetry. Expiry and leaving the install step clear the visible command but do not revoke the token or erase shell history/clipboard copies.
 
 ### Provider settings
 Manage stored provider connections and run explicit synthetic connection tests. Stored keys are never returned to Web. Opening settings or inspecting a host does not call a model.
