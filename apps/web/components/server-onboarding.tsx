@@ -3,7 +3,7 @@
 import type { AgentInstallConfig, HostList } from "@opspilot/contracts";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { buildAgentInstallCommand } from "../lib/agent-install";
-import { AsciiCardSkeleton, AsciiLoading } from "./ascii-card-reveal";
+import { AsciiLoading, usePrefersReducedMotion } from "./ascii-card-reveal";
 import { Button, ButtonLink, Field, Notice, Select } from "./ui";
 
 type Props = {
@@ -54,6 +54,28 @@ function Icon({ name }: { name: "left" | "right" | "check" | "complete" | "lock"
       {name === "lock" && <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2" /></>}
       {name === "copy" && <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></>}
     </svg>
+  );
+}
+
+const brailleFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
+/** Inline single-character braille spinner for terminal-style waiting states. */
+function BrailleSpinner() {
+  const reducedMotion = usePrefersReducedMotion();
+  const [frame, setFrame] = useState(0);
+
+  useEffect(() => {
+    if (reducedMotion) return;
+    const timer = window.setInterval(() => {
+      setFrame(current => (current + 1) % brailleFrames.length);
+    }, 90);
+    return () => window.clearInterval(timer);
+  }, [reducedMotion]);
+
+  return (
+    <span className="onboarding-contact-spinner" aria-hidden="true">
+      {brailleFrames[reducedMotion ? 0 : frame]}
+    </span>
   );
 }
 
@@ -333,20 +355,19 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                     {command ? (
                       <pre tabIndex={0} aria-label="Install command"><code>{command.text}</code></pre>
                     ) : (
-                      <p id={`${id}-command-status`} role="status">{generating ? "Preparing your install command…" : commandExpired ? "Command expired. Generate another if you still need to install." : generationError ? "Install command unavailable." : "Install command hidden."}</p>
+                      <p id={`${id}-command-status`} role="status">{generating ? "Preparing your install command…" : commandExpired ? "Command expired. Generate another if you still need to install." : generationError ? "Install command unavailable." : "Install command not generated yet."}</p>
                     )}
                   </div>
-                  {command && <p className="onboarding-caption">Use once before approximately <time dateTime={new Date(command.expires).toISOString()}>{new Date(command.expires).toLocaleTimeString()}</time>. Hiding or regenerating the command won’t revoke this token or clear it from your clipboard or shell history.</p>}
+                  {command && <p className="onboarding-caption">Use once before approximately <time dateTime={new Date(command.expires).toISOString()}>{new Date(command.expires).toLocaleTimeString()}</time>. Regenerating the command won’t revoke this token or clear it from your clipboard or shell history.</p>}
                   <div className="onboarding-inline-actions">
                     <Button size="sm" loading={generating} disabled={installConfig.status !== "ready"} onClick={() => void generateCommand()}>{generationError ? "Retry command" : "Regenerate command"}</Button>
-                    {command && <Button size="sm" onClick={clearCommand}>Hide command</Button>}
                     {copyStatus === "copied" && <span className="onboarding-caption" role="status">Install command copied.</span>}
                   </div>
                   {generationError && <Notice tone="danger" role="alert">{generationError}. Try generating the install command again.</Notice>}
                   {copyStatus === "failed" && <Notice tone="warning" role="alert">Clipboard unavailable. Select and copy the install command manually.</Notice>}
                   {installBaseline !== null && (
-                    <div className="onboarding-contact-status" role="status">
-                      {!fleetError && !newHostListed && !commandExpired && <AsciiCardSkeleton as="span" lines={1} widths={["100%"]} aria-hidden="true" />}
+                    <div className="onboarding-contact-status" id={`${id}-contact-status`} role="status">
+                      {!fleetError && !newHostListed && !commandExpired && <BrailleSpinner />}
                       <span>{fleetError ? "Can’t check for new agents. Continue to verification to refresh the fleet."
                         : newHostListed ? "A new host appeared in the fleet. Verify its hostname in the next step."
                         : commandExpired ? "No new host observed. Check the installation or regenerate the command."
@@ -355,7 +376,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                   )}
                   <div className="onboarding-actions">
                     <Button size="sm" onClick={() => goTo(0)}><Icon name="left" /> Back</Button>
-                    <Button variant="primary" size="sm" disabled={installBaseline === null || generating} onClick={() => goTo(2)}>Continue to verification <Icon name="right" /></Button>
+                    <Button variant="primary" size="sm" disabled={installBaseline === null || generating} aria-describedby={installBaseline !== null ? `${id}-contact-status` : undefined} onClick={() => goTo(2)}>Continue to verification <Icon name="right" /></Button>
                   </div>
                 </div>
               )}

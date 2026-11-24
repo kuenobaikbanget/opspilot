@@ -249,9 +249,13 @@
   font-size: var(--text-sm);
 }
 
-.onboarding-contact-status > [aria-hidden] {
-  flex: 0 0 5ch;
-  overflow: hidden;
+.onboarding-contact-spinner {
+  flex: none;
+  width: 1ch;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  line-height: 1;
+  text-align: center;
 }
 
 .onboarding-actions {
