@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadHttpsAgentInstaller, readAgentInstallConfig } from "../apps/hub/src/agent-install";
@@ -105,6 +105,133 @@ exec "$@"
     expect(calls.filter(arg => arg === localScript)).toHaveLength(1);
     expect(calls.join(" ")).not.toContain(token);
     expect(error).not.toContain(token);
+    expect(result.stdout.toString()).toBe("");
+    expect(readdirSync(scratch)).toEqual([]);
+  });
+});
+
+describe("piped stdin execution (curl | bash -s -- --token ...)", () => {
+  test("a truncated piped script fails as a syntax error and executes nothing", () => {
+    const path = mkdtempSync(join(fixture, "pipe-truncated-"));
+    const scratch = join(path, "tmp");
+    const executed = join(path, "executed");
+    mkdirSync(scratch);
+    symlinkSync(bash, join(path, "bash"));
+    writeFileSync(join(path, "uname"), `#!/bin/sh\ntouch ${JSON.stringify(executed)}\necho Linux\n`, { mode: 0o755 });
+    const truncatedFile = join(path, "truncated.sh");
+    const cut = configured!.indexOf("main() {") + 400;
+    const truncated = configured!.slice(0, cut);
+    // The final `main "$@"` invocation lies beyond the truncation point, so Bash hits EOF mid-function.
+    expect(configured!.slice(cut)).toContain('main "$@"');
+    writeFileSync(truncatedFile, truncated);
+    // $0 of a piped `bash -s` is the shell name, not a readable script file.
+    const result = Bun.spawnSync([bash, "-c", 'exec bash -s -- --token "$0" < "$1"', token, truncatedFile], {
+      cwd: scratch, env: { PATH: path, TMPDIR: scratch }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000,
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toMatch(/syntax error|unexpected end of file/);
+    expect(result.stderr.toString()).not.toContain(token);
+    expect(result.stdout.toString()).toBe("");
+    expect(existsSync(executed)).toBe(false);
+    expect(readdirSync(scratch)).toEqual([]);
+  });
+});
+
+describe.skipIf(process.geteuid?.() === 0)("piped stdin privilege handoff", () => {
+  test.each(["denied", "not-root"])("serializes the piped script to private 0600 handoffs without leaking the token when sudo is %s", (scenario) => {
+    const path = mkdtempSync(join(fixture, "pipe-sudo-"));
+    const scratch = join(path, "tmp");
+    const recorded = join(path, "sudo calls");
+    const stdinCapture = join(path, "sudo stdin");
+    const piped = join(path, "piped.sh");
+    mkdirSync(scratch);
+    writeFileSync(piped, configured!, { mode: 0o600 });
+    writeFileSync(join(path, "uname"), '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n', { mode: 0o755 });
+    for (const tool of ["bash", "cat", "mktemp", "rm", "stat", "tail", "grep"]) symlinkSync(Bun.which(tool)!, join(path, tool));
+    writeFileSync(join(path, "sudo"), `#!${bash}
+set -eu
+printf '%s\\0' "$@" >> "$SUDO_CALLS"
+cat > "$STDIN_CAPTURE"
+[[ "$1 $2 $3" == '-u root --' ]] || exit 95
+script=\${@: -2:1}
+handoff=\${!#}
+[[ "$script" == "$TMPDIR/"* && "$(stat -c %a "$script")" == 600 ]] || exit 97
+[[ "$handoff" == "$TMPDIR/"* && "$(stat -c %a "$handoff")" == 600 ]] || exit 98
+[[ $(<"$handoff") == "$EXPECTED_TOKEN" ]] || exit 99
+grep -q '^hub_url=https://hub.example version=v1.2.3 repository=kuenobaikbanget/opspilot$' "$script" || exit 101
+grep -q -- '-euo pipefail' "$script" || exit 102
+[[ "$(tail -n 1 "$script")" == 'main "$@"' ]] || exit 103
+if [[ "$CASE" == denied ]]; then
+  printf 'sudo: permission denied\\n' >&2
+  exit 1
+fi
+shift 3
+exec "$@"
+`, { mode: 0o755 });
+    const result = Bun.spawnSync([bash, "-c", 'exec bash -s -- --token "$0" < "$1"', token, piped], {
+      cwd: scratch,
+      env: { PATH: path, TMPDIR: scratch, SUDO_CALLS: recorded, STDIN_CAPTURE: stdinCapture, EXPECTED_TOKEN: token, CASE: scenario },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000,
+    });
+    expect(result.exitCode).toBe(1);
+    const error = result.stderr.toString();
+    expect(error).toContain(scenario === "denied" ? "sudo: permission denied" : "sudo did not grant root privileges");
+    const calls = readFileSync(recorded, "utf8").split("\0");
+    expect(calls).not.toContain(piped);
+    expect(calls.join(" ")).not.toContain(token);
+    expect(readFileSync(stdinCapture, "utf8")).not.toContain(token);
+    expect(error).not.toContain(token);
+    expect(result.stdout.toString()).toBe("");
+    expect(readdirSync(scratch)).toEqual([]);
+  });
+
+  test.each(["absolute-bash", "cwd-bash-file"])("still serializes when $0 resolves to a readable file (%s)", (mode) => {
+    const path = mkdtempSync(join(fixture, `pipe-sudo-${mode}-`));
+    const scratch = join(path, "tmp");
+    const workDir = join(path, "work");
+    const recorded = join(path, "sudo calls");
+    const piped = join(path, "piped.sh");
+    const decoyBash = join(workDir, "bash");
+    mkdirSync(scratch);
+    mkdirSync(workDir);
+    writeFileSync(piped, configured!, { mode: 0o600 });
+    if (mode === "cwd-bash-file") {
+      writeFileSync(decoyBash, "#!/bin/sh\necho decoy-executed >&2\nexit 88\n", { mode: 0o644 });
+    }
+    writeFileSync(join(path, "uname"), '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n', { mode: 0o755 });
+    for (const tool of ["bash", "mktemp", "rm", "stat", "tail", "grep"]) symlinkSync(Bun.which(tool)!, join(path, tool));
+    writeFileSync(join(path, "sudo"), `#!${bash}
+set -eu
+printf '%s\\0' "$@" >> "$SUDO_CALLS"
+[[ "$1 $2 $3" == '-u root --' ]] || exit 95
+script=\${@: -2:1}
+handoff=\${!#}
+[[ "$script" == "$TMPDIR/"* && "$(stat -c %a "$script")" == 600 ]] || exit 97
+[[ "$handoff" == "$TMPDIR/"* && "$(stat -c %a "$handoff")" == 600 ]] || exit 98
+[[ $(<"$handoff") == "$EXPECTED_TOKEN" ]] || exit 99
+grep -q '^hub_url=https://hub.example version=v1.2.3 repository=kuenobaikbanget/opspilot$' "$script" || exit 101
+[[ "$(tail -n 1 "$script")" == 'main "$@"' ]] || exit 103
+printf 'sudo: permission denied\\n' >&2
+exit 1
+`, { mode: 0o755 });
+    const shellCmd = mode === "absolute-bash"
+      ? `exec ${JSON.stringify(bash)} -s -- --token "$0" < "$1"`
+      : 'exec bash -s -- --token "$0" < "$1"';
+    const result = Bun.spawnSync([bash, "-c", shellCmd, token, piped], {
+      cwd: workDir,
+      env: { PATH: path, TMPDIR: scratch, SUDO_CALLS: recorded, EXPECTED_TOKEN: token },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000,
+    });
+    expect(result.exitCode).toBe(1);
+    const error = result.stderr.toString();
+    expect(error).toContain("sudo: permission denied");
+    expect(error).not.toContain("decoy-executed");
+    expect(error).not.toContain(token);
+    const calls = readFileSync(recorded, "utf8").split("\0");
+    expect(calls).not.toContain(bash);
+    expect(calls).not.toContain(decoyBash);
+    expect(calls).not.toContain(piped);
+    expect(calls.join(" ")).not.toContain(token);
     expect(result.stdout.toString()).toBe("");
     expect(readdirSync(scratch)).toEqual([]);
   });
