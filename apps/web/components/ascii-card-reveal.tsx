@@ -3,7 +3,9 @@
 import {
   createElement,
   forwardRef,
+  useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useSyncExternalStore,
 } from "react";
@@ -17,6 +19,8 @@ import {
 
 // The library uses one frame clock. Keep every skeleton variant on the same period.
 const skeletonTiming = { "--ars-speed": "1.8s" } as React.CSSProperties;
+
+const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 const canvasSupportCache = new WeakMap<Document, boolean>();
@@ -121,6 +125,42 @@ export const AsciiCardReveal = forwardRef<AsciiRevealHandle, AsciiCardRevealProp
     const canAnimate = useCanAnimateAscii();
     const revealRef = useRef<AsciiRevealHandle | null>(null);
     const fallbackRef = useRef<HTMLElement | null>(null);
+    const onRevealCompleteRef = useRef(onRevealComplete);
+    onRevealCompleteRef.current = onRevealComplete;
+    // Manage lazy + loading in one layout effect so AsciiReveal never runs an unguarded
+    // loading-transition reveal or paints offscreen content before hide({ instant: true }).
+    const manageLazyLifecycle = canAnimate && lazy && revealOnMount;
+
+    useIsomorphicLayoutEffect(() => {
+      if (!manageLazyLifecycle) return;
+      const handle = revealRef.current;
+      const el = handle?.element;
+      if (!handle || !el) return;
+
+      if (loading) {
+        void handle.hide({ instant: true });
+        return;
+      }
+
+      const rect = el.getBoundingClientRect();
+      const inViewport = rect.top < window.innerHeight * 1.02 && rect.bottom > 0;
+      if (typeof IntersectionObserver !== "function" || inViewport) {
+        void handle.reveal().then(() => onRevealCompleteRef.current?.());
+        return;
+      }
+
+      void handle.hide({ instant: true });
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (!entries.some((entry) => entry.isIntersecting)) return;
+          observer.disconnect();
+          void handle.reveal().then(() => onRevealCompleteRef.current?.());
+        },
+        { rootMargin: "0px 0px -6% 0px", threshold: 0.01 },
+      );
+      observer.observe(el);
+      return () => observer.disconnect();
+    }, [manageLazyLifecycle, loading]);
 
     useImperativeHandle(
       forwardedRef,
@@ -158,15 +198,16 @@ export const AsciiCardReveal = forwardRef<AsciiRevealHandle, AsciiCardRevealProp
         duration={duration}
         origin={origin}
         selector={selector}
-        revealOnMount={revealOnMount}
+        revealOnMount={manageLazyLifecycle ? false : revealOnMount}
         revealOnHydrate={revealOnHydrate}
-        loading={loading}
+        loading={manageLazyLifecycle ? undefined : loading}
         shimmer={shimmer}
         mascot={mascot}
-        lazy={lazy}
+        lazy={manageLazyLifecycle ? false : lazy}
         fallback={fallback}
         onRevealComplete={onRevealComplete}
         className={classes}
+        aria-busy={loading ? true : domProps["aria-busy"]}
         {...domProps}
       >
         {children}

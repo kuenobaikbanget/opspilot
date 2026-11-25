@@ -339,6 +339,28 @@ try {
       break;
     }
     case "ascii-loading-transition": {
+      const asciiMarks = () => ({
+        revealSurfaceRoots: document.querySelectorAll('.overview-ascii-reveal[data-ascii="surface"]').length,
+        surfacesInReveals: document.querySelectorAll('.overview-ascii-reveal > [data-ascii="surface"]').length,
+        summarySurface: document.querySelectorAll('.overview-summary[data-ascii="surface"]').length,
+        summaryInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-summary[data-ascii="surface"]').length,
+        riskSurfaces: document.querySelectorAll('.overview-risk-card[data-ascii="surface"]').length,
+        riskInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-risk-card[data-ascii="surface"]').length,
+        riskGauges: document.querySelectorAll('.overview-risk-card .overview-pressure-gauge[data-ascii="media"]').length,
+        riskFades: document.querySelectorAll('.overview-risk-card [data-ascii="fade"]').length,
+        endpointSurface: document.querySelectorAll('.overview-endpoint-scope[data-ascii="surface"]').length,
+        endpointInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-endpoint-scope[data-ascii="surface"]').length,
+        endpointFades: document.querySelectorAll('.overview-endpoint-scope [data-ascii="fade"]').length,
+        inspectorSurfaces: document.querySelectorAll('.overview-inspector .overview-inspector-surface[data-ascii="surface"]').length,
+        inspectorInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-inspector-surface[data-ascii="surface"]').length,
+        inspectorGauges: document.querySelectorAll('.overview-inspector .overview-pressure-gauge[data-ascii="media"]').length,
+        inspectorFades: document.querySelectorAll('.overview-inspector [data-ascii="fade"]').length,
+        aiCardSurface: document.querySelectorAll('.overview-ai-card[data-ascii="surface"]').length,
+        inventoryHeadInReveal: document.querySelectorAll('.overview-inventory .overview-ascii-reveal > .overview-section-head[data-ascii="surface"]').length,
+        inventoryRowSurfaces: document.querySelectorAll('.overview-inventory-row[data-ascii="surface"]').length,
+        inventoryRowInReveal: document.querySelectorAll('.overview-inventory-item.overview-ascii-reveal > .overview-inventory-row[data-ascii="surface"]').length,
+        inventoryFades: document.querySelectorAll('.overview-inventory [data-ascii="fade"]').length,
+      });
       const loadingState = {
         summarySkeletons: document.querySelectorAll(".overview-summary [data-ascii-skeleton]").length,
         riskSkeletons: document.querySelectorAll(".overview-watchlist [data-ascii-skeleton]").length,
@@ -348,6 +370,7 @@ try {
         inventorySkeletons: document.querySelectorAll(".overview-inventory [data-ascii-skeleton]").length,
         animatedSkeletons: document.querySelectorAll("[data-ars-animate]").length,
         overlays: document.querySelectorAll(".ar-overlay").length,
+        asciiMarks: asciiMarks(),
       };
       await act(async () => {
         deferredHosts?.resolve(Response.json({
@@ -367,6 +390,7 @@ try {
         serviceStatus: document.querySelector(".overview-risk-services")?.textContent,
         advisoryBrailleSkeletons: document.querySelectorAll('[aria-label="Advisory AI analysis"] [data-ascii-skeleton].ars-braille').length,
         advisoryStatus: document.querySelector('[aria-label="Advisory AI analysis"]')?.textContent,
+        asciiMarks: asciiMarks(),
       };
       await act(async () => {
         deferredHostServices?.resolve(Response.json({
@@ -404,6 +428,7 @@ try {
         remainingSkeletons: document.querySelectorAll("[data-ascii-skeleton]").length,
         riskServices: document.querySelector(".overview-risk-services")?.textContent,
         advisory: document.querySelector('[aria-label="Advisory AI analysis"]')?.textContent,
+        asciiMarks: asciiMarks(),
       };
       console.log(JSON.stringify({ loadingState, midState, loadedState }));
       break;
