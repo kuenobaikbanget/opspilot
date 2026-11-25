@@ -14,7 +14,7 @@ compare_existing() {
   fi
 }
 
-# A piped invocation has no readable $0, so serialize the installer for sudo.
+# A piped invocation has no script source file, so serialize the installer for sudo.
 write_handoff_script() {
   printf '%s\n' '#!/usr/bin/env bash'
   printf 'hub_url=%q version=%q repository=%q\n' "$hub_url" "$version" "$repository"
@@ -50,10 +50,11 @@ main() {
     trap 'exit 129' HUP
     printf '%s\n' "$token" > "$token_file"
     unset token
-    if [[ -f "$0" && -r "$0" ]]; then
-      script=$0
+    source_script=${BASH_SOURCE[1]:-}
+    if [[ -n "$source_script" && -f "$source_script" && -r "$source_script" ]]; then
+      script=$source_script
     else
-      # curl | bash -s: $0 is the shell name, not the installer file.
+      # curl | bash -s: stdin has no script source file, so serialize it.
       handoff_script=$(mktemp) || fail 'Could not create a private sudo script handoff file'
       write_handoff_script > "$handoff_script" || fail 'Could not write the private sudo script handoff file'
       script=$handoff_script

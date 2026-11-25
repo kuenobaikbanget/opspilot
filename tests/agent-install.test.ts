@@ -108,12 +108,12 @@ SCRIPT
       const result = Bun.spawnSync([Bun.which("bash")!, "-c", buildAgentInstallCommand(config, malicious)], { cwd: dir, env, stdout: "pipe", stderr: "pipe" });
       expect(result.exitCode).toBe(0);
       const curlArgs = readFileSync(env.CURL_ARGS, "utf8").split("\0").slice(0, -1);
-      expect(curlArgs).toEqual(["-fsSL", "--proto", "=https", config.installerUrl]);
+      expect(curlArgs).toEqual(["-q", "-fsSL", "--proto", "=https", "--connect-timeout", "10", "-m", "120", config.installerUrl]);
       expect(readFileSync(env.ARGS_CAPTURE, "utf8").split("\0").slice(0, -1)).toEqual(["--token", malicious]);
       expect(existsSync(marker)).toBe(false);
       const httpsConfig = readAgentInstallConfig(settings)!;
       const command = buildAgentInstallCommand(httpsConfig, "t".repeat(43));
-      expect(command).toBe(`curl -fsSL --proto '=https' 'https://hub.example/api/agents/install.sh' | bash -s -- --token '${"t".repeat(43)}'`);
+      expect(command).toBe(`curl -q -fsSL --proto '=https' --connect-timeout 10 -m 120 'https://hub.example/api/agents/install.sh' | bash -s -- --token '${"t".repeat(43)}'`);
       expect(command).not.toMatch(/[\r\n]/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -156,6 +156,7 @@ SCRIPT
       body = truncated;
       mkdirSync(runDir);
       mkdirSync(bin);
+      writeFileSync(join(dir, ".curlrc"), 'proto-redir = "=http,https"\n');
       writeFileSync(join(bin, "uname"), `#!/bin/sh\ntouch ${JSON.stringify(executed)}\necho Linux\n`, { mode: 0o755 });
       writeFileSync(join(dir, "curl"), `#!/bin/bash
 exec ${JSON.stringify(Bun.which("curl"))} "$@" --cacert ${JSON.stringify(tlsFixture("ca.pem"))} \\
@@ -170,7 +171,7 @@ exec ${JSON.stringify(Bun.which("curl"))} "$@" --cacert ${JSON.stringify(tlsFixt
         expect(command).not.toMatch(/[\r\n]/);
         // pipefail keeps curl's refusal visible even though Bash exits before running anything.
         const result = Bun.spawn(["bash", "-c", `set -o pipefail\n${command}`], {
-          env: { PATH: `${bin}:${dir}:/usr/bin:/bin`, TMPDIR: runDir },
+          env: { PATH: `${bin}:${dir}:/usr/bin:/bin`, HOME: dir, TMPDIR: runDir },
           stdout: "pipe", stderr: "pipe", timeout: 5000,
         });
         const stderr = await new Response(result.stderr).text();

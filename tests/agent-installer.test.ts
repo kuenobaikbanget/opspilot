@@ -184,4 +184,55 @@ exec "$@"
     expect(result.stdout.toString()).toBe("");
     expect(readdirSync(scratch)).toEqual([]);
   });
+
+  test.each(["absolute-bash", "cwd-bash-file"])("still serializes when $0 resolves to a readable file (%s)", (mode) => {
+    const path = mkdtempSync(join(fixture, `pipe-sudo-${mode}-`));
+    const scratch = join(path, "tmp");
+    const workDir = join(path, "work");
+    const recorded = join(path, "sudo calls");
+    const piped = join(path, "piped.sh");
+    const decoyBash = join(workDir, "bash");
+    mkdirSync(scratch);
+    mkdirSync(workDir);
+    writeFileSync(piped, configured!, { mode: 0o600 });
+    if (mode === "cwd-bash-file") {
+      writeFileSync(decoyBash, "#!/bin/sh\necho decoy-executed >&2\nexit 88\n", { mode: 0o644 });
+    }
+    writeFileSync(join(path, "uname"), '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n', { mode: 0o755 });
+    for (const tool of ["bash", "mktemp", "rm", "stat", "tail", "grep"]) symlinkSync(Bun.which(tool)!, join(path, tool));
+    writeFileSync(join(path, "sudo"), `#!${bash}
+set -eu
+printf '%s\\0' "$@" >> "$SUDO_CALLS"
+[[ "$1 $2 $3" == '-u root --' ]] || exit 95
+script=\${@: -2:1}
+handoff=\${!#}
+[[ "$script" == "$TMPDIR/"* && "$(stat -c %a "$script")" == 600 ]] || exit 97
+[[ "$handoff" == "$TMPDIR/"* && "$(stat -c %a "$handoff")" == 600 ]] || exit 98
+[[ $(<"$handoff") == "$EXPECTED_TOKEN" ]] || exit 99
+grep -q '^hub_url=https://hub.example version=v1.2.3 repository=kuenobaikbanget/opspilot$' "$script" || exit 101
+[[ "$(tail -n 1 "$script")" == 'main "$@"' ]] || exit 103
+printf 'sudo: permission denied\\n' >&2
+exit 1
+`, { mode: 0o755 });
+    const shellCmd = mode === "absolute-bash"
+      ? `exec ${JSON.stringify(bash)} -s -- --token "$0" < "$1"`
+      : 'exec bash -s -- --token "$0" < "$1"';
+    const result = Bun.spawnSync([bash, "-c", shellCmd, token, piped], {
+      cwd: workDir,
+      env: { PATH: path, TMPDIR: scratch, SUDO_CALLS: recorded, EXPECTED_TOKEN: token },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000,
+    });
+    expect(result.exitCode).toBe(1);
+    const error = result.stderr.toString();
+    expect(error).toContain("sudo: permission denied");
+    expect(error).not.toContain("decoy-executed");
+    expect(error).not.toContain(token);
+    const calls = readFileSync(recorded, "utf8").split("\0");
+    expect(calls).not.toContain(bash);
+    expect(calls).not.toContain(decoyBash);
+    expect(calls).not.toContain(piped);
+    expect(calls.join(" ")).not.toContain(token);
+    expect(result.stdout.toString()).toBe("");
+    expect(readdirSync(scratch)).toEqual([]);
+  });
 });

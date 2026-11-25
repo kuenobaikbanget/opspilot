@@ -9,6 +9,6 @@ export function buildAgentInstallCommand(config: AgentInstallConfig, token: stri
   ${quote(config.hubUrl)} ${quote(config.version)} ${quote(config.repository)} \\
   ${quote(token)}`;
   }
-  // curl's --proto allowlist also applies to redirects.
-  return `curl -fsSL --proto '=https' ${quote(config.installerUrl)} | bash -s -- --token ${quote(token)}`;
+  // curl's -q must come first to ignore .curlrc; --proto also applies to redirects.
+  return `curl -q -fsSL --proto '=https' --connect-timeout 10 -m 120 ${quote(config.installerUrl)} | bash -s -- --token ${quote(token)}`;
 }
