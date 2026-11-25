@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readAgentInstallConfig } from "../apps/hub/src/agent-install";
+import { loadHttpsAgentInstaller, readAgentInstallConfig } from "../apps/hub/src/agent-install";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:https";
@@ -85,7 +85,7 @@ describe("agent installation configuration", () => {
 });
 
 describe("generated command preserves literal arguments", () => {
-  test("downloads completely before Bash and passes only the literal token", () => {
+  test("pipes the configured HTTPS installer to Bash and passes only the literal token", () => {
     const dir = mkdtempSync(join(tmpdir(), "opspilot-command-"));
     try {
       const marker = join(dir, "injected");
@@ -93,35 +93,28 @@ describe("generated command preserves literal arguments", () => {
       const config: AgentInstallConfig = {
         mode: "https",
         hubUrl: `https://hub.example/${malicious}`,
-        installerUrl: "https://hub.example/api/agents/install.sh",
+        installerUrl: `https://hub.example/api/agents/install.sh${malicious}`,
         version: `v1.2.3-${malicious}`,
         repository: `owner/repo${malicious}`,
       };
       writeFileSync(join(dir, "sudo"), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       writeFileSync(join(dir, "curl"), `#!/bin/sh
 printf '%s\\0' "$@" > "$CURL_ARGS"
-while [ "$#" -gt 0 ]; do
- if [ "$1" = -o ]; then shift; file=$1; fi
- shift
-done
-printf "%s" "$file" > "$FILE_CAPTURE"
-cat > "$file" <<'SCRIPT'
-#!/bin/bash
+cat <<'SCRIPT'
 printf '%s\\0' "$@" > "$ARGS_CAPTURE"
 SCRIPT
 `, { mode: 0o755 });
-      const env = {
-        PATH: `${dir}:/usr/bin:/bin`, TMPDIR: dir, CURL_ARGS: join(dir, "curl-args"),
-        FILE_CAPTURE: join(dir, "file"), ARGS_CAPTURE: join(dir, "args"),
-      };
+      const env = { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: dir, CURL_ARGS: join(dir, "curl-args"), ARGS_CAPTURE: join(dir, "args") };
       const result = Bun.spawnSync([Bun.which("bash")!, "-c", buildAgentInstallCommand(config, malicious)], { cwd: dir, env, stdout: "pipe", stderr: "pipe" });
       expect(result.exitCode).toBe(0);
       const curlArgs = readFileSync(env.CURL_ARGS, "utf8").split("\0").slice(0, -1);
-      expect(curlArgs.at(-1)).toBe(config.installerUrl);
-      expect(curlArgs.join(" ")).not.toContain(malicious);
+      expect(curlArgs).toEqual(["-fsSL", "--proto", "=https", config.installerUrl]);
       expect(readFileSync(env.ARGS_CAPTURE, "utf8").split("\0").slice(0, -1)).toEqual(["--token", malicious]);
       expect(existsSync(marker)).toBe(false);
-      expect(existsSync(readFileSync(env.FILE_CAPTURE, "utf8"))).toBe(false);
+      const httpsConfig = readAgentInstallConfig(settings)!;
+      const command = buildAgentInstallCommand(httpsConfig, "t".repeat(43));
+      expect(command).toBe(`curl -fsSL --proto '=https' 'https://hub.example/api/agents/install.sh' | bash -s -- --token '${"t".repeat(43)}'`);
+      expect(command).not.toMatch(/[\r\n]/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -129,20 +122,21 @@ SCRIPT
   test("real curl refuses partial TLS transfers, HTTP URLs, and TLS downgrades", async () => {
     const dir = mkdtempSync(join(tmpdir(), "opspilot-command-failure-"));
     const runDir = join(dir, "run");
+    const bin = join(dir, "bin");
     const executed = join(dir, "executed");
-    const partial = 'touch "$EXECUTED"\n';
+    let body = "";
     let httpRequests = 0;
     let tlsRequests = 0;
     const http = Bun.serve({
       hostname: "127.0.0.1", port: 0,
-      fetch() { httpRequests++; return new Response(partial); },
+      fetch() { httpRequests++; return new Response("unexpected"); },
     });
     const tls = createServer({ key: readFileSync(tlsFixture("server-key.pem")), cert: readFileSync(tlsFixture("server.pem")) }, (req, res) => {
       tlsRequests++;
       if (req.url === "/downgrade") {
         res.writeHead(302, { Location: http.url.href }).end();
       } else {
-        res.writeHead(200, { "Content-Length": partial.length + 100, Connection: "close" }).end(partial);
+        res.writeHead(200, { "Content-Length": body.length + 100, Connection: "close" }).end(body);
       }
     });
     try {
@@ -150,26 +144,37 @@ SCRIPT
       const address = tls.address();
       if (!address || typeof address === "string") throw new Error("TLS fixture did not bind");
       const { port } = address;
-      mkdirSync(runDir);
-      writeFileSync(join(dir, "curl"), `#!/bin/bash
-exec ${JSON.stringify(Bun.which("curl"))} "$1" --cacert ${JSON.stringify(tlsFixture("ca.pem"))} \\
-  --resolve provider.example:${port}:127.0.0.1 "\${@:2}"
-`, { mode: 0o755 });
       const config = readAgentInstallConfig({ ...settings, OPSPILOT_PUBLIC_HUB_URL: `https://provider.example:${port}` });
       if (config?.mode !== "https") throw new Error("Fixture requires HTTPS installation metadata");
-      for (const [installerUrl, exitCode, error] of [
-        [config.installerUrl, 18, /curl: \(18\)/],
-        [http.url.href, 1, /protocol.*http.*disabled/i],
-        [`${config.hubUrl}/downgrade`, 1, /protocol.*http.*disabled/i],
+      const configured = await loadHttpsAgentInstaller(config);
+      if (!configured) throw new Error("Fixture could not load the configured installer");
+      // A truncated stream must fail as a syntax error before any main() step runs.
+      const cut = configured.indexOf("main() {") + 400;
+      const truncated = configured.slice(0, cut);
+      // The final `main "$@"` invocation lies beyond the truncation point, so Bash hits EOF mid-function.
+      expect(configured.slice(cut)).toContain('main "$@"');
+      body = truncated;
+      mkdirSync(runDir);
+      mkdirSync(bin);
+      writeFileSync(join(bin, "uname"), `#!/bin/sh\ntouch ${JSON.stringify(executed)}\necho Linux\n`, { mode: 0o755 });
+      writeFileSync(join(dir, "curl"), `#!/bin/bash
+exec ${JSON.stringify(Bun.which("curl"))} "$@" --cacert ${JSON.stringify(tlsFixture("ca.pem"))} \\
+  --resolve provider.example:${port}:127.0.0.1
+`, { mode: 0o755 });
+      for (const [installerUrl, exitCode, errors] of [
+        [config.installerUrl, 2, [/curl: \(18\)/, /syntax error|unexpected end of file/]],
+        [http.url.href, 1, [/protocol.*http.*disabled/i]],
+        [`${config.hubUrl}/downgrade`, 1, [/protocol.*http.*disabled/i]],
       ] as const) {
         const command = buildAgentInstallCommand({ ...config, installerUrl }, "a".repeat(43));
         expect(command).not.toMatch(/[\r\n]/);
-        // An OR-list suppresses Bash errexit inside the pasted subshell; curl must still gate execution.
-        const result = Bun.spawn(["bash", "-c", `${command} || exit "$?"`], {
-          env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: runDir, EXECUTED: executed },
+        // pipefail keeps curl's refusal visible even though Bash exits before running anything.
+        const result = Bun.spawn(["bash", "-c", `set -o pipefail\n${command}`], {
+          env: { PATH: `${bin}:${dir}:/usr/bin:/bin`, TMPDIR: runDir },
           stdout: "pipe", stderr: "pipe", timeout: 5000,
         });
-        expect(await new Response(result.stderr).text()).toMatch(error);
+        const stderr = await new Response(result.stderr).text();
+        for (const error of errors) expect(stderr).toMatch(error);
         expect(await result.exited).toBe(exitCode);
         expect(existsSync(executed)).toBe(false);
         expect(readdirSync(runDir)).toEqual([]);
@@ -183,23 +188,21 @@ exec ${JSON.stringify(Bun.which("curl"))} "$1" --cacert ${JSON.stringify(tlsFixt
     }
   });
 
-  test.each(["HUP", "INT", "TERM"])("cleans up a download interrupted by SIG%s", (signal) => {
+  test.each(["HUP", "INT", "TERM"])("stops before executing anything when the stream is interrupted by SIG%s", (signal) => {
     const dir = mkdtempSync(join(tmpdir(), "opspilot-command-signal-"));
     const runDir = join(dir, "run");
     const executed = join(dir, "executed");
     try {
       mkdirSync(runDir);
       writeFileSync(join(dir, "curl"), `#!/bin/sh
-while [ "$1" != -o ]; do shift; done
-printf '%s\\n' 'touch "$EXECUTED"' > "$2"
-printf '%s\\n' "$2"
 kill -${signal} "$PPID" "$$"
 `, { mode: 0o755 });
-      const result = Bun.spawnSync(["bash", "-c", buildAgentInstallCommand(readAgentInstallConfig(settings)!, "a".repeat(43))], {
-        env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: runDir, EXECUTED: executed },
+      writeFileSync(join(dir, "uname"), `#!/bin/sh\ntouch ${JSON.stringify(executed)}\necho Linux\n`, { mode: 0o755 });
+      const result = Bun.spawnSync(["bash", "-c", `set -o pipefail\n${buildAgentInstallCommand(readAgentInstallConfig(settings)!, "a".repeat(43))}`], {
+        env: { PATH: `${dir}:/usr/bin:/bin`, TMPDIR: runDir },
         stdout: "pipe", stderr: "pipe", timeout: 5000,
       });
-      expect(result.stdout.toString().trim()).toStartWith(`${runDir}/`);
+      expect(result.stdout.toString()).toBe("");
       expect(result.exitCode).not.toBe(0);
       expect(existsSync(executed)).toBe(false);
       expect(readdirSync(runDir)).toEqual([]);
