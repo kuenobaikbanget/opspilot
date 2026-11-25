@@ -137,13 +137,13 @@ test("overview dashboard cards show ASCII skeletons while loading and clear clea
   expect(loadingState.animatedSkeletons).toBe(0);
   expect(loadingState.overlays).toBe(0);
   expect(loadingState.asciiMarks.revealSurfaceRoots).toBe(0);
-  expect(loadingState.asciiMarks.summarySurface).toBe(1);
-  expect(loadingState.asciiMarks.summaryInReveal).toBe(1);
-  expect(loadingState.asciiMarks.endpointSurface).toBe(1);
-  expect(loadingState.asciiMarks.endpointInReveal).toBe(1);
-  expect(loadingState.asciiMarks.inventoryHeadInReveal).toBe(1);
+  expect(loadingState.asciiMarks.summarySurface).toBe(0);
+  expect(loadingState.asciiMarks.summaryInReveal).toBe(0);
+  expect(loadingState.asciiMarks.endpointSurface).toBe(0);
+  expect(loadingState.asciiMarks.endpointInReveal).toBe(0);
+  expect(loadingState.asciiMarks.inventoryHeadInReveal).toBe(0);
   expect(loadingState.asciiMarks.inventoryRowSurfaces).toBe(0);
-  expect(loadingState.asciiMarks.surfacesInReveals).toBe(3);
+  expect(loadingState.asciiMarks.surfacesInReveals).toBe(0);
   expect(loadingState.asciiMarks.riskSurfaces).toBe(0);
   expect(loadingState.asciiMarks.inspectorSurfaces).toBe(0);
 
@@ -173,7 +173,7 @@ test("overview dashboard cards show ASCII skeletons while loading and clear clea
   expect(loadedState.advisory).toContain("Sustained worker load saturated CPU.");
   const marks = loadedState.asciiMarks;
   expect(marks.revealSurfaceRoots).toBe(0);
-  expect(marks.surfacesInReveals).toBe(7);
+  expect(marks.surfacesInReveals).toBe(6);
   expect(marks.summarySurface).toBe(1);
   expect(marks.summaryInReveal).toBe(1);
   expect(marks.riskSurfaces).toBe(1);

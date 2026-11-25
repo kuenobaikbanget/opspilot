@@ -5,6 +5,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useSyncExternalStore,
 } from "react";
@@ -18,6 +19,8 @@ import {
 
 // The library uses one frame clock. Keep every skeleton variant on the same period.
 const skeletonTiming = { "--ars-speed": "1.8s" } as React.CSSProperties;
+
+const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 const canvasSupportCache = new WeakMap<Document, boolean>();
@@ -124,13 +127,20 @@ export const AsciiCardReveal = forwardRef<AsciiRevealHandle, AsciiCardRevealProp
     const fallbackRef = useRef<HTMLElement | null>(null);
     const onRevealCompleteRef = useRef(onRevealComplete);
     onRevealCompleteRef.current = onRevealComplete;
-    const shouldObserveLazy = canAnimate && lazy && revealOnMount && !loading;
+    // Manage lazy + loading in one layout effect so AsciiReveal never runs an unguarded
+    // loading-transition reveal or paints offscreen content before hide({ instant: true }).
+    const manageLazyLifecycle = canAnimate && lazy && revealOnMount;
 
-    useEffect(() => {
-      if (!shouldObserveLazy) return;
+    useIsomorphicLayoutEffect(() => {
+      if (!manageLazyLifecycle) return;
       const handle = revealRef.current;
       const el = handle?.element;
       if (!handle || !el) return;
+
+      if (loading) {
+        void handle.hide({ instant: true });
+        return;
+      }
 
       const rect = el.getBoundingClientRect();
       const inViewport = rect.top < window.innerHeight * 1.02 && rect.bottom > 0;
@@ -150,7 +160,7 @@ export const AsciiCardReveal = forwardRef<AsciiRevealHandle, AsciiCardRevealProp
       );
       observer.observe(el);
       return () => observer.disconnect();
-    }, [shouldObserveLazy]);
+    }, [manageLazyLifecycle, loading]);
 
     useImperativeHandle(
       forwardedRef,
@@ -188,15 +198,16 @@ export const AsciiCardReveal = forwardRef<AsciiRevealHandle, AsciiCardRevealProp
         duration={duration}
         origin={origin}
         selector={selector}
-        revealOnMount={shouldObserveLazy ? false : revealOnMount}
+        revealOnMount={manageLazyLifecycle ? false : revealOnMount}
         revealOnHydrate={revealOnHydrate}
-        loading={loading}
+        loading={manageLazyLifecycle ? undefined : loading}
         shimmer={shimmer}
         mascot={mascot}
-        lazy={shouldObserveLazy ? false : lazy}
+        lazy={manageLazyLifecycle ? false : lazy}
         fallback={fallback}
         onRevealComplete={onRevealComplete}
         className={classes}
+        aria-busy={loading ? true : domProps["aria-busy"]}
         {...domProps}
       >
         {children}

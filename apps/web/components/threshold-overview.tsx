@@ -153,25 +153,29 @@ function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
           <PressureReading reading={reading} />
         </div>
         {/* Async service arrival decodes in its own reveal so it never resizes the card reveal above. */}
-        <AsciiCardReveal className="overview-risk-services" loading={!serviceInfo} revealOnMount={false} {...cardReveal}>
-          {!serviceInfo ? (
+        {!serviceInfo ? (
+          <div className="overview-risk-services">
             <AsciiLoading className="overview-service-skeleton" label="Service · Loading…" lines={1} widths={["72%"]} seed={11} />
-          ) : failed && !service ? (
-            <span className="overview-meta">Service · Unavailable</span>
-          ) : service ? (
-            <div className="overview-risk-service">
-              <span className="overview-meta">Service</span>
-              <strong>{service.name}</strong>
-              <Badge tone={fresh ? systemdStates[service.state].tone : "neutral"} dot data-ascii="fade">
-                {systemdStates[service.state].label}{fresh ? "" : " · Stale"}
-              </Badge>
-            </div>
-          ) : status?.report && status.report.status !== "observed" ? (
-            <span className="overview-meta">{systemdCollection[status.report.status]}</span>
-          ) : (
-            <span className="overview-meta">Service · Not reported</span>
-          )}
-        </AsciiCardReveal>
+          </div>
+        ) : (
+          <AsciiCardReveal className="overview-risk-services" revealOnMount={true} {...cardReveal}>
+            {failed && !service ? (
+              <span className="overview-meta">Service · Unavailable</span>
+            ) : service ? (
+              <div className="overview-risk-service">
+                <span className="overview-meta">Service</span>
+                <strong>{service.name}</strong>
+                <Badge tone={fresh ? systemdStates[service.state].tone : "neutral"} dot data-ascii="fade">
+                  {systemdStates[service.state].label}{fresh ? "" : " · Stale"}
+                </Badge>
+              </div>
+            ) : status?.report && status.report.status !== "observed" ? (
+              <span className="overview-meta">{systemdCollection[status.report.status]}</span>
+            ) : (
+              <span className="overview-meta">Service · Not reported</span>
+            )}
+          </AsciiCardReveal>
+        )}
       </div>
     </AsciiCardReveal>
   );
@@ -199,6 +203,13 @@ function AdvisoryAnalysis({ incident, incidentsStale, incidentsLoading }: {
   }, [incidentId]);
 
   const investigation = read.state === "loaded" ? read.investigation : null;
+  const advisoryLoading = (!incident && !incidentsStale && incidentsLoading) || (Boolean(incident) && read.state === "loading");
+  const advisoryKey = incident
+    ? `${incident.id}:${read.state}`
+    : incidentsStale
+      ? "stale"
+      : "empty";
+
   return (
     <section className="overview-ai-card" data-ascii="surface" aria-label="Advisory AI analysis">
       <div className="overview-ai-head">
@@ -219,40 +230,44 @@ function AdvisoryAnalysis({ incident, incidentsStale, incidentsLoading }: {
           {investigation && " This investigation does not assess the current sample."}
         </p>
       )}
-      <AsciiCardReveal loading={Boolean(incident) && read.state === "loading"} revealOnMount={false} {...cardReveal}>
-        {!incident && !incidentsStale && incidentsLoading ? (
-          <AsciiLoading className="overview-ai-skeleton" label="Loading incident records…" />
-        ) : !incident ? (
-          <p className="overview-meta" role="status">
-            {incidentsStale ? "Cannot confirm a matching incident: incident records are unavailable or cached."
-              : "No incident for this resource on this device in the loaded records."}
-          </p>
-        ) : read.state === "loading" ? (
+      {advisoryLoading ? (
+        incident ? (
           <AsciiLoading className="overview-ai-skeleton" label="Loading recorded AI analysis…" variant="braille" lines={3} widths={["92%", "78%", "56%"]} seed={37} />
-        ) : read.state === "unavailable" ? (
-          <p className="overview-meta" role="status">Could not load the incident’s investigation record.</p>
-        ) : investigation?.result_json?.probable_cause ? (
-          <>
-            <p className="overview-ai-cause">{investigation.result_json.probable_cause}</p>
-            <p className="overview-meta">
-              Confidence: {investigation.result_json.confidence ?? "unknown"} · {investigation.provider.name}
-              {investigation.provider.model ? ` · ${investigation.provider.model}` : ""}
-            </p>
-            {!!investigation.result_json.recommended_checks?.length && (
-              <ul className="overview-ai-checks">
-                {investigation.result_json.recommended_checks.slice(0, 2).map((check, i) => (
-                  <li key={i}>{check}</li>
-                ))}
-              </ul>
-            )}
-          </>
         ) : (
-          <p className="overview-meta">
-            {investigation ? investigation.error ?? "Open the incident to see the investigation record."
-              : "No AI investigation recorded for this incident."}
-          </p>
-        )}
-      </AsciiCardReveal>
+          <AsciiLoading className="overview-ai-skeleton" label="Loading incident records…" />
+        )
+      ) : (
+        <AsciiCardReveal key={advisoryKey} revealOnMount={true} {...cardReveal}>
+          {!incident ? (
+            <p className="overview-meta" role="status">
+              {incidentsStale ? "Cannot confirm a matching incident: incident records are unavailable or cached."
+                : "No incident for this resource on this device in the loaded records."}
+            </p>
+          ) : read.state === "unavailable" ? (
+            <p className="overview-meta" role="status">Could not load the incident’s investigation record.</p>
+          ) : investigation?.result_json?.probable_cause ? (
+            <>
+              <p className="overview-ai-cause">{investigation.result_json.probable_cause}</p>
+              <p className="overview-meta">
+                Confidence: {investigation.result_json.confidence ?? "unknown"} · {investigation.provider.name}
+                {investigation.provider.model ? ` · ${investigation.provider.model}` : ""}
+              </p>
+              {!!investigation.result_json.recommended_checks?.length && (
+                <ul className="overview-ai-checks">
+                  {investigation.result_json.recommended_checks.slice(0, 2).map((check, i) => (
+                    <li key={i}>{check}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : (
+            <p className="overview-meta">
+              {investigation ? investigation.error ?? "Open the incident to see the investigation record."
+                : "No AI investigation recorded for this incident."}
+            </p>
+          )}
+        </AsciiCardReveal>
+      )}
     </section>
   );
 }
@@ -294,10 +309,10 @@ function PressureInspector({
         </div>
       </AsciiCardReveal>
       {/* Async evidence can resize without interrupting the reveal above. */}
-      <AsciiCardReveal className="overview-inspector-body overview-inspector-support" revealOnMount={false} {...cardReveal}>
+      <div className="overview-inspector-body overview-inspector-support">
         <HostSystemd key={host.id} hostId={host.id} refreshKey={refreshKey} />
         <AdvisoryAnalysis key={incident?.id} incident={incident} incidentsStale={incidentsStale} incidentsLoading={incidentsLoading} />
-        <div className="overview-inspector-actions">
+        <AsciiCardReveal className="overview-inspector-actions" revealOnMount={true} {...cardReveal}>
           <Button variant="primary" size="sm" data-ascii="fade" onClick={() => onInspectHost(host.id, reading.key)}>
             Open host history <OverviewIcon name="arrow" />
           </Button>
@@ -306,8 +321,8 @@ function PressureInspector({
               Open incident <OverviewIcon name="arrow" />
             </Button>
           )}
-        </div>
-      </AsciiCardReveal>
+        </AsciiCardReveal>
+      </div>
     </>
   );
 }
@@ -434,53 +449,57 @@ function EndpointReachability({ rows, servicesError, checkingEndpointId, onCheck
   for (const { status } of rows ?? []) counts[status]++;
   const loading = !rows && !servicesError;
 
-  return (
-    <AsciiCardReveal loading={loading} revealOnMount={true} {...cardReveal}>
-      <section className="overview-endpoint-scope" data-ascii="surface" aria-labelledby="overview-endpoint-heading">
-        <div className="overview-endpoint-heading">
-          <OverviewIcon name="globe" />
-          <h2 id="overview-endpoint-heading">Endpoint reachability</h2>
-        </div>
-        {servicesError ? (
-          <p role="status">Endpoint reachability unavailable. {servicesError}</p>
-        ) : !rows ? (
-          <AsciiLoading className="overview-ascii-loading" label="Loading endpoint monitors…" lines={3} widths={["46%", "94%", "82%"]} seed={23} />
-        ) : !rows.length ? (
-          <p role="status">No endpoint monitors configured.</p>
-        ) : (
-          <>
-            <p role="status">{counts.up} up · {counts.down} down · {counts.pending} pending · {counts.stale} stale</p>
-            <ul className="overview-endpoint-list" role="list">
-              {rows.map((row) => (
-                <li key={row.endpoint.id} className="overview-endpoint-item" data-selected={selectedId === row.endpoint.id}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="overview-endpoint-select"
-                    data-ascii="fade"
-                    aria-controls={inspectorId}
-                    aria-pressed={selectedId === row.endpoint.id}
-                    onClick={() => onSelect(row.endpoint.id)}
-                  >
-                    <span className="overview-endpoint-name">{row.endpoint.name}</span>
-                    <EndpointBadge {...row} />
-                  </Button>
-                  <Button
-                    size="sm"
-                    data-ascii="fade"
-                    aria-label={`Check now: ${row.endpoint.name}`}
-                    loading={checkingEndpointId === row.endpoint.id}
-                    onClick={() => onCheckEndpoint(row.endpoint.id)}
-                  >
-                    Check now
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-        <p>Probed independently of host metrics. A result becomes stale 60 seconds after its last check.</p>
-      </section>
+  const content = (
+    <section className="overview-endpoint-scope" data-ascii={loading ? undefined : "surface"} aria-labelledby="overview-endpoint-heading">
+      <div className="overview-endpoint-heading">
+        <OverviewIcon name="globe" />
+        <h2 id="overview-endpoint-heading">Endpoint reachability</h2>
+      </div>
+      {servicesError ? (
+        <p role="status">Endpoint reachability unavailable. {servicesError}</p>
+      ) : !rows ? (
+        <AsciiLoading className="overview-ascii-loading" label="Loading endpoint monitors…" lines={3} widths={["46%", "94%", "82%"]} seed={23} />
+      ) : !rows.length ? (
+        <p role="status">No endpoint monitors configured.</p>
+      ) : (
+        <>
+          <p role="status">{counts.up} up · {counts.down} down · {counts.pending} pending · {counts.stale} stale</p>
+          <ul className="overview-endpoint-list" role="list">
+            {rows.map((row) => (
+              <li key={row.endpoint.id} className="overview-endpoint-item" data-selected={selectedId === row.endpoint.id}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="overview-endpoint-select"
+                  data-ascii="fade"
+                  aria-controls={inspectorId}
+                  aria-pressed={selectedId === row.endpoint.id}
+                  onClick={() => onSelect(row.endpoint.id)}
+                >
+                  <span className="overview-endpoint-name">{row.endpoint.name}</span>
+                  <EndpointBadge {...row} />
+                </Button>
+                <Button
+                  size="sm"
+                  data-ascii="fade"
+                  aria-label={`Check now: ${row.endpoint.name}`}
+                  loading={checkingEndpointId === row.endpoint.id}
+                  onClick={() => onCheckEndpoint(row.endpoint.id)}
+                >
+                  Check now
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p>Probed independently of host metrics. A result becomes stale 60 seconds after its last check.</p>
+    </section>
+  );
+
+  return loading ? content : (
+    <AsciiCardReveal revealOnMount={true} {...cardReveal}>
+      {content}
     </AsciiCardReveal>
   );
 }
@@ -620,51 +639,69 @@ export function ThresholdOverview({
               ? "No fresh readings are available for resources with a configured threshold."
               : "No assessed devices are at or near a configured limit.";
 
+  const summarySection = (
+    <section className="overview-summary" data-ascii={fleetLoading ? undefined : "surface"} aria-labelledby="overview-pressure-heading">
+      <div className="overview-summary-statement">
+        <h2 id="overview-pressure-heading">
+          {assessed ? `${risks.length} ${risks.length === 1 ? "device" : "devices"} at risk` : "Device threshold pressure"}
+        </h2>
+        {fleetLoading ? (
+          <AsciiLoading className="overview-ascii-loading" label="Loading fleet scope and agent connectivity counts…" widths={["62%", "48%"]} seed={3} />
+        ) : (
+          <>
+            <p>{fleet ? `${scope} · ${assessed} assessed against a configured limit` : "Could not load fleet scope"}</p>
+            {fleetError && (
+              <p role="status">{cached && <>Cached inventory from <SampleTime value={fleet?.observed_at ?? null} />. </>}{fleetError}</p>
+            )}
+            <div className="overview-fleet-connectivity">
+              {fleet ? (
+                <dl aria-label={cached ? "Fleet agent connectivity, cached" : "Fleet agent connectivity"}>
+                  <div><dt>Agent online</dt><dd>{fleet.online}</dd></div>
+                  <div><dt>Agent offline</dt><dd>{offline}</dd></div>
+                </dl>
+              ) : <p role="status">Agent connectivity counts unavailable.</p>}
+              {cached && <p>Agent counts are cached.</p>}
+              {offline !== null && offline > 0 && (
+                <Button size="sm" data-ascii="fade" onClick={() => {
+                  setOfflineOnly(true);
+                  inventoryHeading.current?.focus();
+                }}>Show offline devices <OverviewIcon name="arrow" /></Button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+      {fleetLoading ? (
+        <AsciiLoading className="overview-summary-skeleton" label="Loading threshold readings…" variant="dither" widths={["100%", "78%"]} seed={7} />
+      ) : (
+        <dl className="overview-summary-readings">
+          <SummaryReading label="At or above limit" value={assessed ? exceeded : null} state="exceeded" />
+          <SummaryReading label="Near limit" value={assessed ? near : null} state="near" />
+          <SummaryReading label={incidentsStale && openIncidents !== null ? "Open incidents · cached" : "Open incidents"} value={openIncidents} loading={openIncidents === null && !incidentsStale} />
+        </dl>
+      )}
+    </section>
+  );
+
+  const inventoryHead = (
+    <div className="overview-section-head" data-ascii={fleetLoading ? undefined : "surface"}>
+      <div>
+        <h2 id="overview-inventory-heading" ref={inventoryHeading} tabIndex={-1}>{offlineOnly ? "Offline devices" : "All devices"}</h2>
+        {fleet && <p className="overview-meta">{scope} · {offlineOnly ? "Offline filter applies to loaded devices only" : "Reading / configured threshold"}{cached ? " · Cached" : ""}</p>}
+      </div>
+      {offlineOnly
+        ? <Button size="sm" data-ascii="fade" onClick={() => { setOfflineOnly(false); inventoryHeading.current?.focus(); }}>Show all devices</Button>
+        : <ButtonLink size="sm" href="/hosts" data-ascii="fade">Browse hosts <OverviewIcon name="arrow" /></ButtonLink>}
+    </div>
+  );
+
   return (
     <div className="threshold-overview">
-      <AsciiCardReveal loading={fleetLoading} revealOnMount={true} {...cardReveal}>
-        <section className="overview-summary" data-ascii="surface" aria-labelledby="overview-pressure-heading">
-          <div className="overview-summary-statement">
-            <h2 id="overview-pressure-heading">
-              {assessed ? `${risks.length} ${risks.length === 1 ? "device" : "devices"} at risk` : "Device threshold pressure"}
-            </h2>
-            {fleetLoading ? (
-              <AsciiLoading className="overview-ascii-loading" label="Loading fleet scope and agent connectivity counts…" widths={["62%", "48%"]} seed={3} />
-            ) : (
-              <>
-                <p>{fleet ? `${scope} · ${assessed} assessed against a configured limit` : "Could not load fleet scope"}</p>
-                {fleetError && (
-                  <p role="status">{cached && <>Cached inventory from <SampleTime value={fleet?.observed_at ?? null} />. </>}{fleetError}</p>
-                )}
-                <div className="overview-fleet-connectivity">
-                  {fleet ? (
-                    <dl aria-label={cached ? "Fleet agent connectivity, cached" : "Fleet agent connectivity"}>
-                      <div><dt>Agent online</dt><dd>{fleet.online}</dd></div>
-                      <div><dt>Agent offline</dt><dd>{offline}</dd></div>
-                    </dl>
-                  ) : <p role="status">Agent connectivity counts unavailable.</p>}
-                  {cached && <p>Agent counts are cached.</p>}
-                  {offline !== null && offline > 0 && (
-                    <Button size="sm" data-ascii="fade" onClick={() => {
-                      setOfflineOnly(true);
-                      inventoryHeading.current?.focus();
-                    }}>Show offline devices <OverviewIcon name="arrow" /></Button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-          {fleetLoading ? (
-            <AsciiLoading className="overview-summary-skeleton" label="Loading threshold readings…" variant="dither" widths={["100%", "78%"]} seed={7} />
-          ) : (
-            <dl className="overview-summary-readings">
-              <SummaryReading label="At or above limit" value={assessed ? exceeded : null} state="exceeded" />
-              <SummaryReading label="Near limit" value={assessed ? near : null} state="near" />
-              <SummaryReading label={incidentsStale && openIncidents !== null ? "Open incidents · cached" : "Open incidents"} value={openIncidents} loading={openIncidents === null && !incidentsStale} />
-            </dl>
-          )}
-        </section>
-      </AsciiCardReveal>
+      {fleetLoading ? summarySection : (
+        <AsciiCardReveal revealOnMount={true} {...cardReveal}>
+          {summarySection}
+        </AsciiCardReveal>
+      )}
 
       <div className="overview-pressure-workspace">
         <div className="overview-pressure-sources">
@@ -760,17 +797,11 @@ export function ThresholdOverview({
       </div>
 
       <section className="overview-inventory" aria-labelledby="overview-inventory-heading">
-        <AsciiCardReveal lazy={true} loading={fleetLoading} revealOnMount={true} {...cardReveal}>
-          <div className="overview-section-head" data-ascii="surface">
-            <div>
-              <h2 id="overview-inventory-heading" ref={inventoryHeading} tabIndex={-1}>{offlineOnly ? "Offline devices" : "All devices"}</h2>
-              {fleet && <p className="overview-meta">{scope} · {offlineOnly ? "Offline filter applies to loaded devices only" : "Reading / configured threshold"}{cached ? " · Cached" : ""}</p>}
-            </div>
-            {offlineOnly
-              ? <Button size="sm" data-ascii="fade" onClick={() => { setOfflineOnly(false); inventoryHeading.current?.focus(); }}>Show all devices</Button>
-              : <ButtonLink size="sm" href="/hosts" data-ascii="fade">Browse hosts <OverviewIcon name="arrow" /></ButtonLink>}
-          </div>
-        </AsciiCardReveal>
+        {fleetLoading ? inventoryHead : (
+          <AsciiCardReveal lazy={true} revealOnMount={true} {...cardReveal}>
+            {inventoryHead}
+          </AsciiCardReveal>
+        )}
         {visibleDevices?.length ? (
           <ul className="overview-inventory-list" role="list">
             {visibleDevices.map(({ host, fresh }) => (
