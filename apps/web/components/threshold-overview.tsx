@@ -139,7 +139,7 @@ function RiskCard({ risk, serviceInfo, now, selected, inspectorId, onSelect }: {
   const fresh = service?.freshness === "fresh" && isSystemdReportCurrent(status, expired, failed);
 
   return (
-    <AsciiCardReveal as="li" className="overview-risk-item" {...cardReveal}>
+    <AsciiCardReveal as="li" className="overview-risk-item" lazy={true} {...cardReveal}>
       <div className="overview-risk-card" data-ascii="surface" data-pressure={reading.state} data-selected={selected}>
         <Button variant="ghost" className="overview-risk-select" data-ascii="fade" aria-controls={inspectorId} aria-pressed={selected} onClick={onSelect}>
           <OverviewIcon name="server" />
@@ -330,49 +330,51 @@ function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
   onInspectHost: Props["onInspectHost"];
 }) {
   return (
-    <li className="overview-inventory-row">
-      <div className="overview-inventory-device">
-        <OverviewIcon name="server" />
-        <span className="overview-identity">
-          <span className="overview-hostname">{host.hostname}</span>
-          <span className="overview-meta">
-            {host.version ? `Agent ${host.version}` : "Device"}
+    <AsciiCardReveal as="li" className="overview-inventory-item" lazy={true} {...cardReveal}>
+      <div className="overview-inventory-row" data-ascii="surface">
+        <div className="overview-inventory-device">
+          <OverviewIcon name="server" />
+          <span className="overview-identity">
+            <span className="overview-hostname">{host.hostname}</span>
+            <span className="overview-meta">
+              {host.version ? `Agent ${host.version}` : "Device"}
+            </span>
           </span>
-        </span>
+        </div>
+        <div className="overview-inventory-status">
+          <Badge data-ascii="fade"><OverviewIcon name={host.status === "online" ? "online" : "offline"} />{host.status === "online" ? "Agent online" : "Agent offline"}{cached ? " · cached" : ""}</Badge>
+          {host.status === "offline" && host.last_seen_at && (
+            <span className="overview-meta">Last seen <SampleTime value={host.last_seen_at} /></span>
+          )}
+          <span className="overview-meta">
+            {cached ? "Cached snapshot · No current reading"
+              : host.status === "offline" ? "Disconnected · No current reading"
+                : fresh ? <SampleTime value={host.sampled_at} />
+                  : host.sampled_at ? <>Stale sample · <SampleTime value={host.sampled_at} /></> : "No sample received"}
+          </span>
+        </div>
+        <dl className="overview-inventory-metrics" aria-label="Current readings and configured thresholds">
+          {resources.map(({ key, label }) => {
+            const value = fresh && finitePercent(host[key]) ? host[key] : null;
+            const limit = thresholds?.[key] ?? null;
+            return (
+              <div key={key}>
+                <dt>{label}</dt>
+                <dd>
+                  <span aria-hidden="true">{percent(value)} <span className="overview-inventory-limit">/ {percent(limit)}</span></span>
+                  <span className="sr-only">
+                    {value === null ? "No current reading" : `${percent(value)} current`}; {limit === null ? "No threshold reported" : `${percent(limit)} threshold`}
+                  </span>
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+        <Button size="sm" className="overview-inventory-action" data-ascii="fade" aria-label={`Inspect ${host.hostname}`} onClick={() => onInspectHost(host.id)}>
+          Inspect <OverviewIcon name="arrow" />
+        </Button>
       </div>
-      <div className="overview-inventory-status">
-        <Badge data-ascii="fade"><OverviewIcon name={host.status === "online" ? "online" : "offline"} />{host.status === "online" ? "Agent online" : "Agent offline"}{cached ? " · cached" : ""}</Badge>
-        {host.status === "offline" && host.last_seen_at && (
-          <span className="overview-meta">Last seen <SampleTime value={host.last_seen_at} /></span>
-        )}
-        <span className="overview-meta">
-          {cached ? "Cached snapshot · No current reading"
-            : host.status === "offline" ? "Disconnected · No current reading"
-              : fresh ? <SampleTime value={host.sampled_at} />
-                : host.sampled_at ? <>Stale sample · <SampleTime value={host.sampled_at} /></> : "No sample received"}
-        </span>
-      </div>
-      <dl className="overview-inventory-metrics" aria-label="Current readings and configured thresholds">
-        {resources.map(({ key, label }) => {
-          const value = fresh && finitePercent(host[key]) ? host[key] : null;
-          const limit = thresholds?.[key] ?? null;
-          return (
-            <div key={key}>
-              <dt>{label}</dt>
-              <dd>
-                <span aria-hidden="true">{percent(value)} <span className="overview-inventory-limit">/ {percent(limit)}</span></span>
-                <span className="sr-only">
-                  {value === null ? "No current reading" : `${percent(value)} current`}; {limit === null ? "No threshold reported" : `${percent(limit)} threshold`}
-                </span>
-              </dd>
-            </div>
-          );
-        })}
-      </dl>
-      <Button size="sm" className="overview-inventory-action" data-ascii="fade" aria-label={`Inspect ${host.hostname}`} onClick={() => onInspectHost(host.id)}>
-        Inspect <OverviewIcon name="arrow" />
-      </Button>
-    </li>
+    </AsciiCardReveal>
   );
 }
 
@@ -757,9 +759,9 @@ export function ThresholdOverview({
         </aside>
       </div>
 
-      <AsciiCardReveal lazy={true} revealOnMount={true} {...cardReveal}>
-        <section className="overview-inventory" data-ascii="surface" aria-labelledby="overview-inventory-heading">
-          <div className="overview-section-head">
+      <section className="overview-inventory" aria-labelledby="overview-inventory-heading">
+        <AsciiCardReveal lazy={true} loading={fleetLoading} revealOnMount={true} {...cardReveal}>
+          <div className="overview-section-head" data-ascii="surface">
             <div>
               <h2 id="overview-inventory-heading" ref={inventoryHeading} tabIndex={-1}>{offlineOnly ? "Offline devices" : "All devices"}</h2>
               {fleet && <p className="overview-meta">{scope} · {offlineOnly ? "Offline filter applies to loaded devices only" : "Reading / configured threshold"}{cached ? " · Cached" : ""}</p>}
@@ -768,31 +770,31 @@ export function ThresholdOverview({
               ? <Button size="sm" data-ascii="fade" onClick={() => { setOfflineOnly(false); inventoryHeading.current?.focus(); }}>Show all devices</Button>
               : <ButtonLink size="sm" href="/hosts" data-ascii="fade">Browse hosts <OverviewIcon name="arrow" /></ButtonLink>}
           </div>
-          {visibleDevices?.length ? (
-            <ul className="overview-inventory-list" role="list">
-              {visibleDevices.map(({ host, fresh }) => (
-                <InventoryRow
-                  key={host.id}
-                  host={host}
-                  fresh={fresh}
-                  cached={cached}
-                  thresholds={thresholds}
-                  onInspectHost={onInspectHost}
-                />
-              ))}
-            </ul>
-          ) : fleetLoading ? (
-            <div className="overview-inventory-skeleton" role="status">
-              <span className="sr-only" data-ascii="skip">Loading device inventory…</span>
-              {[1, 2, 3].map((index) => (
-                <div key={index} className="overview-inventory-skeleton-row">
-                  <AsciiCardSkeleton variant="dither" lines={2} widths={["58%", "86%"]} seed={41 + index} />
-                </div>
-              ))}
-            </div>
-          ) : <p className="overview-inventory-empty">{fleetError && !fleet ? "Device inventory unavailable." : offlineOnly ? "No offline devices in the loaded inventory." : "No devices to show."}</p>}
-        </section>
-      </AsciiCardReveal>
+        </AsciiCardReveal>
+        {visibleDevices?.length ? (
+          <ul className="overview-inventory-list" role="list">
+            {visibleDevices.map(({ host, fresh }) => (
+              <InventoryRow
+                key={host.id}
+                host={host}
+                fresh={fresh}
+                cached={cached}
+                thresholds={thresholds}
+                onInspectHost={onInspectHost}
+              />
+            ))}
+          </ul>
+        ) : fleetLoading ? (
+          <div className="overview-inventory-skeleton" role="status">
+            <span className="sr-only" data-ascii="skip">Loading device inventory…</span>
+            {[1, 2, 3].map((index) => (
+              <div key={index} className="overview-inventory-skeleton-row">
+                <AsciiCardSkeleton variant="dither" lines={2} widths={["58%", "86%"]} seed={41 + index} />
+              </div>
+            ))}
+          </div>
+        ) : <p className="overview-inventory-empty">{fleetError && !fleet ? "Device inventory unavailable." : offlineOnly ? "No offline devices in the loaded inventory." : "No devices to show."}</p>}
+      </section>
     </div>
   );
 }

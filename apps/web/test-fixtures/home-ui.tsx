@@ -356,8 +356,9 @@ try {
         inspectorGauges: document.querySelectorAll('.overview-inspector .overview-pressure-gauge[data-ascii="media"]').length,
         inspectorFades: document.querySelectorAll('.overview-inspector [data-ascii="fade"]').length,
         aiCardSurface: document.querySelectorAll('.overview-ai-card[data-ascii="surface"]').length,
-        inventorySurface: document.querySelectorAll('.overview-inventory[data-ascii="surface"]').length,
-        inventoryInReveal: document.querySelectorAll('.overview-ascii-reveal > .overview-inventory[data-ascii="surface"]').length,
+        inventoryHeadInReveal: document.querySelectorAll('.overview-inventory .overview-ascii-reveal > .overview-section-head[data-ascii="surface"]').length,
+        inventoryRowSurfaces: document.querySelectorAll('.overview-inventory-row[data-ascii="surface"]').length,
+        inventoryRowInReveal: document.querySelectorAll('.overview-inventory-item.overview-ascii-reveal > .overview-inventory-row[data-ascii="surface"]').length,
         inventoryFades: document.querySelectorAll('.overview-inventory [data-ascii="fade"]').length,
       });
       const loadingState = {

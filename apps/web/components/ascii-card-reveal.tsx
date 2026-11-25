@@ -3,6 +3,7 @@
 import {
   createElement,
   forwardRef,
+  useEffect,
   useImperativeHandle,
   useRef,
   useSyncExternalStore,
@@ -121,6 +122,35 @@ export const AsciiCardReveal = forwardRef<AsciiRevealHandle, AsciiCardRevealProp
     const canAnimate = useCanAnimateAscii();
     const revealRef = useRef<AsciiRevealHandle | null>(null);
     const fallbackRef = useRef<HTMLElement | null>(null);
+    const onRevealCompleteRef = useRef(onRevealComplete);
+    onRevealCompleteRef.current = onRevealComplete;
+    const shouldObserveLazy = canAnimate && lazy && revealOnMount && !loading;
+
+    useEffect(() => {
+      if (!shouldObserveLazy) return;
+      const handle = revealRef.current;
+      const el = handle?.element;
+      if (!handle || !el) return;
+
+      const rect = el.getBoundingClientRect();
+      const inViewport = rect.top < window.innerHeight * 1.02 && rect.bottom > 0;
+      if (typeof IntersectionObserver !== "function" || inViewport) {
+        void handle.reveal().then(() => onRevealCompleteRef.current?.());
+        return;
+      }
+
+      void handle.hide({ instant: true });
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (!entries.some((entry) => entry.isIntersecting)) return;
+          observer.disconnect();
+          void handle.reveal().then(() => onRevealCompleteRef.current?.());
+        },
+        { rootMargin: "0px 0px -6% 0px", threshold: 0.01 },
+      );
+      observer.observe(el);
+      return () => observer.disconnect();
+    }, [shouldObserveLazy]);
 
     useImperativeHandle(
       forwardedRef,
@@ -158,12 +188,12 @@ export const AsciiCardReveal = forwardRef<AsciiRevealHandle, AsciiCardRevealProp
         duration={duration}
         origin={origin}
         selector={selector}
-        revealOnMount={revealOnMount}
+        revealOnMount={shouldObserveLazy ? false : revealOnMount}
         revealOnHydrate={revealOnHydrate}
         loading={loading}
         shimmer={shimmer}
         mascot={mascot}
-        lazy={lazy}
+        lazy={shouldObserveLazy ? false : lazy}
         fallback={fallback}
         onRevealComplete={onRevealComplete}
         className={classes}
