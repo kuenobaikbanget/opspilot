@@ -2,6 +2,7 @@ import { SQL } from "bun";
 import { readProviderMasterKey } from "@opspilot/ai/credentials";
 import { runDueEndpointChecks } from "./endpoint-scheduler";
 import { runMetricRetention, runOneInvestigation, runOneProviderTest, type WorkerReliabilityOptions } from "./jobs";
+import { indexPendingMemoryEmbeddings } from "./memory-embeddings";
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL missing");
@@ -45,6 +46,9 @@ while (true) {
     await runOneProviderTest(db, masterKey);
     await runDueEndpointChecks(db);
     await runMetricRetention(db);
+    // Opt-in embedding indexer: no-op unless OPSPILOT_MEMORY_EMBEDDINGS_ENABLED=true,
+    // a master key exists and an embedding-capable provider is configured.
+    await indexPendingMemoryEmbeddings(db, masterKey);
   } catch {
     console.error("Worker poll failed");
   }

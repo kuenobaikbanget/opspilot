@@ -1,8 +1,10 @@
 import type { SQL } from "bun";
-import { generateDiagnosis, generateDiagnosisWithUsage, type ProviderConnection } from "@opspilot/ai";
+import { generateDiagnosis, generateDiagnosisWithUsage, supportsEmbeddings, generateEmbedding, type GeneratedEmbedding, type ProviderConnection } from "@opspilot/ai";
 import { decryptProviderKey, ProviderCredentialError } from "@opspilot/ai/credentials";
 import { ProviderError, type ProviderErrorCode } from "@opspilot/ai/provider-http";
 import type { ProviderProtocol } from "@opspilot/contracts";
+import { searchIncidentMemories } from "../../hub/src/memory-retrieval";
+import { memoryEmbeddingsEnabled, type EmbedFn } from "./memory-embeddings";
 
 type FailureCode = ProviderErrorCode | "provider_unavailable" | "provider_disabled" | "provider_changed" | "credential_unavailable" | "worker_lease_expired";
 export type Failure = { code: FailureCode; httpStatus: number | null };
@@ -71,6 +73,12 @@ export type WorkerReliabilityOptions = {
   leaseMs?: number;
   /** Base delay before the first retry; grows exponentially per attempt. */
   retryBackoffMs?: number;
+  /**
+   * Optional override for the prior-memory query embedding (tests). By default
+   * the query is embedded only when `OPSPILOT_MEMORY_EMBEDDINGS_ENABLED=true`
+   * and the claimed provider supports embeddings; otherwise retrieval is FTS-only.
+   */
+  memoryEmbedFn?: EmbedFn;
 };
 
 const DEFAULT_LEASE_MS = 90_000;
@@ -195,6 +203,38 @@ async function failInvestigation(tx: SQL, job: InvestigationJob, failure: Failur
 /** Accepts either the usage-returning call or the backwards-compatible diagnosis-only call. */
 type GenerateInvestigation = typeof generateDiagnosis | typeof generateDiagnosisWithUsage;
 
+/**
+ * Gathers `prior_resolutions` for an investigation via hybrid memory retrieval.
+ * The optional query embedding is attempted only when embeddings are enabled and
+ * the claimed provider supports them; any embedding failure falls back cleanly to
+ * FTS, and any retrieval failure yields an empty context so investigations never
+ * block on memory.
+ */
+async function fetchPriorResolutions(
+  db: SQL,
+  connection: ProviderConnection,
+  query: string,
+  memoryEmbedFn?: EmbedFn,
+): Promise<Parameters<typeof generateDiagnosis>[3]> {
+  let queryVector: number[] | null = null;
+  const embed: EmbedFn | undefined =
+    memoryEmbedFn ?? (memoryEmbeddingsEnabled() && supportsEmbeddings(connection.protocol) ? generateEmbedding : undefined);
+  if (embed) {
+    try {
+      const embedding: GeneratedEmbedding = await embed(connection, query);
+      queryVector = embedding.vector;
+    } catch {
+      queryVector = null; // FTS-only fallback; never fail the investigation on embeddings.
+    }
+  }
+  try {
+    const search = await searchIncidentMemories(db, query, { queryVector, limit: 5 });
+    return search.results.map((item) => ({ id: item.id, summary: item.summary, resolution: item.resolution }));
+  } catch {
+    return [];
+  }
+}
+
 /** Claims at most one investigation; importing this module never starts a polling loop. */
 export async function runOneInvestigation(
   db: SQL,
@@ -263,9 +303,7 @@ export async function runOneInvestigation(
     }
     const evidence = await db<Parameters<typeof generateDiagnosis>[2]>`SELECT id,source,content FROM evidence
       WHERE incident_id=${job.incident_id} ORDER BY created_at DESC LIMIT 12`;
-    const memories = await db<Parameters<typeof generateDiagnosis>[3]>`SELECT id,summary,resolution FROM incident_memory
-      WHERE to_tsvector('simple',summary || ' ' || resolution) @@ plainto_tsquery('simple',${incident.title})
-      ORDER BY created_at DESC LIMIT 5`;
+    const memories = await fetchPriorResolutions(db, connection, incident.title, options.memoryEmbedFn);
     const outcome = await generate(connection, incident, evidence, memories);
     const diagnosis = "diagnosis" in outcome ? outcome.diagnosis : outcome;
     const usage = "usage" in outcome ? outcome.usage : null;

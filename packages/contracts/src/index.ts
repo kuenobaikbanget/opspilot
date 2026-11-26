@@ -1,6 +1,13 @@
 /** Maximum permitted WebSocket frame payload size in bytes. */
 export const MAX_WS_MESSAGE_BYTES = 64 * 1024;
 
+export type {
+  MemoryEmbeddingStatus,
+  MemoryRetrievalMode,
+  MemorySearchResponse,
+  RetrievedMemoryItem,
+} from "./memory";
+
 /** Allowlisted read-only diagnostic tools executable by enrolled agents. */
 export const ALLOWED_TOOLS = [
   "service_status",
