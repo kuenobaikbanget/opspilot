@@ -3,11 +3,15 @@ import { randomBytes } from "node:crypto";
 import {
   MAX_SYSTEMD_REPORT_BYTES,
   MAX_WS_MESSAGE_BYTES,
-  finitePercent,
+  PROTOCOL_VERSION,
+  negotiateCapabilities,
+  parseAgentHello,
   parseSystemdReport,
-  type AgentTelemetry,
+  parseTelemetry,
+  type AgentCapability,
   type DiagnosticResult,
   type DiagnosticTool,
+  type HelloAck,
 } from "@opspilot/contracts";
 import { db, hashSecret, audit } from "./db";
 import { checkThresholds, checkConfigHashes, addEvidence } from "./incidents";
@@ -30,11 +34,16 @@ const pending = new Map<string, PendingDiagnostic>();
 
 const secret = () => randomBytes(32).toString("base64url");
 
+// Capability names come from a fixed allowlist, so a plain Postgres array literal is safe to bind.
+const capsLiteral = (caps: readonly string[]) => `{${caps.join(",")}}`;
+
 /** Consumes a single-use enrollment token and registers a new agent credential. */
 export async function enrollAgent(
   token: string,
   hostname: string,
   version: string,
+  protocolVersion = 1,
+  capabilities: AgentCapability[] = [],
 ) {
   const hash = hashSecret(token);
   const claimed =
@@ -45,8 +54,10 @@ export async function enrollAgent(
 
   const agentSecret = secret();
   const rows =
-    await db`INSERT INTO agents(hostname,token_hash,version) VALUES(${hostname.slice(0, 100)},${hashSecret(agentSecret)},${version.slice(0, 40)}) RETURNING id`;
-  await audit("agent.enrolled", rows[0].id, { hostname });
+    await db`INSERT INTO agents(hostname,token_hash,version,protocol_version,capabilities)
+      VALUES(${hostname.slice(0, 100)},${hashSecret(agentSecret)},${version.slice(0, 40)},${protocolVersion},${capsLiteral(capabilities)}::text[])
+      RETURNING id`;
+  await audit("agent.enrolled", rows[0].id, { hostname, protocolVersion, capabilities });
   return { agentId: rows[0].id as string, agentSecret };
 }
 
@@ -117,7 +128,20 @@ export async function socketMessage(
   if (!msg || typeof msg !== "object" || !("type" in msg)) return;
 
   const agentId = ws.data.agentId;
-  if (msg.type === "systemd_status") {
+  if (msg.type === "hello") {
+    // Refuse agents speaking a newer wire protocol instead of silently misreading them.
+    const advertised = "protocolVersion" in msg ? msg.protocolVersion : undefined;
+    if (typeof advertised === "number" && Number.isSafeInteger(advertised) && advertised > PROTOCOL_VERSION) {
+      ws.close(4000, "Unsupported protocol version");
+      return;
+    }
+    const hello = parseAgentHello(msg);
+    if (!hello || connections.get(agentId) !== ws) return;
+    const negotiated = negotiateCapabilities(hello.capabilities);
+    await db`UPDATE agents SET version=${hello.agentVersion},protocol_version=${hello.protocolVersion},capabilities=${capsLiteral(negotiated)}::text[],last_seen_at=NOW(),status='online' WHERE id=${agentId}`;
+    const ack: HelloAck = { type: "hello_ack", protocolVersion: PROTOCOL_VERSION, capabilities: negotiated };
+    ws.send(JSON.stringify(ack));
+  } else if (msg.type === "systemd_status") {
     if (bytes > MAX_SYSTEMD_REPORT_BYTES || connections.get(agentId) !== ws || writingSystemdReports.has(agentId)) return;
     const report = parseSystemdReport(msg);
     if (!report) return;
@@ -128,26 +152,14 @@ export async function socketMessage(
       writingSystemdReports.delete(agentId);
     }
   } else if (msg.type === "telemetry") {
-    const m = msg as AgentTelemetry;
-    if (
-      ![m.cpuPercent, m.memoryPercent, m.diskPercent].every(finitePercent) ||
-      !Number.isFinite(m.networkRxBytes) ||
-      !Number.isFinite(m.networkTxBytes) ||
-      !Number.isFinite(m.uptimeSeconds)
-    ) {
-      return;
-    }
+    // Strict contract validation: finite bounded metrics, sane timestamp, bounded config hashes.
+    const m = parseTelemetry(msg);
+    if (!m || connections.get(agentId) !== ws) return;
 
-    await db`INSERT INTO metric_samples(agent_id,cpu_percent,memory_percent,disk_percent,network_rx_bytes,network_tx_bytes,uptime_seconds) VALUES(${agentId},${m.cpuPercent},${m.memoryPercent},${m.diskPercent},${Math.max(0, Math.trunc(m.networkRxBytes))},${Math.max(0, Math.trunc(m.networkTxBytes))},${Math.max(0, Math.trunc(m.uptimeSeconds))})`;
+    await db`INSERT INTO metric_samples(agent_id,cpu_percent,memory_percent,disk_percent,network_rx_bytes,network_tx_bytes,uptime_seconds) VALUES(${agentId},${m.cpuPercent},${m.memoryPercent},${m.diskPercent},${m.networkRxBytes},${m.networkTxBytes},${m.uptimeSeconds})`;
     await db`UPDATE agents SET last_seen_at=NOW(),status='online' WHERE id=${agentId}`;
     await checkThresholds(agentId, m);
-    if (
-      m.configHashes &&
-      typeof m.configHashes === "object" &&
-      !Array.isArray(m.configHashes)
-    ) {
-      await checkConfigHashes(agentId, m.configHashes);
-    }
+    await checkConfigHashes(agentId, m.configHashes);
   } else if (msg.type === "diagnostic_result") {
     const r = msg as DiagnosticResult;
     const p = pending.get(r.requestId);

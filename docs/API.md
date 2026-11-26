@@ -11,8 +11,11 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | GET | `/api/auth/me` | none | role, auth status, and `authDisabled` flag |
 | POST | `/api/agents/enrollment-token` | `{}` | `{token, expiresInSeconds}`; show once |
 | GET | `/api/agents/install-config` | none | `AgentInstallConfig` or `503 {"error":"Agent installation is not configured"}` |
-| GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}` |
-| GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; 400 invalid ID, 404 unknown host |
+| GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}`; each host includes `protocol_version` and negotiated `capabilities` |
+| GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; optional `from`/`to` (ISO, ≤366d span), `resolution=auto|raw|hourly` (auto uses hourly rollups beyond the raw retention window), `limit=1..2000`; 400 invalid params/ID, 404 unknown host |
+| GET | `/api/hosts/:id/thresholds` | none | `{thresholds,conditions}` — effective per-host limits and persisted alert condition state; 400/404 as above |
+| PUT | `/api/hosts/:id/thresholds` | `{cpu_percent?,memory_percent?,disk_percent?}` each null or 0-100 | `200 {thresholds}`; resets that host's condition state; audited |
+| DELETE | `/api/hosts/:id/thresholds` | none | `200 {thresholds}` back to environment defaults; audited |
 | GET | `/api/hosts/:id/services` | none | selected-host `HostSystemdStatus`; 400 invalid ID, 404 unknown host |
 | GET | `/api/services` | none | `{endpoints}` (existing independent endpoint records) |
 | GET | `/api/ai/providers` | none | `{providers: AiProvider[], encryptionConfigured: boolean}` |
@@ -59,13 +62,13 @@ Token issuance remains an authenticated, Origin-protected POST with `{token,expi
 
 `Host`, `HostList` and `HostMetric` live in `packages/contracts`. The host list contains at most 100 newest enrolled hosts; `total` and `online` cover the entire enrolled fleet, not the visible page or client search. Connectivity comes from this Hub's current WebSocket connections, not persisted status. These counts are not application-health verdicts.
 
-Each host includes `id`, `hostname`, `version`, `status`, `created_at`, `last_seen_at`, `sampled_at` and nullable `cpu_percent`, `memory_percent`, `disk_percent`. Timestamps are ISO strings; sample timestamps are Hub receipt times. Missing samples remain null. `observed_at` dates the list response; it does not refresh old measurements.
+Each host includes `id`, `hostname`, `version`, `protocol_version` (null until the agent reports a hello), negotiated `capabilities`, `status`, `created_at`, `last_seen_at`, `sampled_at` and nullable `cpu_percent`, `memory_percent`, `disk_percent`. Timestamps are ISO strings; sample timestamps are Hub receipt times. Missing samples remain null. `observed_at` dates the list response; it does not refresh old measurements.
 
 The current display freshness policy is `stale_after_seconds: 60`. An online connection with an older sample has stale telemetry; a disconnected agent's retained samples are historical even when recent. Agents configured with intervals above 60 seconds will intentionally show stale between samples; interval negotiation is not implemented.
 
-`thresholds` contains the Hub's effective CPU, memory and disk alert limits as percent values under `cpu_percent`, `memory_percent`, and `disk_percent`. Invalid limits are `null` and do not produce a threshold alert. The Overview uses the same configured limits to compare individual fresh online samples; its near-limit band is a display rule, not an incident trigger.
+`thresholds` in the list contains the Hub's global environment limits as percent values under `cpu_percent`, `memory_percent`, and `disk_percent`. Invalid limits are `null` and do not produce a threshold alert. The Overview uses the same configured limits to compare individual fresh online samples; its near-limit band is a display rule, not an incident trigger. Per-host overrides are managed with the thresholds API below and survive Hub restarts in `alert_thresholds`; `GET /api/hosts/:id/thresholds` also returns the persisted `alert_conditions` state (`ok`/`breaching`/`breached`/`cooldown` per metric with breach streak, cooldown deadline and incident link). Changing or resetting thresholds resets that host's condition state.
 
-History returns `sampled_at`, host CPU/memory/disk percentages and cumulative `network_rx_bytes`/`network_tx_bytes`; counters are not network rates. Samples are neither aggregated nor interpolated.
+History returns `sampled_at`, host CPU/memory/disk percentages and cumulative `network_rx_bytes`/`network_tx_bytes`; counters are not network rates. Without query parameters samples are neither aggregated nor interpolated. With `from`/`to`, `resolution=raw` returns raw rows in the range; `resolution=hourly` returns one row per hour from `metric_samples_hourly` (percentages are hour averages, network counters are the last sample in the hour) — `auto` selects hourly once the span exceeds the raw retention window (`METRIC_RAW_RETENTION_HOURS`, default 168h).
 
 `HostSystemdStatus` returns `{agent_id,online,checked_at,report,service}`. `report` is null until an accepted v1 report; otherwise it has `{status,observed_at,current}`. `service` is null until there is an actual observation, or a `HostService` with `runtime:"systemd"`, `source:"agent_systemd"` and `freshness:"fresh"|"stale"`. `fresh` requires a measured report from the current authenticated socket and an observation at most 60 seconds old. `checked_at` is the read time, not the observation time. Disconnect/replacement or a current collection error can make a previous sample stale without changing its observed state/time. An explicit disabled report or change of configured unit removes the previous unit from the selected-host view. Synthetic `host_services` rows are excluded.
 
@@ -82,9 +85,9 @@ curl -X POST http://localhost:3001/api/agents/enroll \
 
 ## Agent HTTP and WebSocket
 
-**Enrollment:** `POST /api/agents/enroll` requires short-lived one-use token, browser `Origin` disallowed. Returns `agentId`, `agentSecret` (random secret stored only as hash in DB).
+**Enrollment:** `POST /api/agents/enroll` requires short-lived one-use token, browser `Origin` disallowed. Body is `{token,hostname,version,protocolVersion?,capabilities?}`; `protocolVersion` must be an integer 1..2 (default 1) and `capabilities` a deduplicated subset of `telemetry`, `systemd_status`, `diagnostics` — unknown names reject the whole request with 400. Returns `agentId`, `agentSecret` (random secret stored only as hash in DB).
 
-`opspilot-agent enroll` is a finite local command using the same `{token,hostname,version}` / `{agentId,agentSecret}` contract, not a new HTTP operation. It requires an HTTPS origin, refuses redirects, validates returned credentials and atomically saves a 0600 identity. A valid existing identity avoids enrollment; a corrupt identity fails unchanged. No arguments retains the reconnecting monitor and local HTTP development compatibility.
+`opspilot-agent enroll` is a finite local command using the same `{token,hostname,version,protocolVersion,capabilities}` / `{agentId,agentSecret}` contract, not a new HTTP operation. It requires an HTTPS origin, refuses redirects, validates returned credentials and atomically saves a 0600 identity. A valid existing identity avoids enrollment; a corrupt identity fails unchanged. No arguments retains the reconnecting monitor and local HTTP development compatibility. The running agent buffers telemetry durably in a bounded on-disk queue (`OPSPILOT_QUEUE_PATH`, default beside the identity file; caps `OPSPILOT_QUEUE_MAX_ENTRIES` default 2000 and `OPSPILOT_QUEUE_MAX_AGE_SECONDS` default 86400) and flushes it in order on reconnect.
 
 **WebSocket handshake:** `GET /api/agents/connect` with headers:
 
@@ -95,6 +98,20 @@ X-OpsPilot-Agent-ID: <uuid>
 
 The Hub verifies the hashed secret before upgrading. Use WSS behind TLS in remote deployment. Avoid HTTP on an untrusted network.
 
+**Hello / capability negotiation:** immediately after connecting, an agent sends one hello frame:
+
+```json
+{"type":"hello","protocolVersion":2,"agentVersion":"0.1.0","capabilities":["telemetry","systemd_status","diagnostics"]}
+```
+
+The Hub rejects a `protocolVersion` above its own `PROTOCOL_VERSION` (2) with close code `4000`. Otherwise it records the agent version, protocol version and the negotiated intersection on the `agents` row and replies:
+
+```json
+{"type":"hello_ack","protocolVersion":2,"capabilities":["telemetry","systemd_status","diagnostics"]}
+```
+
+Agents treat a missing ack (older Hub) as "all advertised capabilities supported". The agent only sends collectors the ack included. Hello is optional for legacy agents; their `protocol_version` stays at the enrollment value and `capabilities` at the enrollment set.
+
 ### Agent → Hub telemetry
 
 ```json
@@ -104,7 +121,9 @@ The Hub verifies the hashed secret before upgrading. Use WSS behind TLS in remot
   "networkRxBytes": 123456, "networkTxBytes": 56789, "uptimeSeconds": 93450,
   "configHashes": {"/etc/nginx/nginx.conf":"<64 lowercase hex characters>"}
 }
-```
+
+The Hub accepts only this exact shape (`parseTelemetry` in `packages/contracts`): `timestamp` must be canonical UTC RFC 3339 (`Z`, optional 1-3 digit fraction) at most 120 seconds old and 5 seconds ahead of Hub time; `cpuPercent`/`memoryPercent`/`diskPercent` must be finite numbers in [0, 100] (NaN/Inf rejected); `networkRxBytes`/`networkTxBytes`/`uptimeSeconds` must be non-negative safe integers; `configHashes` is an object of at most 20 entries mapping absolute paths (≤256 chars) to 64 lowercase hex characters. Any extra or missing key, or an out-of-bounds value, drops the whole frame silently. Queued agent samples are re-stamped at send time so reconnect flushes stay within the window.
+
 
 ### Agent → Hub systemd status v1
 
@@ -143,7 +162,7 @@ Hub stores server-generated evidence ID; response correlated to an outstanding r
 
 ## Versioning policy
 
-Starter wire version is implicit 0.1; add `protocolVersion` on enrollment and every message before broad distribution. Refuse incompatible versions rather than silently misinterpreting metrics. Add explicit error codes, pagination and documented JSON Schema/OpenAPI in future.
+Wire protocol is versioned with `PROTOCOL_VERSION` (currently 2) in `packages/contracts`. Agents report it with `protocolVersion` on enrollment and in the `hello` frame; the Hub refuses newer agents with close code `4000` rather than silently misinterpreting frames, and negotiates capabilities as the intersection of advertised and supported sets. `systemd_status` frames carry their own `version: 1`. Future incompatible changes bump `PROTOCOL_VERSION` and refuse older/newer peers explicitly; error codes, pagination and JSON Schema/OpenAPI remain future work.
 
 ## API failure semantics
 

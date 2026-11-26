@@ -219,9 +219,15 @@
 }
 @keyframes history-bars-in { from { transform: scaleY(0.24); } }
 .chart-bar { fill: var(--series-color); }
+@media (prefers-reduced-motion: no-preference) {
+  /* Live polls animate bar geometry instead of re-rendering abruptly. */
+  .chart-bar { transition: x var(--duration-normal) var(--ease-out), y var(--duration-normal) var(--ease-out), width var(--duration-normal) var(--ease-out), height var(--duration-normal) var(--ease-out); }
+}
+.chart-bar--stale { opacity: 0.35; }
 .chart-zero { stroke: var(--color-text-muted); stroke-width: 1; }
 .chart-selection { fill: none; stroke: var(--color-text); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .chart-cursor { stroke: var(--color-text-muted); stroke-width: 1; stroke-dasharray: 3 4; }
+.chart-gap { stroke: var(--color-border-strong); stroke-width: 1; stroke-dasharray: 2 4; vector-effect: non-scaling-stroke; }
 .history-provenance { margin-block: var(--space-2) 0; }
 .resource-history > p { line-height: 1.7; }
 .host-systemd { display: grid; gap: var(--space-2); }
