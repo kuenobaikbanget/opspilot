@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { AsciiLoading } from "../../../components/ascii-card-reveal";
+import { IncidentTimeline } from "../../../components/incident-timeline";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../../../components/ui";
 import { WorkspaceIcon } from "../../../components/workspace-shell";
 import { api, ApiError, getIncidentDetail, type IncidentDetailResponse, type IncidentEvidence, type InvestigationUsage } from "../../../lib/api";
@@ -303,10 +304,7 @@ export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
                 ))}
               </ol>}
               <h3 className="timeline-heading">Activity timeline</h3>
-              <ol className="incident-timeline">
-                {detail.incident.resolved_at && <li><time dateTime={detail.incident.resolved_at}>{new Date(detail.incident.resolved_at).toLocaleString()}</time><div>Human-confirmed resolution recorded</div></li>}
-                <li><time dateTime={detail.incident.created_at}>{new Date(detail.incident.created_at).toLocaleString()}</time><div>Incident opened</div></li>
-              </ol>
+              <IncidentTimeline incidentId={detail.incident.id} agentId={detail.incident.agent_id} />
             </div>
             <div>
               <h3>AI Hypothesis</h3>

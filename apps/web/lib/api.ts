@@ -1,4 +1,13 @@
-import type { DriftDetailResponse, DriftTimelineResponse, EvidenceRelevance, ProviderProtocol } from "@opspilot/contracts";
+import type {
+  ChangeEvent,
+  CreateChangeEventRequest,
+  DriftDetailResponse,
+  DriftTimelineResponse,
+  EvidenceRelevance,
+  IncidentTimelineResponse,
+  LinkIncidentChangeRequest,
+  ProviderProtocol,
+} from "@opspilot/contracts";
 
 export type { DriftDetailResponse, DriftTimelineEntry, DriftTimelineResponse, SemanticDiffChange, SemanticDiffResult } from "@opspilot/contracts";
 
@@ -62,6 +71,45 @@ export async function getDriftTimeline(params: { agentId?: string; filePath?: st
 /** Fetches one drift snapshot transition with its redacted semantic diff (`GET /api/drift/:id`). */
 export async function getDriftDetail(id: string, signal?: AbortSignal): Promise<DriftDetailResponse> {
   return api(`/drift/${encodeURIComponent(id)}`, "GET", undefined, signal) as Promise<DriftDetailResponse>;
+}
+
+/** Unified non-causal incident timeline (lifecycle, evidence, investigations, same-host changes). */
+export async function getIncidentTimeline(
+  id: string,
+  params?: { beforeMinutes?: number; afterMinutes?: number },
+  signal?: AbortSignal,
+): Promise<IncidentTimelineResponse> {
+  const query = params
+    ? `?${new URLSearchParams(Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])))}`
+    : "";
+  return api(`/incidents/${encodeURIComponent(id)}/timeline${query}`, "GET", undefined, signal) as Promise<IncidentTimelineResponse>;
+}
+
+/** Lists recent change events, optionally filtered by host and kind (server caps limit at 100). */
+export async function listChangeEvents(
+  params?: { agentId?: string; kind?: string; limit?: number },
+  signal?: AbortSignal,
+): Promise<{ changes: ChangeEvent[]; limit: number }> {
+  const query = params
+    ? `?${new URLSearchParams(Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])))}`
+    : "";
+  return api(`/changes${query}`, "GET", undefined, signal) as Promise<{ changes: ChangeEvent[]; limit: number }>;
+}
+
+/** Records a deployment/config change/service restart/maintenance on a host. */
+export async function createChangeEvent(payload: CreateChangeEventRequest): Promise<{ change: ChangeEvent }> {
+  return api("/changes", "POST", payload) as Promise<{ change: ChangeEvent }>;
+}
+
+/** Links or dismisses a change target (change event or config snapshot) on an incident. */
+export async function linkIncidentChange(incidentId: string, payload: LinkIncidentChangeRequest): Promise<{ link: unknown }> {
+  return api(`/incidents/${encodeURIComponent(incidentId)}/changes`, "POST", payload) as Promise<{ link: unknown }>;
+}
+
+/** Removes a manual link/dismissal so a nearby change is shown again. */
+export async function deleteIncidentChangeLink(incidentId: string, linkId: string): Promise<{ ok: boolean }> {
+  return api(`/incidents/${encodeURIComponent(incidentId)}/changes/${encodeURIComponent(linkId)}`, "DELETE") as Promise<{ ok: boolean }>;
+}
 }
 
 export class ApiError extends Error {

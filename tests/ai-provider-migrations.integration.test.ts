@@ -139,6 +139,7 @@ test("package import command ignores retained .env but validates explicitly expo
       "tools/import-ai-providers.ts",
       "packages/contracts/src/index.ts",
       "packages/contracts/src/drift.ts",
+      "packages/contracts/src/changes.ts",
       "packages/ai/src/credentials.ts",
       "packages/ai/src/provider-http.ts",
     ]) {
