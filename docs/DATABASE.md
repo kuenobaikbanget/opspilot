@@ -16,6 +16,10 @@ erDiagram
   incidents ||--o{ investigations : undergoes
   incidents ||--o| incident_memory : resolves_to
   incidents ||--o{ alert_conditions : links
+  incidents ||--o{ incident_change_links : curates
+  agents ||--o{ change_events : records
+  change_events ||--o{ incident_change_links : targeted_by
+  config_snapshots ||--o{ incident_change_links : targeted_by
   agents { uuid id PK; text hostname; text token_hash; int protocol_version; text[] capabilities; timestamptz last_seen_at }
   metric_samples { bigint id PK; uuid agent_id FK; timestamptz sampled_at; float cpu_percent; float memory_percent; float disk_percent }
   metric_samples_hourly { uuid agent_id PK; timestamptz hour PK; int sample_count; float cpu_min; float cpu_max; float cpu_avg; bigint network_rx_bytes }
@@ -28,6 +32,8 @@ erDiagram
   ai_providers ||--o{ investigations : snapshots
   ai_providers { uuid id PK; text protocol; int revision; text api_key_ciphertext; uuid last_test_id; text last_test_status }
   incident_memory { uuid id PK; uuid incident_id FK; text summary; text resolution }
+  change_events { uuid id PK; uuid agent_id FK; text kind; text title; text service_name; text version; text summary; text source; timestamptz occurred_at }
+  incident_change_links { uuid id PK; uuid incident_id FK; uuid change_event_id FK; uuid config_snapshot_id FK; text status; text note }
 ```
 
 ## Data table contracts
@@ -50,6 +56,8 @@ erDiagram
 | `alert_conditions` | persisted per-metric condition state (ok/breaching/breached/cooldown, streak, cooldown, incident link) | until host deletion; survives Hub restarts |
 | `endpoint_monitors` | admin-configured HTTP monitor: target, expected status, server-side `probe_location`, `enabled`, per-monitor `check_interval_seconds`, latest `last_*` result | until deletion; cascade |
 | `endpoint_monitor_runs` | one persisted probe execution: named `probe_location`, status/HTTP status/latency/error, `started_at`/`finished_at` source timestamps | bounded to 200 rows per monitor, pruned per insert; cascade on monitor deletion |
+| `change_events` | operator/agent-recorded change on one host: kind (`deployment|config_change|service_restart|maintenance`), title, optional service/version/summary, source, `occurred_at` | until deletion; cascade on host deletion |
+| `incident_change_links` | one manual link or dismissal of a change event XOR config snapshot to an incident (CHECK exactly one target; partial unique per target) | until deletion; cascade on incident/target deletion |
 
 ## SQL invariants
 
@@ -71,6 +79,7 @@ erDiagram
 - Migration 007 adds `host_workload_reports` and optional `cpu_percent`/`memory_bytes` columns on `host_services` for opt-in bounded Docker/systemd workload inventory (`source='agent_workloads'`).
 - Migration 008 adds `enabled` and `check_interval_seconds` (15–86400 s, default 60) to `endpoint_monitors` and creates `endpoint_monitor_runs` with a named `probe_location` and `started_at`/`finished_at` source timestamps per probe execution. Runs cascade on monitor deletion; retention is bounded to 200 rows per monitor, pruned in the same transaction as each insert. The Worker scheduler claims at most 8 due enabled monitors per tick with `FOR UPDATE SKIP LOCKED`; run counts read via `monitor_id`-scoped LATERAL aggregates, never fleet-wide. Audit events for monitor mutations never contain the target URL.
 - Migration 010 adds investigation reliability columns to `investigations`: `lease_expires_at`, `worker_id`, `attempts` (default 0), `max_attempts` (default 3), `next_retry_at` and `dedupe_key`. A partial unique index allows at most one active (`queued`/`running`) investigation per `dedupe_key`, so terminal rows can always be re-investigated; claim and lease-recovery partial indexes serve worker polling. Lease expiries are audited as `investigation.lease_expired` with only non-secret fields (incident id, worker id, attempts, outcome).
+- Migration 013 adds `change_events` (per-host recorded changes with `kind` CHECK, `source` default `operator`, `occurred_at`, index `(agent_id, occurred_at DESC)`) and `incident_change_links` (incident + exactly one of `change_event_id`/`config_snapshot_id`, `status` `linked|dismissed`, partial unique indexes per target). Links are operator curation only — they never record a causation claim. The migration reads only standard columns from 001 (`agents`, `incidents`, `config_snapshots`), so it applies cleanly on top of 011 and after 012.
 
 ## Full-text retrieval (currently implemented)
 

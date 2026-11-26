@@ -1025,3 +1025,7 @@ export function parseUpdateEndpointMonitorRequest(value: unknown): UpdateEndpoin
   }
   return Object.keys(out).length ? out : null;
 }
+
+// Change events and the non-causal incident timeline (deployments/config changes
+// linked to incidents as temporal context only, never as claimed root cause).
+export * from "./changes";

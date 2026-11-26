@@ -35,8 +35,17 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | GET | `/api/incidents/:id` | none | `{incident,evidence,investigations}`; each investigation also exposes `attempts,max_attempts,next_retry_at,lease_expires_at` |
 | POST | `/api/incidents/:id/investigate` | `{"providerId":"uuid","providerRevision":1,"model":"explicit-model"}` | `202 {id,status,deduplicated,liveAgent}`; an active (queued/running) investigation with the same incident+provider+revision+model returns that row with `deduplicated:true` |
 | POST | `/api/incidents/:id/resolve` | `{"resolution":"..."}` | `200 {ok:true}` |
+| GET | `/api/changes?agentId=&kind=&limit=` | none | `{changes: ChangeEvent[], limit}` newest first, `limit` 1-100 (default 50), `kind` one of `deployment|config_change|service_restart|maintenance`; each row includes the host `hostname` |
+| POST | `/api/changes` | `{"agentId":"uuid","kind":"deployment","title":"...","serviceName"?,"version"?,"summary"?,"source"?,"occurredAt"?}` | `201 {change}`; `title`/`summary` redacted server-side before storing; `occurredAt` ISO bounded to ≤5m future / ≤365d past (default NOW()); audited as `change.recorded` with non-secret fields only; 404 unknown host |
+| GET | `/api/incidents/:id/timeline?beforeMinutes=&afterMinutes=` | none | `IncidentTimelineResponse` (see below); window defaults 120m before to 30m after `incident.created_at`, `beforeMinutes` 5-1440, `afterMinutes` 0-720 |
+| POST | `/api/incidents/:id/changes` | `{"targetType":"change_event|config_snapshot","targetId":"uuid","action":"link|dismiss","note"?}` | `201` new link / `200` upsert `{link}`; target must belong to the same host as the incident (`409 cross_host` otherwise); audited as `incident.change_linked` / `incident.change_dismissed` |
+| DELETE | `/api/incidents/:id/changes/:linkId` | none | `200 {ok:true}`; removes a manual link/dismissal; audited as `incident.change_unlinked`; 404 unknown link |
 | GET | `/api/memory?q=text` | none | searchable resolved incidents |
 | GET | `/healthz` | none | `{ok,db}` |
+
+### Change events and the unified incident timeline (implemented)
+
+`GET /api/incidents/:id/timeline` merges, newest first, the incident lifecycle (`incident_opened`, `incident_resolved`), the incident's evidence (preview redacted and capped at 240 chars), its investigations, and same-host change context: `config_snapshots` inside the window that are an initial observation or a checksum change (with `previous_checksum_sha256` from the prior snapshot of the same file), plus `change_events` inside the window — each also included when manually linked, even outside the window, and hidden when dismissed. Every change entry carries `offset_seconds` relative to `incident.created_at`, `relation` (`observed_nearby` or `operator_linked`), `link_id`, and `causation_claimed: false`; the response includes `causation_notice` ("Nearby deployments and configuration changes are temporal context only. Correlation does not establish root cause.") and `dismissed_count`. Only rows belonging to the incident's `agent_id` are ever included. All five routes sit behind the admin cookie; mutations additionally require the exact `ALLOWED_ORIGIN` and write non-secret `audit_events`.
 
 ### Stored AI connections
 

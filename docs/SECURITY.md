@@ -75,6 +75,14 @@ Address policy references: [IANA IPv4](https://www.iana.org/assignments/iana-ipv
 - Redaction before any LLM call now also covers GitHub tokens (`gh[pousr]_…`, `github_pat_…`), PEM private-key blocks, Basic/Digest auth headers, standalone `sk-…` keys, AWS `AKIA`/`ASIA` keys, Slack `xox…` tokens, JWTs and URL userinfo (`scheme://user:pass@host`) in addition to the original Bearer/`password`/`api_key`/`token`/`secret` patterns. Parser output is redacted again, so echoed secrets never reach stored results. Redaction remains regex-based first-line defense, not a complete secret scanner (see release blockers).
 - Server-side post-processing strips every `evidence_id` not minted by the database and forces `confidence: "low"` when no valid citations remain, so hallucinated or injected citations cannot survive. Negative fixtures live in `tests/prompt-injection.test.ts` and `tests/provider-cost.test.ts`.
 
+## Change events and incident timeline links
+
+- Change events (`POST /api/changes`) and incident change links (`POST/DELETE /api/incidents/:id/changes...`, `GET /api/incidents/:id/timeline`) sit behind the admin cookie; mutations require the exact `ALLOWED_ORIGIN` and are audited (`change.recorded`, `incident.change_linked`, `incident.change_dismissed`, `incident.change_unlinked`) with non-secret metadata only (IDs, kind, service name, version, link status) — never title/summary/note text.
+- Operator-supplied `title`, `summary` and link `note` are passed through the same regex `redact()` used for LLM payloads before storage, so accidental tokens/secrets in deploy notes are stripped; evidence previews in the timeline are redacted again and capped at 240 chars.
+- Host isolation: timeline reads and link targets are scoped to the incident's `agent_id`; linking a change or config snapshot from another host is rejected with `409 cross_host`, and the timeline builder drops foreign-host rows defensively.
+- Non-causal invariant: every change/config entry in API payloads and the UI carries `causation_claimed: false`, `relation` (`observed_nearby`/`operator_linked`), a relative `offset_seconds`, and the fixed notice that correlation does not establish root cause. Dismissal only hides nearby noise; it never asserts cause either way.
+- All string lengths, query limits and time windows on the new routes are bounded (title 3-160, summary 1-1000, note 1-300, `occurredAt` at most 5m future / 365d past, list limit ≤100, window 5-1440m before / 0-720m after, per-query row caps).
+
 ## Agent tool policy
 
 Tools are fixed in source code:

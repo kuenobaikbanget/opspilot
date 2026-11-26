@@ -35,6 +35,7 @@ import { isDevLoopbackInstallEnabled, loadHttpsAgentInstaller, readAgentInstallC
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
 import { serviceRoutes } from "./services";
+import { changeRoutes } from "./changes";
 
 const port = Number(process.env.PORT || 3001);
 if (process.env.NODE_ENV === "production" && !process.env.ADMIN_PASSWORD_HASH) {
@@ -120,6 +121,8 @@ async function router(req: Request): Promise<Response> {
   if (providerResponse) return providerResponse;
   const serviceResponse = await serviceRoutes(req, path, method);
   if (serviceResponse) return serviceResponse;
+  const changeResponse = await changeRoutes(req, path, method);
+  if (changeResponse) return changeResponse;
 
 
   if (path === "/api/auth/me" && method === "GET") {
