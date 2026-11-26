@@ -1,12 +1,14 @@
 import type { ServerWebSocket } from "bun";
 import { randomBytes } from "node:crypto";
 import {
+  MAX_CONFIG_SNAPSHOT_BYTES,
   MAX_SYSTEMD_REPORT_BYTES,
   MAX_WS_MESSAGE_BYTES,
   MAX_WORKLOAD_INVENTORY_BYTES,
   PROTOCOL_VERSION,
   negotiateCapabilities,
   parseAgentHello,
+  parseConfigSnapshot,
   parseSystemdReport,
   parseTelemetry,
   parseWorkloadInventory,
@@ -17,6 +19,7 @@ import {
 } from "@opspilot/contracts";
 import { db, hashSecret, audit } from "./db";
 import { checkThresholds, checkConfigHashes, addEvidence } from "./incidents";
+import { storeConfigSnapshot } from "./drift";
 import { storeSystemdReport } from "./systemd";
 import { storeWorkloadInventory } from "./workloads";
 
@@ -34,6 +37,7 @@ type PendingDiagnostic = {
 const connections = new Map<string, ServerWebSocket<SocketData>>();
 const writingSystemdReports = new Set<string>();
 const writingWorkloadReports = new Set<string>();
+const writingConfigSnapshots = new Set<string>();
 const pending = new Map<string, PendingDiagnostic>();
 
 const secret = () => randomBytes(32).toString("base64url");
@@ -164,6 +168,17 @@ export async function socketMessage(
       await storeWorkloadInventory(agentId, ws.data.sessionId, report);
     } finally {
       writingWorkloadReports.delete(agentId);
+    }
+  } else if (msg.type === "config_snapshot") {
+    // Strict contract validation: bounded size, active socket identity, exact frame schema.
+    if (bytes > MAX_CONFIG_SNAPSHOT_BYTES || connections.get(agentId) !== ws || writingConfigSnapshots.has(agentId)) return;
+    const frame = parseConfigSnapshot(msg);
+    if (!frame) return;
+    writingConfigSnapshots.add(agentId);
+    try {
+      await storeConfigSnapshot(agentId, frame);
+    } finally {
+      writingConfigSnapshots.delete(agentId);
     }
   } else if (msg.type === "telemetry") {
     // Strict contract validation: finite bounded metrics, sane timestamp, bounded config hashes.

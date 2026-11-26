@@ -178,15 +178,18 @@ export async function checkConfigHashes(
     const prior =
       await db`SELECT checksum_sha256 FROM config_snapshots WHERE agent_id=${agentId} AND file_path=${path} ORDER BY captured_at DESC LIMIT 1`;
     if (!prior.length || prior[0].checksum_sha256 !== checksum) {
-      await db`INSERT INTO config_snapshots(agent_id,file_path,checksum_sha256) VALUES(${agentId},${path},${checksum})`;
+      const inserted =
+        await db<{ id: string }[]>`INSERT INTO config_snapshots(agent_id,file_path,checksum_sha256) VALUES(${agentId},${path},${checksum}) RETURNING id`;
       if (prior.length) {
-        await createIncident(
+        const incidentId = await createIncident(
           agentId,
           "config_drift",
           `Configuration changed: ${path}`,
           "config_hash",
           `File ${path}: prior SHA256 ${prior[0].checksum_sha256}; current SHA256 ${checksum}. Changes are correlated, not proven causal.`,
         );
+        // Link the incident back to the snapshot row so the drift timeline can cross-reference it.
+        await db`UPDATE config_snapshots SET incident_id=${incidentId} WHERE id=${inserted[0].id}`;
       }
     }
   }
