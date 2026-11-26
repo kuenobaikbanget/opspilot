@@ -58,13 +58,13 @@ No answer is treated as guaranteed correct. Display **hypothesis**, not "root ca
 
 ## Incident memory architecture
 
-Starter: **resolved-case FTS retrieval**. Store `{incident_id, title summary, human resolution}`; retrieve a small bounded set as context. This is genuinely usable for known error terms, but not vector RAG. No fabricated claim of pgvector implementation.
+**Hybrid retrieval (FTS + optional embeddings) is implemented** (migration `014_memory_embeddings_hybrid.sql`). Every resolved incident stores `{incident_id, title summary, human resolution}`; retrieval runs a bounded PostgreSQL FTS leg (`to_tsvector('simple', summary || ' ' || resolution) @@ plainto_tsquery('simple', q)` ranked by `ts_rank_cd`) and, when a query embedding is available, a vector leg (native pgvector `<=>` cosine distance when the extension is installed, otherwise an exact bounded cosine-similarity fallback over the persisted `embedding_values DOUBLE PRECISION[]`). Both rankings are fused with Reciprocal Rank Fusion (`reciprocalRankFusion`, k=60), tie-broken by score, `created_at` desc, `id` asc. `GET /api/memory` and the Worker's `prior_resolutions` context both go through `searchIncidentMemories`; each result carries `retrieval_method`, `fts_score`, `vector_score`, `hybrid_score` and `embedding_model`.
 
-Roadmap: add hybrid search (FTS + embeddings), index only curated human-confirmed summaries, store embedding provenance + model ID and privacy consent, evaluate recall@k before enabling. OpenAI/Gemini support embedding paths; Anthropic-only deployments need a separate optional embedding source or FTS-only operation.
+Embeddings are **strictly opt-in**: they run only when `OPSPILOT_MEMORY_EMBEDDINGS_ENABLED=true`, a server master key exists, an enabled `openai-compatible`/`gemini` provider is configured, and the individual memory row has `embedding_consent = TRUE` (set explicitly when a human resolves an incident). Only curated human-confirmed `summary + resolution` is embedded — redacted via `redact()` and length-bounded before any outbound request, sent only through the DNS-pinned public HTTPS egress client (`postProviderJson`) — never raw logs or unredacted evidence. Provenance (`embedding_model`, `embedding_provider_id`, `embedded_at`, `embedding_dimensions`) is persisted with the normalized vector. `anthropic` connections are rejected with a typed `embedding_unsupported` error without any network request (Anthropic reasoning models do not imply an Anthropic embedding service), so Anthropic-only deployments run FTS-only retrieval. The Worker embeds at most 5 consented rows per tick and never blocks or fails investigations when embedding is unavailable.
 
 ## Evaluation plan
 
-Maintain 10–20 synthetic reproducible incidents in `tests/incident-fixtures` (planned): Nginx wrong upstream, application down, high disk pressure, OOM, Docker restart loop, service stopped, config drift unrelated to outage, ambiguous multi-cause alert, empty evidence, prompt-injection in logs.
+Maintain 10–20 synthetic reproducible incidents in `tests/incident-fixtures` and a repeat-incident retrieval corpus in `tests/memory-retrieval-fixtures` (18 memory records + 20 query cases: exact-keyword, paraphrase/synonym and distractor). `tests/memory-retrieval.eval.test.ts` measures Recall@1/@3/@5 and MRR for FTS-only, vector-only and hybrid RRF. Measured on the current corpus: **FTS-only Recall@5 = 0.375 / MRR = 0.375** (exact repeats only; paraphrases are invisible to `plainto_tsquery` AND-semantics), **vector-only Recall@5 = 1.0 / MRR = 1.0**, **hybrid RRF Recall@1/@3/@5 = 1.0 / MRR = 1.0** with false-top-1 rate 0 on distractors — hybrid strictly beats FTS-only on Recall@5 and MRR while preserving exact-term top-1 recall, satisfying the Phase 3 exit gate on a measured evaluation set. Real PostgreSQL FTS behavior is covered by `tests/memory-hybrid.integration.test.ts`.
 
 Metrics:
 
@@ -74,7 +74,7 @@ Metrics:
 - False confidence rate where evidence insufficient.
 - Mean tokens/cost per incident; time-to-first-hypothesis.
 - Prompt injection success rate (target zero, must test).
-- Recall@5 for incident memory baseline FTS and later hybrid retrieval.
+- Recall@5 for incident memory baseline FTS and hybrid retrieval (measured in `tests/memory-retrieval.eval.test.ts`; hybrid must stay strictly above FTS-only on paraphrased repeats).
 
 ## Cost guardrails (release blockers)
 

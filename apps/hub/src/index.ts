@@ -30,6 +30,7 @@ import {
   sessionCookie,
 } from "./auth";
 import { audit, db } from "./db";
+import { searchIncidentMemories } from "./memory-retrieval";
 import { createIncident, effectiveThresholds, hostThresholds } from "./incidents";
 import { driftRoutes } from "./drift";
 import { isDevLoopbackInstallEnabled, loadHttpsAgentInstaller, readAgentInstallConfig } from "./agent-install";
@@ -542,26 +543,25 @@ async function router(req: Request): Promise<Response> {
     if (resolution.length < 8 || resolution.length > 3000) {
       return invalid("Resolution must be 8-3000 characters");
     }
+    // Embeddings are strictly opt-in: only a human-confirmed resolution may be
+    // embedded, and only when the operator explicitly consented for this memory.
+    const embeddingConsent = data.embeddingConsent === true;
     const incident =
       await db`UPDATE incidents SET status='resolved',resolution=${resolution},resolved_at=NOW() WHERE id=${match[1]} AND status='open' RETURNING id,title`;
     if (!incident.length) {
       return invalid("Not found or already resolved", 404);
     }
-    await db`INSERT INTO incident_memory(incident_id,summary,resolution) VALUES(${match[1]},${incident[0].title},${resolution}) ON CONFLICT(incident_id) DO UPDATE SET resolution=excluded.resolution`;
+    await db`INSERT INTO incident_memory(incident_id,summary,resolution,embedding_consent) VALUES(${match[1]},${incident[0].title},${resolution},${embeddingConsent}) ON CONFLICT(incident_id) DO UPDATE SET resolution=excluded.resolution, embedding_consent=incident_memory.embedding_consent OR excluded.embedding_consent`;
     await audit("incident.resolved", match[1]);
     return j({ ok: true });
   }
 
   if (path === "/api/memory" && method === "GET") {
     const q = new URL(req.url).searchParams.get("q")?.slice(0, 100) || "";
-    if (q) {
-      return j(
-        await db`SELECT id,incident_id,summary,resolution,created_at FROM incident_memory WHERE to_tsvector('simple',summary || ' ' || resolution) @@ plainto_tsquery('simple',${q}) ORDER BY created_at DESC LIMIT 20`,
-      );
-    }
-    return j(
-      await db`SELECT id,incident_id,summary,resolution,created_at FROM incident_memory ORDER BY created_at DESC LIMIT 20`,
-    );
+    // Backwards-compatible array payload; each record additionally carries
+    // retrieval_method / fts_score / vector_score / hybrid_score / embedding_model.
+    const search = await searchIncidentMemories(db, q, { limit: 20 });
+    return j(search.results);
   }
 
   return invalid("Not found", 404);

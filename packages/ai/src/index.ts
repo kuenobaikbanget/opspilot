@@ -1,7 +1,12 @@
 import type { Diagnosis, ProviderProtocol } from "@opspilot/contracts";
 import { normalizeProviderBaseUrl, postProviderJson, ProviderError, type ProviderPost } from "./provider-http";
+import { redact } from "./redaction";
 import { sortScoredEvidence, scoreEvidenceRelevance, type EvidenceLike, type IncidentLike, type SortOptions } from "./evidence-scoring";
 import { usageFromProviderResponse, type DiagnosisWithUsage, type ProviderUsage } from "./usage";
+
+export { redact } from "./redaction";
+export { supportsEmbeddings, generateEmbedding, EmbeddingError, type EmbeddingErrorCode, type GeneratedEmbedding, MAX_EMBEDDING_INPUT_CHARS, MAX_EMBEDDING_DIMENSIONS } from "./embeddings";
+export { cosineSimilarity, reciprocalRankFusion, type FtsRankedItem, type VectorRankedItem, type FusedItem, type RrfOptions } from "./memory-retrieval";
 
 export { sortScoredEvidence, scoreEvidenceRelevance };
 export type { EvidenceLike, IncidentLike, SortOptions };
@@ -38,21 +43,6 @@ const UNTRUSTED_PREAMBLE = [
   "credentials. Cite evidence only by IDs that appear verbatim in the EVIDENCE section.",
 ].join("\n");
 const UNTRUSTED_EPILOGUE = "END UNTRUSTED INPUT";
-
-/** Redacts common credential patterns (Bearer/Basic tokens, key=value secrets, AWS keys, GitHub tokens, PEM blocks, URL userinfo, JWTs) from text. */
-export function redact(text: string): string {
-  return text
-    .replace(/(authorization\s*[:=]\s*(?:bearer|basic|digest|token)\s+)[^\s]+/gi, "$1[REDACTED]")
-    .replace(/((?:password|api[_-]?key|token|secret|passwd|pwd)\s*[:=]\s*["']?)[^\s,;"']+/gi, "$1[REDACTED]")
-    .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[REDACTED_AWS_KEY]")
-    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]")
-    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]")
-    .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")
-    .replace(/\b(xox[baprs]-[A-Za-z0-9-]{10,})\b/g, "[REDACTED_SLACK_TOKEN]")
-    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, "[REDACTED]")
-    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_JWT]")
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/:@]+):([^\s@]+)@/gi, "$1[REDACTED]:[REDACTED]@");
-}
 
 function parseDiagnosis(raw: string, evidenceIds: Set<string>): Diagnosis {
   let parsed: unknown;

@@ -83,6 +83,15 @@ Address policy references: [IANA IPv4](https://www.iana.org/assignments/iana-ipv
 - Non-causal invariant: every change/config entry in API payloads and the UI carries `causation_claimed: false`, `relation` (`observed_nearby`/`operator_linked`), a relative `offset_seconds`, and the fixed notice that correlation does not establish root cause. Dismissal only hides nearby noise; it never asserts cause either way.
 - All string lengths, query limits and time windows on the new routes are bounded (title 3-160, summary 1-1000, note 1-300, `occurredAt` at most 5m future / 365d past, list limit ≤100, window 5-1440m before / 0-720m after, per-query row caps).
 
+### Incident-memory embeddings (opt-in hybrid retrieval)
+
+- Hybrid memory retrieval (migration `014`) always runs bounded PostgreSQL FTS; the vector leg only activates when an operator explicitly enables it with `OPSPILOT_MEMORY_EMBEDDINGS_ENABLED=true`, a server master key exists, an enabled `openai-compatible`/`gemini` provider is configured, and the individual memory row carries `embedding_consent = TRUE` (opt-in per human-confirmed resolution). No paid external embedding API is ever called silently; without consent/config the system is FTS-only.
+- Only curated human-confirmed `summary + resolution` is embedded — never raw logs or unredacted evidence. The text is passed through `redact()` and length-bounded (max 2000 chars) before any outbound request, and goes only through the DNS-pinned public HTTPS egress client (`postProviderJson`): SSRF/IP-blocklist/DNS-rebinding rules, 30 s total deadline and 1 MiB response cap apply unchanged. Provider vector responses are validated (finite numbers, 1–4096 dimensions, non-empty, non-zero norm) and L2-normalized before storage.
+- `anthropic` connections are rejected with a typed `embedding_unsupported` error before any network request: Anthropic reasoning models do not imply an Anthropic embedding service, so Anthropic-only deployments remain FTS-only.
+- The normalized vector is persisted in `embedding_values DOUBLE PRECISION[]` together with provenance (`embedding_model`, `embedding_provider_id`, `embedded_at`, `embedding_dimensions`, `embedding_consent`). When the server ships pgvector, a native `embedding_vector vector` column is added and used for `<=>` queries; plain `postgres:16-alpine` works via the exact in-app cosine fallback. Provider deletion nulls `embedding_provider_id` (`ON DELETE SET NULL`).
+- The Worker embeds at most 5 consented pending rows per tick; embedding failures never block or fail investigations. Recall@k is benchmarked before enabling (`tests/memory-retrieval.eval.test.ts`): on the repeat-incident corpus, hybrid RRF Recall@5 = 1.0 / MRR = 1.0 vs FTS-only 0.375, with zero false top-1 on distractor queries.
+- Embedding requests are billable external calls like generation: each embedded row should be reviewed for retention policy of the chosen provider, and redaction is regex first-line defense, not a complete secret scanner.
+
 ## Agent tool policy
 
 Tools are fixed in source code:

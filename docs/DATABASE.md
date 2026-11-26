@@ -20,6 +20,7 @@ erDiagram
   agents ||--o{ change_events : records
   change_events ||--o{ incident_change_links : targeted_by
   config_snapshots ||--o{ incident_change_links : targeted_by
+  ai_providers ||--o{ incident_memory : embeds
   agents { uuid id PK; text hostname; text token_hash; int protocol_version; text[] capabilities; timestamptz last_seen_at }
   metric_samples { bigint id PK; uuid agent_id FK; timestamptz sampled_at; float cpu_percent; float memory_percent; float disk_percent }
   metric_samples_hourly { uuid agent_id PK; timestamptz hour PK; int sample_count; float cpu_min; float cpu_max; float cpu_avg; bigint network_rx_bytes }
@@ -31,7 +32,7 @@ erDiagram
   investigations { uuid id PK; uuid incident_id FK; uuid provider_id FK; text provider_name; text provider_protocol; text provider_model; text status; jsonb result_json }
   ai_providers ||--o{ investigations : snapshots
   ai_providers { uuid id PK; text protocol; int revision; text api_key_ciphertext; uuid last_test_id; text last_test_status }
-  incident_memory { uuid id PK; uuid incident_id FK; text summary; text resolution }
+  incident_memory { uuid id PK; uuid incident_id FK; text summary; text resolution; float8[] embedding_values; int embedding_dimensions; text embedding_model; uuid embedding_provider_id FK; timestamptz embedded_at; bool embedding_consent }
   change_events { uuid id PK; uuid agent_id FK; text kind; text title; text service_name; text version; text summary; text source; timestamptz occurred_at }
   incident_change_links { uuid id PK; uuid incident_id FK; uuid change_event_id FK; uuid config_snapshot_id FK; text status; text note }
 ```
@@ -81,19 +82,32 @@ erDiagram
 - Migration 010 adds investigation reliability columns to `investigations`: `lease_expires_at`, `worker_id`, `attempts` (default 0), `max_attempts` (default 3), `next_retry_at` and `dedupe_key`. A partial unique index allows at most one active (`queued`/`running`) investigation per `dedupe_key`, so terminal rows can always be re-investigated; claim and lease-recovery partial indexes serve worker polling. Lease expiries are audited as `investigation.lease_expired` with only non-secret fields (incident id, worker id, attempts, outcome).
 - Migration 012 extends `config_snapshots` backwards-compatibly for the drift timeline: `previous_snapshot_id` (self FK, `ON DELETE SET NULL`), `diff_status` (`hash_only`|`diff_available`|`unavailable`, default `hash_only`), `unavailable_reason`, `content_format`, `content_redacted` (always redacted; never raw file bytes), `content_truncated`, `redaction_count` (default 0, CHECK >= 0), `semantic_diff_json` (JSONB, redacted + bounded), `diff_summary` and `incident_id` (FK to `incidents`, `ON DELETE SET NULL`), plus `captured_at DESC` and `(agent_id, captured_at DESC)` indexes for timeline queries. Existing hash-only rows keep `diff_status='hash_only'` and remain valid; a `config_snapshot` frame whose checksum matches the latest telemetry-inserted row enriches that row instead of duplicating it.
 - Migration 013 adds `change_events` (per-host recorded changes with `kind` CHECK, `source` default `operator`, `occurred_at`, index `(agent_id, occurred_at DESC)`) and `incident_change_links` (incident + exactly one of `change_event_id`/`config_snapshot_id`, `status` `linked|dismissed`, partial unique indexes per target). Links are operator curation only — they never record a causation claim. The migration reads only standard columns from 001 (`agents`, `incidents`, `config_snapshots`), so it applies cleanly on top of 011 and after 012.
+- Migration 014 adds hybrid-retrieval embedding columns to `incident_memory`: `embedding_values DOUBLE PRECISION[]` (always persisted, so hybrid retrieval works on plain PostgreSQL 16 via an exact bounded cosine-similarity fallback), `embedding_dimensions`, `embedding_model`, `embedding_provider_id UUID REFERENCES ai_providers(id) ON DELETE SET NULL`, `embedded_at` and `embedding_consent BOOLEAN NOT NULL DEFAULT FALSE` (opt-in). When `pg_available_extensions` contains `'vector'` (e.g. `pgvector/pgvector:pg16`, but NOT plain `postgres:16-alpine`) the migration also runs `CREATE EXTENSION IF NOT EXISTS vector` and adds a nullable `embedding_vector vector` column used for native `<=>` cosine-distance queries. Partial indexes serve the pending-embedding scan (`embedding_consent AND embedded_at IS NULL`) and the embedded-rows retrieval scan (`embedding_values IS NOT NULL`).
 
-## Full-text retrieval (currently implemented)
+## Hybrid full-text + vector retrieval (implemented)
 
 ```sql
-SELECT id, summary, resolution
+-- FTS leg (always runs, bounded):
+SELECT id, incident_id, summary, resolution, created_at, embedding_model,
+       ts_rank_cd(to_tsvector('simple', summary || ' ' || resolution),
+                  plainto_tsquery('simple', $1)) AS fts_score
 FROM incident_memory
-WHERE to_tsvector('simple', summary || ' ' || resolution)
-  @@ plainto_tsquery('simple', $1)
-ORDER BY created_at DESC
-LIMIT 5;
+WHERE to_tsvector('simple', summary || ' ' || resolution) @@ plainto_tsquery('simple', $1)
+ORDER BY fts_score DESC, created_at DESC, id ASC LIMIT 50;
+
+-- Vector leg when pgvector is present ($2 is the query vector literal):
+SELECT id, 1 - (embedding_vector <=> $2::vector) AS vector_score
+FROM incident_memory
+WHERE embedding_vector IS NOT NULL AND embedding_dimensions = $3
+  AND 1 - (embedding_vector <=> $2::vector) >= 0.2
+ORDER BY embedding_vector <=> $2::vector LIMIT 50;
+-- Otherwise the same candidates come from `embedding_values` with exact cosine
+-- similarity computed in the app (bounded candidate set, matching dimensions).
 ```
 
-Limitations: exact-token relevance misses synonyms and root-cause paraphrases. Migrate later to hybrid FTS + pgvector with a measured retrieval benchmark. Anthropic reasoning models do not imply an Anthropic embedding service; choose an embeddings provider separately and document data privacy/cost.
+Both legs are fused with Reciprocal Rank Fusion (k=60) in `packages/ai/src/memory-retrieval.ts`; results are tagged `retrieval_method: "fts" | "hybrid_rrf"` with `fts_score`, `vector_score`, `hybrid_score` and `embedding_model`. `searchIncidentMemories` (apps/hub, reused by the Worker) implements this; `GET /api/memory` returns the backwards-compatible array with these extra per-record fields.
+
+Limitations: exact-token FTS alone misses synonyms and root-cause paraphrases (measured: FTS-only Recall@5 0.375 vs hybrid 1.0 on the repeat-incident eval corpus, see `tests/memory-retrieval.eval.test.ts`). Embeddings are opt-in per memory row (`embedding_consent`) and only ever cover redacted human-confirmed `summary + resolution`; Anthropic reasoning models do not imply an Anthropic embedding service, so Anthropic-only deployments use FTS-only retrieval.
 
 ## Retention and downsampling (implemented)
 
