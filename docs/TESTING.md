@@ -8,6 +8,8 @@ bun run typecheck
 (cd agent && go test ./...)
 ```
 
+`tests/contracts.test.ts` also covers strict telemetry validation (`parseTelemetry`: NaN/Inf, out-of-range, fractional/negative counters, timestamp window, config-hash bounds), hello/capability negotiation, enrollment parsing and threshold-update parsing. `tests/monitoring.integration.test.ts` (runs with `AI_PROVIDER_TEST_DATABASE_URL`) covers hello_ack negotiation and 4000 refusal, dropped invalid telemetry frames, thresholds API auth/validation negatives, persisted breach/cooldown state across a Hub restart, and worker retention rollup/delete plus raw/hourly metrics range queries. The Go agent suite (`agent/internal/agent/queue_test.go`) covers durable queue order, restart persistence, capacity/age caps, corrupt-line recovery and in-order flush across a real disconnect/reconnect, plus capability intersection.
+
 `tests/contracts.test.ts` covers tool/metric bounds, provider input contracts and redaction. The BYOK suites below cover credential, transport, migration and real API/Worker boundaries. `tests/agent-install.test.ts` covers installation metadata and command quoting; `tests/agent-installer.test.ts` covers pre-mutation shell rejection with isolated fixtures, never successful privileged installation on the developer host. Go agent tests cover parsing/redaction/WS URL plus finite enrollment, response/redirect rejection and identity preservation. These tests are **not** a substitute for broader agent security, integration, and AI evaluation.
 
 ## Overview triage verification — 2026-11-19

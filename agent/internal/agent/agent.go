@@ -54,6 +54,71 @@ type telemetry struct {
 	ConfigHashes   map[string]string `json:"configHashes"`
 }
 
+// protocolVersion is the agent wire protocol version reported on enrollment and hello.
+const protocolVersion = 2
+
+// agentVersion identifies the running binary; overridable at build time via -ldflags.
+var agentVersion = "0.1.0"
+
+// advertisedCapabilities lists what this agent can do; the Hub negotiates the intersection.
+var advertisedCapabilities = []string{"telemetry", "systemd_status", "diagnostics"}
+
+type helloMessage struct {
+	Type            string   `json:"type"`
+	ProtocolVersion int      `json:"protocolVersion"`
+	AgentVersion    string   `json:"agentVersion"`
+	Capabilities    []string `json:"capabilities"`
+}
+
+type helloAck struct {
+	Type            string   `json:"type"`
+	ProtocolVersion int      `json:"protocolVersion"`
+	Capabilities    []string `json:"capabilities"`
+}
+
+// capabilitySet tracks the negotiated capabilities; before any ack it defaults to all advertised.
+type capabilitySet struct {
+	mu  sync.Mutex
+	set map[string]bool
+}
+
+func newCapabilitySet() *capabilitySet {
+	set := map[string]bool{}
+	for _, c := range advertisedCapabilities {
+		set[c] = true
+	}
+	return &capabilitySet{set: set}
+}
+
+func (c *capabilitySet) has(name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.set[name]
+}
+
+// applyAck restricts the set to the Hub-negotiated intersection of advertised capabilities.
+func (c *capabilitySet) applyAck(ack helloAck) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := map[string]bool{}
+	for _, advertised := range advertisedCapabilities {
+		for _, negotiated := range ack.Capabilities {
+			if negotiated == advertised {
+				next[advertised] = true
+			}
+		}
+	}
+	c.set = next
+}
+
+type enrollRequest struct {
+	Token           string   `json:"token"`
+	Hostname        string   `json:"hostname"`
+	Version         string   `json:"version"`
+	ProtocolVersion int      `json:"protocolVersion"`
+	Capabilities    []string `json:"capabilities"`
+}
+
 type config struct {
 	HubURL, StatePath, ProcRoot, DiskPath string
 	Interval                              time.Duration
@@ -61,6 +126,9 @@ type config struct {
 	ConfigFiles                           []string
 	Docker                                bool
 	SystemdUnit                           string
+	QueuePath                             string
+	MaxQueueEntries                       int
+	MaxQueueAge                           time.Duration
 }
 type safeConn struct {
 	mu sync.Mutex
@@ -107,7 +175,19 @@ func readConfig() config {
 			allowed[s] = true
 		}
 	}
-	return config{HubURL: strings.TrimRight(env("OPSPILOT_HUB_URL", "http://localhost:3001"), "/"), StatePath: env("OPSPILOT_AGENT_STATE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "identity.json")), ProcRoot: env("OPSPILOT_PROC_ROOT", "/proc"), DiskPath: env("OPSPILOT_DISK_PATH", "/"), Interval: time.Duration(seconds) * time.Second, AllowedServices: allowed, ConfigFiles: splitCSV(env("OPSPILOT_CONFIG_FILES", "")), Docker: env("OPSPILOT_ENABLE_DOCKER", "false") == "true", SystemdUnit: os.Getenv("OPSPILOT_SYSTEMD_UNIT")}
+	return config{HubURL: strings.TrimRight(env("OPSPILOT_HUB_URL", "http://localhost:3001"), "/"), StatePath: env("OPSPILOT_AGENT_STATE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "identity.json")), ProcRoot: env("OPSPILOT_PROC_ROOT", "/proc"), DiskPath: env("OPSPILOT_DISK_PATH", "/"), Interval: time.Duration(seconds) * time.Second, AllowedServices: allowed, ConfigFiles: splitCSV(env("OPSPILOT_CONFIG_FILES", "")), Docker: env("OPSPILOT_ENABLE_DOCKER", "false") == "true", SystemdUnit: os.Getenv("OPSPILOT_SYSTEMD_UNIT"),
+		QueuePath:       env("OPSPILOT_QUEUE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "queue.jsonl")),
+		MaxQueueEntries: clampInt(env("OPSPILOT_QUEUE_MAX_ENTRIES", "2000"), 1, 100_000, 2000),
+		MaxQueueAge:     time.Duration(clampInt(env("OPSPILOT_QUEUE_MAX_AGE_SECONDS", "86400"), 60, 604_800, 86_400)) * time.Second,
+	}
+}
+
+func clampInt(raw string, min, max, fallback int) int {
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || v < min || v > max {
+		return fallback
+	}
+	return v
 }
 func readIdentity(path string) (identity, error) {
 	var id identity
@@ -156,7 +236,7 @@ func enroll(cfg config) (identity, error) {
 		return id, errors.New("set OPSPILOT_ENROLL_TOKEN to a fresh one-time token")
 	}
 	hostname, _ := os.Hostname()
-	payload, _ := json.Marshal(map[string]string{"token": token, "hostname": hostname, "version": "0.1.0"})
+	payload, _ := json.Marshal(enrollRequest{Token: token, Hostname: hostname, Version: agentVersion, ProtocolVersion: protocolVersion, Capabilities: advertisedCapabilities})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.HubURL+"/api/agents/enroll", bytes.NewReader(payload))
@@ -261,11 +341,40 @@ func runConnection(ws *websocket.Conn, cfg config) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sampler := newCPUSampler(cfg.ProcRoot)
+	caps := newCapabilitySet()
+
+	// Report wire protocol version and capabilities first; the Hub answers with hello_ack.
+	if err := conn.send(helloMessage{Type: "hello", ProtocolVersion: protocolVersion, AgentVersion: agentVersion, Capabilities: advertisedCapabilities}); err != nil {
+		log.Printf("hello send failed: %v", err)
+		return
+	}
+
+	// Durable bounded queue: samples are persisted before send and flushed in order on reconnect.
+	queue, err := openQueue(cfg.QueuePath, cfg.MaxQueueEntries, cfg.MaxQueueAge)
+	if err != nil {
+		log.Printf("telemetry queue unavailable (%v); sending without durable buffering", err)
+		queue = nil
+	}
+	if queue != nil {
+		flushQueue(conn, queue)
+	}
 	sendTelemetry := func() {
-		t := sample(cfg, sampler)
-		if err := conn.send(t); err != nil {
-			log.Printf("telemetry send failed: %v", err)
+		if !caps.has("telemetry") {
+			return
 		}
+		t := sample(cfg, sampler)
+		if queue == nil {
+			if err := conn.send(t); err != nil {
+				log.Printf("telemetry send failed: %v", err)
+			}
+			return
+		}
+		// Re-stamp at send time: the Hub bounds timestamp age, and queued samples keep order.
+		t.Timestamp = time.Now().UTC().Format(time.RFC3339)
+		if err := queue.push(t); err != nil {
+			log.Printf("telemetry queue write failed: %v", err)
+		}
+		flushQueue(conn, queue)
 	}
 	sendTelemetry()
 	go func() {
@@ -276,9 +385,11 @@ func runConnection(ws *websocket.Conn, cfg config) {
 			if ctx.Err() != nil {
 				return
 			}
-			if err := conn.send(report); err != nil {
-				log.Printf("systemd status send failed: %v", err)
-				return
+			if caps.has("systemd_status") {
+				if err := conn.send(report); err != nil {
+					log.Printf("systemd status send failed: %v", err)
+					return
+				}
 			}
 			select {
 			case <-ctx.Done():
@@ -301,20 +412,33 @@ func runConnection(ws *websocket.Conn, cfg config) {
 	}()
 	ws.SetReadLimit(64 * 1024)
 	for {
-		var request diagnosticRequest
-		if err := ws.ReadJSON(&request); err != nil {
+		var envelope struct {
+			Type            string   `json:"type"`
+			RequestID       string   `json:"requestId"`
+			Tool            string   `json:"tool"`
+			Service         string   `json:"service"`
+			ProtocolVersion int      `json:"protocolVersion"`
+			Capabilities    []string `json:"capabilities"`
+		}
+		if err := ws.ReadJSON(&envelope); err != nil {
 			return
 		}
-		if request.Type != "diagnostic_request" || len(request.RequestID) > 100 {
-			continue
-		}
-		go func(r diagnosticRequest) {
-			ok, out := inspect(cfg, r)
-			res := diagnosticResult{Type: "diagnostic_result", RequestID: r.RequestID, Tool: r.Tool, Ok: ok, Content: redact(out)}
-			if err := conn.send(res); err != nil {
-				log.Printf("result send failed: %v", err)
+		switch envelope.Type {
+		case "hello_ack":
+			caps.applyAck(helloAck{Type: envelope.Type, ProtocolVersion: envelope.ProtocolVersion, Capabilities: envelope.Capabilities})
+		case "diagnostic_request":
+			if len(envelope.RequestID) > 100 || !caps.has("diagnostics") {
+				continue
 			}
-		}(request)
+			request := diagnosticRequest{Type: envelope.Type, RequestID: envelope.RequestID, Tool: envelope.Tool, Service: envelope.Service}
+			go func(r diagnosticRequest) {
+				ok, out := inspect(cfg, r)
+				res := diagnosticResult{Type: "diagnostic_result", RequestID: r.RequestID, Tool: r.Tool, Ok: ok, Content: redact(out)}
+				if err := conn.send(res); err != nil {
+					log.Printf("result send failed: %v", err)
+				}
+			}(request)
+		}
 	}
 }
 func sample(cfg config, cpu *cpuSampler) telemetry {

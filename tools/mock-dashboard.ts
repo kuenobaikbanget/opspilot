@@ -97,7 +97,7 @@ export function startDashboardMock(port: number, scenario: Scenario) {
           const hosts: Host[] = fixtures.map(fixture => {
             const sample = fixture.usage ? metric(fixture.usage, sampleTime(fixture, currentSample), startedAt - fixture.age) : null;
             return {
-              id: fixture.id, hostname: fixture.hostname, status: fixture.status, version: "mock",
+              id: fixture.id, hostname: fixture.hostname, status: fixture.status, version: "mock", protocol_version: 2, capabilities: ["telemetry", "systemd_status", "diagnostics"],
               created_at: iso(startedAt - 86_400_000), last_seen_at: iso(fixture.status === "online" ? now : startedAt - fixture.age),
               sampled_at: sample?.sampled_at ?? null, cpu_percent: sample?.cpu_percent ?? null,
               memory_percent: sample?.memory_percent ?? null, disk_percent: sample?.disk_percent ?? null,

@@ -99,6 +99,10 @@ The [Fleet & services dashboard](UI-UX.md#fleet-services-dashboard-contract-targ
 
 Before enablement, add positive and negative tests for monitor authorization, invalid targets/associations, denied inventory, DNS/redirect bypasses, IPv6/encoded addresses, timeouts/output/concurrency bounds, redaction and audit records. See [planned acceptance](TESTING.md#fleet-services-dashboard-acceptance-planned). These controls are requirements, not a claim that the starter already implements SSRF-safe HTTP monitoring.
 
+## Data retention
+
+Metric telemetry is bounded by policy, not by disk luck: raw `metric_samples` are kept for `METRIC_RAW_RETENTION_HOURS` (default 168h), then rolled up per hour into `metric_samples_hourly` (count, min/max/avg, last network counters) and deleted in the same transaction by the Worker's `runMetricRetention`; rollups expire after `METRIC_ROLLUP_RETENTION_DAYS` (default 90d). Spent/expired enrollment tokens are deleted after 24h. Per-host alert thresholds and the alert condition state (breach streak, breached incident, cooldown) live in `alert_thresholds`/`alert_conditions` and survive Hub restarts; they cascade on host deletion. The agent-side queue is bounded on disk (`OPSPILOT_QUEUE_MAX_ENTRIES` default 2000 entries, `OPSPILOT_QUEUE_MAX_AGE_SECONDS` default 86400, 0600 file) so an unreachable Hub cannot grow it without limit; oldest samples are dropped first. Evidence, audit and investigation retention remain operator-managed per `docs/DATABASE.md`; retention exceptions for evidence tied to unresolved investigations are still planned. Deletion jobs are idempotent and audited where they touch configuration; raw metric deletion is not individually audited (volume), only the configured windows are.
+
 ## Minimum recommended network exposure
 
 - Local development: bound Compose `3000`, `3001`, PostgreSQL `5433` to `127.0.0.1`.

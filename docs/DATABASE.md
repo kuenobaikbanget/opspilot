@@ -7,13 +7,20 @@ Migration source: numbered `infra/db/*.sql`, applied lexicographically by `bun r
 ```mermaid
 erDiagram
   agents ||--o{ metric_samples : records
+  agents ||--o{ metric_samples_hourly : rolls_up
+  agents ||--o{ alert_thresholds : overrides
+  agents ||--o{ alert_conditions : tracks
   agents ||--o{ config_snapshots : observes
   agents ||--o{ incidents : generates
   incidents ||--o{ evidence : has
   incidents ||--o{ investigations : undergoes
   incidents ||--o| incident_memory : resolves_to
-  agents { uuid id PK; text hostname; text token_hash; timestamptz last_seen_at }
+  incidents ||--o{ alert_conditions : links
+  agents { uuid id PK; text hostname; text token_hash; int protocol_version; text[] capabilities; timestamptz last_seen_at }
   metric_samples { bigint id PK; uuid agent_id FK; timestamptz sampled_at; float cpu_percent; float memory_percent; float disk_percent }
+  metric_samples_hourly { uuid agent_id PK; timestamptz hour PK; int sample_count; float cpu_min; float cpu_max; float cpu_avg; bigint network_rx_bytes }
+  alert_thresholds { uuid agent_id PK; float cpu_percent; float memory_percent; float disk_percent }
+  alert_conditions { uuid agent_id PK; text metric PK; text state; int consecutive; timestamptz cooldown_until; uuid incident_id FK }
   config_snapshots { uuid id PK; uuid agent_id FK; text file_path; text checksum_sha256; timestamptz captured_at }
   incidents { uuid id PK; uuid agent_id FK; text title; text category; text status; text resolution }
   evidence { uuid id PK; uuid incident_id FK; text source; text content }
@@ -27,9 +34,9 @@ erDiagram
 
 | Table | Purpose | Retention proposal |
 |---|---|---|
-| `agents` | enrollment identity hash, name, last contact | until deletion |
-| `enrollment_tokens` | one-time SHA256 token + TTL/used flag | delete after 24h |
-| `metric_samples` | 15s telemetry samples per host | 7d raw, 90d hourly rollup |
+| `agents` | enrollment identity hash, name, wire protocol version, negotiated capabilities, last contact | until deletion |
+| `enrollment_tokens` | one-time SHA256 token + TTL/used flag | worker deletes spent/expired rows after 24h |
+| `metric_samples` | 15s telemetry samples per host | raw window `METRIC_RAW_RETENTION_HOURS` (default 168 = 7d), then rolled up and deleted by the worker |
 | `config_snapshots` | allowlisted file hash history | 90d or per-policy |
 | `incidents` | incident lifecycle & human resolution | until archive |
 | `evidence` | bounded diagnostic output | 30–90d based on privacy |
@@ -38,6 +45,9 @@ erDiagram
 | `incident_memory` | searchable human-confirmed resolution | opt-in long term |
 | `audit_events` | important admin actions | 90d, tamper protection later |
 | `host_systemd_reports`, `host_services` | latest collector report and up to one real systemd observation per host | replaced on new report/observation, cascade on host deletion; no history |
+| `metric_samples_hourly` | hourly rollups (count, min/max/avg per resource, last network counters) | `METRIC_ROLLUP_RETENTION_DAYS` (default 90d), deleted by the worker |
+| `alert_thresholds` | per-host alert limit overrides (null = environment default) | until host deletion or reset; changes audited |
+| `alert_conditions` | persisted per-metric condition state (ok/breaching/breached/cooldown, streak, cooldown, incident link) | until host deletion; survives Hub restarts |
 
 ## SQL invariants
 
@@ -54,6 +64,8 @@ erDiagram
 - Migration 002 backfills legacy brand names/protocols, leaves unrecorded model/base URL null and preserves terminal results/errors/timestamps. Legacy queued/running jobs become failed with a migration notice. Old binaries must be stopped before dropping the old `provider` column.
 - `last_test_*` columns retain one slot per connection, including model/revision and 90-second expiry. Conditional result writes and audits cannot overwrite replaced/expired slots.
 - Migration 004 adds the report status, source timestamp and socket session ID separate from the measured unit/state in `host_services`. The two rows change atomically and only on an increasing observation timestamp. Read-time freshness does not mutate rows. A new configured name or explicit opt-out removes the old live unit; `demo_fixture` rows are not read as live observations.
+- Migration 005 adds `alert_thresholds` (per-host overrides, CHECK 0-100 or NULL), `alert_conditions` (state machine `ok|breaching|breached|cooldown`, `consecutive`, `cooldown_until`, nullable incident FK) and the `agents.protocol_version`/`agents.capabilities` columns recorded at enrollment/hello. Threshold changes reset that host's condition rows; threshold mutations are audited.
+- Migration 006 adds `metric_samples_hourly` and a `sampled_at` index on `metric_samples` for retention scans.
 
 ## Full-text retrieval (currently implemented)
 
@@ -68,12 +80,15 @@ LIMIT 5;
 
 Limitations: exact-token relevance misses synonyms and root-cause paraphrases. Migrate later to hybrid FTS + pgvector with a measured retrieval benchmark. Anthropic reasoning models do not imply an Anthropic embedding service; choose an embeddings provider separately and document data privacy/cost.
 
-## Retention migration (planned, not executed)
+## Retention and downsampling (implemented)
 
-1. Partition samples daily by `sampled_at` or switch to a time-series database if measured need arises.
-2. Scheduled downsampling and deletion with audit log.
-3. Avoid deleting evidence for unresolved investigations; enforce retention exceptions explicitly.
-4. Backup/restore drill, versioned migrations and constraints for idempotent aggregation.
+The Worker runs `runMetricRetention` on every poll, bounded to at most one 6-hour window per call:
+
+1. Delete `metric_samples_hourly` rows older than `METRIC_ROLLUP_RETENTION_DAYS` (default 90).
+2. Delete spent/expired `enrollment_tokens` older than 24 hours.
+3. Roll up raw samples that left the raw window (`METRIC_RAW_RETENTION_HOURS`, default 168) into `metric_samples_hourly` (per agent and hour: count, min/max/avg per resource, last network counters) and delete the raw rows in the same transaction. Insert and delete are atomic, so a crash can never lose or double-count a window.
+
+Historical reads: `GET /api/hosts/:id/metrics?from=&to=&resolution=hourly` serves rollups; `resolution=auto` picks hourly once the span exceeds the raw window. Still planned: daily partitioning by `sampled_at` or a time-series store if measured need arises, retention exceptions for evidence tied to unresolved investigations, and a backup/restore drill.
 
 ## Query budgets
 

@@ -85,7 +85,7 @@ const fixtureFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         break;
       }
       value = {
-        hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: currentSample ? "online" : "offline", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: currentSample ? 94 : 82, memory_percent: 40, disk_percent: 25 }, ...(scenario === "host-network-history" ? [{ id: secondHostId, hostname: "Unsampled host", version: "fixture", status: "online", created_at: timestamp, last_seen_at: sampleTime, sampled_at: null, cpu_percent: null, memory_percent: null, disk_percent: null }] : [])],
+        hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", protocol_version: 2, capabilities: ["telemetry", "diagnostics"], status: currentSample ? "online" : "offline", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: currentSample ? 94 : 82, memory_percent: 40, disk_percent: 25 }, ...(scenario === "host-network-history" ? [{ id: secondHostId, hostname: "Unsampled host", version: "fixture", protocol_version: 2, capabilities: ["telemetry", "diagnostics"], status: "online", created_at: timestamp, last_seen_at: sampleTime, sampled_at: null, cpu_percent: null, memory_percent: null, disk_percent: null }] : [])],
         total: scenario === "host-network-history" ? 2 : 1, online: scenario === "host-network-history" ? 2 : currentSample ? 1 : 0, limit: 100, observed_at: sampleTime, stale_after_seconds: 60,
         thresholds: { cpu_percent: 85, memory_percent: 90, disk_percent: 90 },
       };
@@ -374,7 +374,7 @@ try {
       };
       await act(async () => {
         deferredHosts?.resolve(Response.json({
-          hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", status: "online", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: 94, memory_percent: 40, disk_percent: 25 }],
+          hosts: [{ id: hostId, hostname: "Fixture host", version: "fixture", protocol_version: 2, capabilities: ["telemetry", "diagnostics"], status: "online", created_at: timestamp, last_seen_at: sampleTime, sampled_at: sampleTime, cpu_percent: 94, memory_percent: 40, disk_percent: 25 }],
           total: 1, online: 1, limit: 100, observed_at: sampleTime, stale_after_seconds: 60,
           thresholds: { cpu_percent: 85, memory_percent: 90, disk_percent: 90 },
         }));

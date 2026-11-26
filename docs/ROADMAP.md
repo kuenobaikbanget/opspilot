@@ -20,11 +20,11 @@
 - [x] Basic Linux metrics from `/proc`, disk via `statfs`
 - [x] Host list, gauges and last-seen state
 - [x] 2-sample CPU/RAM/disk alert and cooldown
-- [ ] Improve metric validation & real-time plots
-- [ ] Persist thresholds and condition state across restarts
-- [ ] Retention and downsampling
-- [ ] Durable agent-side metric queue
-- [ ] Agent version/capability negotiation
+- [x] Improve metric validation & real-time plots
+- [x] Persist thresholds and condition state across restarts
+- [x] Retention and downsampling
+- [x] Durable agent-side metric queue
+- [x] Agent version/capability negotiation
 
 <a id="fleet-services-dashboard-delivery-planned"></a>
 
