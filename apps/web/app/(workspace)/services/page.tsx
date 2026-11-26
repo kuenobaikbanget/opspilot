@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { AsciiLoading } from "../../../components/ascii-card-reveal";
+import { EndpointMonitors } from "../../../components/endpoint-monitors";
 import { HostSystemd } from "../../../components/host-systemd";
-import { Badge, Button, ButtonLink, Field, Panel, Select } from "../../../components/ui";
+import { ButtonLink, Field, Panel, Select } from "../../../components/ui";
 import { WorkspaceIcon } from "../../../components/workspace-shell";
 import { useWorkspace } from "../workspace";
 import { WorkspaceHeader } from "../workspace-header";
@@ -19,7 +20,7 @@ export default function ServicesPage() {
   const serviceHost = serviceHostId ? hosts.find(host => host.id === serviceHostId) : firstHost;
 
   return <>
-    <WorkspaceHeader title="Services" description="Workload state and endpoint reachability are measured separately from host health." actionError={actionError} actions={
+    <WorkspaceHeader title="Services" summary="fleet" description="Workload state and endpoint reachability are measured separately from host health." actionError={actionError} actions={
       <ButtonLink href="/new-monitor" variant="primary"><WorkspaceIcon name="add" />Add service</ButtonLink>
     } />
     <div className="services-workspace">
@@ -44,37 +45,13 @@ export default function ServicesPage() {
         ) : !fleet && !fleetError ? <AsciiLoading label="Loading host inventory…" />
           : <p className="muted" role="status">{fleetError ? "Host inventory is unavailable." : "Connect a host to view its service observations."}</p>}
       </Panel>
-      <Panel aria-labelledby="services-endpoints-title">
-        <div className="panel-head">
-          <div>
-            <h2 id="services-endpoints-title">Endpoint checks</h2>
-            <p className="muted">Independent HTTP probes from {endpoints?.[0]?.probe_location ?? "hub-local"}.</p>
-          </div>
-        </div>
-        {servicesError ? <p className="muted" role="status">{servicesError}</p> : !endpoints ? <AsciiLoading label="Loading endpoint monitors…" lines={3} widths={["86%", "73%", "80%"]} /> : !endpoints.length && <p className="muted">No endpoint monitors configured.</p>}
-        <ul className="overview-endpoint-list" role="list">
-          {endpoints?.map(endpoint => (
-            <li key={endpoint.id} className="overview-endpoint-item">
-              <div className="overview-endpoint-main">
-                <div>
-                  <strong>{endpoint.name}</strong>
-                  <span className="overview-meta">{endpoint.target_url} · Expected HTTP {endpoint.expected_status}</span>
-                </div>
-                <div className="overview-endpoint-actions">
-                  <Badge tone={endpoint.last_status === "up" ? "success" : endpoint.last_status === "down" ? "danger" : "neutral"} dot>
-                    {endpoint.last_status === "up"
-                      ? `Up · HTTP ${endpoint.last_http_status ?? endpoint.expected_status}${endpoint.last_latency_ms !== null ? ` · ${endpoint.last_latency_ms} ms` : ""}`
-                      : endpoint.last_status === "down"
-                        ? `Down · ${endpoint.last_http_status !== null ? `HTTP ${endpoint.last_http_status}` : endpoint.last_error ?? "unreachable"}`
-                        : "Pending"}
-                  </Badge>
-                  <Button size="sm" loading={checkingEndpointId === endpoint.id} onClick={() => void checkEndpoint(endpoint.id)}>Check now</Button>
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </Panel>
+      <EndpointMonitors
+        endpoints={endpoints}
+        servicesError={servicesError}
+        hosts={hosts}
+        checkingEndpointId={checkingEndpointId}
+        onCheckEndpoint={id => void checkEndpoint(id)}
+      />
     </div>
   </>;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { finitePercent, SYSTEMD_STALE_AFTER_SECONDS, type EndpointMonitor, type Host, type HostList, type HostSystemdStatus } from "@opspilot/contracts";
 import { api } from "../lib/api";
+import { endpointBadgeText, endpointBadgeTone, endpointExpiry, endpointOutcome, endpointRows as buildEndpointRows, type EndpointRow } from "../lib/endpoint-status";
 import { hasFreshSample, percent, pressure, resources, type Pressure, type Resource } from "../lib/host-pressure";
 import { HostSystemd, isSystemdReportCurrent, systemdCollection, systemdStates } from "./host-systemd";
 import { AsciiCardReveal, AsciiCardSkeleton, AsciiLoading } from "./ascii-card-reveal";
@@ -56,8 +57,6 @@ type HostServiceEntry = { status: HostSystemdStatus | null; failed: boolean };
 type Risk = { host: Host; reading: Pressure };
 
 type DetailSelection = { kind: "host" | "endpoint"; id: string };
-type EndpointStatus = "up" | "down" | "pending" | "stale";
-type EndpointRow = { endpoint: EndpointMonitor; status: EndpointStatus };
 
 // Every Overview card reveals as one full-card dither wave. useCanAnimateAscii() inside
 // AsciiCardReveal still falls back to plain rendering under reduced motion or without Canvas 2D.
@@ -393,20 +392,10 @@ function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
   );
 }
 
-// Worker probes become eligible after 15s; allow 60s for polling and queue delays.
-const endpointFreshnessMs = 60_000;
-
-function endpointResult(endpoint: EndpointMonitor) {
-  if (endpoint.last_status === "up") {
-    return `Up${endpoint.last_http_status !== null ? ` · HTTP ${endpoint.last_http_status}` : ""}${endpoint.last_latency_ms !== null ? ` · ${endpoint.last_latency_ms} ms` : ""}`;
-  }
-  return `Down · ${endpoint.last_http_status !== null ? `HTTP ${endpoint.last_http_status}` : endpoint.last_error ?? "unreachable"}`;
-}
-
 function EndpointBadge({ endpoint, status }: EndpointRow) {
   return (
-    <Badge tone={status === "up" ? "success" : status === "down" ? "danger" : "neutral"} dot data-ascii="fade">
-      {status === "stale" ? "Stale" : status === "pending" ? "Pending" : endpointResult(endpoint)}
+    <Badge tone={endpointBadgeTone(status)} dot data-ascii="fade">
+      {endpointBadgeText(endpoint, status)}
     </Badge>
   );
 }
@@ -428,7 +417,7 @@ function EndpointInspector({ row, checkingEndpointId, onCheckEndpoint }: Pick<Pr
             <div><dt>Probe location</dt><dd>{endpoint.probe_location}</dd></div>
             <div><dt>Expected response</dt><dd>HTTP {endpoint.expected_status}</dd></div>
             <div><dt>Last checked</dt><dd><SampleTime value={endpoint.last_checked_at} /></dd></div>
-            {status === "stale" && <div><dt>Last result</dt><dd>{endpointResult(endpoint)}</dd></div>}
+            {status === "stale" && <div><dt>Last result</dt><dd>{endpointOutcome(endpoint)}</dd></div>}
           </dl>
           <Button size="sm" data-ascii="fade" loading={checkingEndpointId === endpoint.id} onClick={() => onCheckEndpoint(endpoint.id)}>
             Check now
@@ -559,13 +548,10 @@ export function ThresholdOverview({
   });
 
   const endpointNow = Date.now();
-  const endpointRows = servicesError ? undefined : endpoints?.map((endpoint): EndpointRow => {
-    const expiry = Date.parse(endpoint.last_checked_at ?? "") + endpointFreshnessMs;
-    const status = endpoint.last_status === "unknown" || !Number.isFinite(expiry) ? "pending"
-      : endpointNow >= expiry ? "stale" : endpoint.last_status;
-    if (status === "up" || status === "down") nextExpiry = Math.min(nextExpiry, expiry);
-    return { endpoint, status };
-  });
+  const endpointRows = servicesError ? undefined : endpoints ? buildEndpointRows(endpoints, endpointNow) : undefined;
+  for (const { endpoint, status } of endpointRows ?? []) {
+    if (status === "up" || status === "down") nextExpiry = Math.min(nextExpiry, endpointExpiry(endpoint));
+  }
 
   useEffect(() => {
     if (!Number.isFinite(nextExpiry)) return;
