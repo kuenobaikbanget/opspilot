@@ -1,5 +1,5 @@
 import type { SQL } from "bun";
-import { generateDiagnosis, type ProviderConnection } from "@opspilot/ai";
+import { generateDiagnosis, generateDiagnosisWithUsage, type ProviderConnection } from "@opspilot/ai";
 import { decryptProviderKey, ProviderCredentialError } from "@opspilot/ai/credentials";
 import { ProviderError, type ProviderErrorCode } from "@opspilot/ai/provider-http";
 import type { ProviderProtocol } from "@opspilot/contracts";
@@ -80,11 +80,14 @@ async function failInvestigation(tx: SQL, job: InvestigationJob, failure: Failur
   console.error("Investigation failed", job.id, job.provider_id, failure.code, failure.httpStatus);
 }
 
+/** Accepts either the usage-returning call or the backwards-compatible diagnosis-only call. */
+type GenerateInvestigation = typeof generateDiagnosis | typeof generateDiagnosisWithUsage;
+
 /** Claims at most one investigation; importing this module never starts a polling loop. */
 export async function runOneInvestigation(
   db: SQL,
   masterKey: Uint8Array | null,
-  generate: typeof generateDiagnosis = generateDiagnosis,
+  generate: GenerateInvestigation = generateDiagnosisWithUsage,
 ): Promise<boolean> {
   if (!masterKey) return false;
 
@@ -134,9 +137,26 @@ export async function runOneInvestigation(
     const memories = await db<Parameters<typeof generateDiagnosis>[3]>`SELECT id,summary,resolution FROM incident_memory
       WHERE to_tsvector('simple',summary || ' ' || resolution) @@ plainto_tsquery('simple',${incident.title})
       ORDER BY created_at DESC LIMIT 5`;
-    const diagnosis = await generate(connection, incident, evidence, memories);
-    await db`UPDATE investigations SET status='completed',result_json=${diagnosis}::jsonb,error=NULL,completed_at=NOW()
+    const outcome = await generate(connection, incident, evidence, memories);
+    const diagnosis = "diagnosis" in outcome ? outcome.diagnosis : outcome;
+    const usage = "usage" in outcome ? outcome.usage : null;
+    await db`UPDATE investigations SET status='completed',result_json=${diagnosis}::jsonb,error=NULL,completed_at=NOW(),
+      input_tokens=${usage?.inputTokens ?? null},output_tokens=${usage?.outputTokens ?? null},
+      thinking_tokens=${usage?.thinkingTokens ?? null},total_tokens=${usage?.totalTokens ?? null},
+      estimated_cost_usd=${usage?.estimatedCostUsd ?? null}
       WHERE id=${job.id} AND status='running'`;
+    // Non-secret usage metadata only; never keys, prompts, evidence content or raw responses.
+    await db`INSERT INTO audit_events(action,target_id,data)
+      VALUES('ai.investigation.completed',${job.id},${{
+        incidentId: job.incident_id,
+        providerId: job.provider_id,
+        model: job.provider_model,
+        inputTokens: usage?.inputTokens ?? null,
+        outputTokens: usage?.outputTokens ?? null,
+        thinkingTokens: usage?.thinkingTokens ?? null,
+        totalTokens: usage?.totalTokens ?? null,
+        estimatedCostUsd: usage?.estimatedCostUsd ?? null,
+      }}::jsonb)`;
     console.log("Completed investigation", job.id, connection.id);
   } catch (error: unknown) {
     await failInvestigation(db, job, failureFrom(error));

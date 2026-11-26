@@ -28,8 +28,8 @@ This is a conservative text-model family policy, not model discovery or substitu
 2. Hub validates credentials/revision before dispatching existing fixed agent operations, then rechecks configuration and incident state under lock.
 3. Hub queues an investigation with an immutable non-secret provider snapshot.
 4. Worker reads a queued candidate without locking it, locks its provider row first, then conditionally claims that exact still-queued job with FOR UPDATE SKIP LOCKED before checking revision/decrypting credentials. Provider-first row locking matches connection deletion's foreign-key lock order and avoids a delete/claim deadlock; unavailable/changed connections fail without outbound calls.
-5. Worker redacts common credential patterns, caps context, then uses public DNS-pinned HTTPS with a 30-second total deadline and finite generation budget (1200 tokens, or 2224 combined thinking/answer tokens for the Gemini 2.5 text families above).
-6. Strict post-processor validates result fields and removes every `evidence_id` absent from database input; forces low confidence when no valid evidence IDs remain.
+5. Worker redacts common credential patterns, caps context, then uses public DNS-pinned HTTPS with a 30-second total deadline and finite generation budget (1200 tokens, or 2224 combined thinking/answer tokens for the Gemini 2.5 text families above). The untrusted evidence/memory payload is wrapped in explicit `BEGIN/END UNTRUSTED INPUT` delimiters so log strings cannot impersonate instructions.
+6. Strict post-processor validates result fields, redacts echoed secrets, and removes every `evidence_id` absent from database input; forces low confidence when no valid evidence IDs remain. The Worker persists the provider-reported token usage and an optional catalog-based USD estimate on the investigation row plus a non-secret `ai.investigation.completed` audit event (observability only; no hard budget block yet).
 7. UI displays hypothesis, confidence and next checks; human chooses what to do.
 8. Human-supplied resolution is stored for future retrieval.
 
@@ -78,4 +78,4 @@ Metrics:
 
 ## Cost guardrails (release blockers)
 
-Current: external generation only after explicit investigation/test actions; one query per job with no retry/fallback, bounded context, time, response and output tokens. A connection test uses the same adapter/parser with synthetic title/category and empty evidence/memory; HTTP 200 alone cannot pass it. Tests have one 90-second queue-inclusive slot; timeout may mean Worker/queue delay, not endpoint failure. Future: daily/monthly budgets, rate limits, idempotency and spend reporting.
+Current: external generation only after explicit investigation/test actions; one query per job with no retry/fallback, bounded context, time, response and output tokens. Each completed investigation records provider-reported token counts and an optional reference-catalog USD estimate on its row and in a non-secret audit event (no hard budget block yet). A connection test uses the same adapter/parser with synthetic title/category and empty evidence/memory; HTTP 200 alone cannot pass it. Tests have one 90-second queue-inclusive slot; timeout may mean Worker/queue delay, not endpoint failure. Future: daily/monthly budgets, rate limits, idempotency and spend reporting.

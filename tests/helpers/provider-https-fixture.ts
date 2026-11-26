@@ -58,7 +58,10 @@ export function fixtureInput(body: unknown): JsonObject {
   }
   if (typeof text !== "string") return {};
   const marker = text.indexOf("\n\nINPUT: ");
-  try { return object(JSON.parse(marker < 0 ? text : text.slice(marker + 9))); }
+  let json = marker < 0 ? text : text.slice(marker + 9);
+  const end = json.indexOf("\n\nEND UNTRUSTED INPUT");
+  if (end >= 0) json = json.slice(0, end);
+  try { return object(JSON.parse(json)); }
   catch { return {}; }
 }
 
