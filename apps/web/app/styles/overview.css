@@ -406,8 +406,13 @@
 }
 
 .overview-inventory-metric-label {
-  display: none;
-  margin-bottom: var(--space-1);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .overview-inventory-reading {
@@ -834,7 +839,13 @@
   }
 
   .overview-inventory-metric-label {
-    display: block;
+    position: static;
+    width: auto;
+    height: auto;
+    margin-bottom: var(--space-1);
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
   }
 
   .overview-inventory-row {
