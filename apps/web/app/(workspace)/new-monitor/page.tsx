@@ -129,10 +129,16 @@ export default function NewMonitorPage() {
     setCheckError("");
   }
 
+  function refreshIfChecking() {
+    if (created !== null && checking) {
+      void refresh();
+    }
+  }
+
   return <>
     <WorkspaceNotices />
     <section className="onboarding" aria-labelledby={`${id}-title`}>
-      <ButtonLink href="/services" size="sm" className="onboarding-back"><WorkspaceIcon name="back" />Back to Services</ButtonLink>
+      <ButtonLink href="/services" size="sm" className="onboarding-back" onClick={refreshIfChecking}><WorkspaceIcon name="back" />Back to Services</ButtonLink>
       <header className="onboarding-header">
         <h1 id={`${id}-title`} tabIndex={-1}>Add service</h1>
         <p>Configure an HTTP endpoint monitor probed independently from the Hub.</p>
@@ -274,7 +280,7 @@ export default function NewMonitorPage() {
 
               <div className="onboarding-actions">
                 <Button size="sm" disabled={checking} onClick={resetForm}>Add another endpoint</Button>
-                <ButtonLink href="/services" variant="primary" size="sm">Finish</ButtonLink>
+                <ButtonLink href="/services" variant="primary" size="sm" onClick={refreshIfChecking}>Finish</ButtonLink>
               </div>
             </div>
           )}
