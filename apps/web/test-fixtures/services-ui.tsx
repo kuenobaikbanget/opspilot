@@ -20,25 +20,29 @@ const referenceEndpoints: EndpointMonitor[] = [
   {
     id: "e0000000-0000-4000-8000-000000000001", agent_id: webId, service_name: "storefront-api.service",
     name: "storefront-api", target_url: "https://storefront.example.invalid/health", expected_status: 200,
-    probe_location: "hub-local", last_status: "down", last_http_status: 503, last_latency_ms: null,
+    probe_location: "hub-local", enabled: true, check_interval_seconds: 60, run_counts: { total: 1, up: 0, down: 1 },
+    last_status: "down", last_http_status: 503, last_latency_ms: null,
     last_error: "http_503", last_checked_at: iso(now() - 5_000),
   },
   {
     id: "e0000000-0000-4000-8000-000000000002", agent_id: backupId, service_name: null,
     name: "legacy-web", target_url: "https://legacy.example.invalid/", expected_status: 200,
-    probe_location: "hub-local", last_status: "up", last_http_status: 200, last_latency_ms: 48,
+    probe_location: "hub-local", enabled: true, check_interval_seconds: 60, run_counts: { total: 1, up: 1, down: 0 },
+    last_status: "up", last_http_status: 200, last_latency_ms: 48,
     last_error: null, last_checked_at: iso(now() - 5_000),
   },
   {
     id: "e0000000-0000-4000-8000-000000000003", agent_id: null, service_name: null,
     name: "status-page", target_url: "https://status.example.invalid/", expected_status: 200,
-    probe_location: "hub-local", last_status: "unknown", last_http_status: null, last_latency_ms: null,
+    probe_location: "hub-local", enabled: true, check_interval_seconds: 60, run_counts: { total: 0, up: 0, down: 0 },
+    last_status: "unknown", last_http_status: null, last_latency_ms: null,
     last_error: null, last_checked_at: null,
   },
   {
     id: "e0000000-0000-4000-8000-000000000004", agent_id: null, service_name: null,
     name: "metrics-edge", target_url: "https://metrics.example.invalid/", expected_status: 200,
-    probe_location: "hub-local", last_status: "up", last_http_status: 200, last_latency_ms: 51,
+    probe_location: "hub-local", enabled: true, check_interval_seconds: 60, run_counts: { total: 1, up: 1, down: 0 },
+    last_status: "up", last_http_status: 200, last_latency_ms: 51,
     last_error: null, last_checked_at: iso(now() - 300_000),
   },
 ];
@@ -60,11 +64,13 @@ const fleet: HostList = {
   hosts: [
     {
       id: webId, hostname: "web-01", status: "online", version: "fixture",
+      protocol_version: 2, capabilities: ["telemetry", "diagnostics"],
       created_at: iso(now() - 86_400_000), last_seen_at: iso(now()), sampled_at: iso(now()),
       cpu_percent: 96.9, memory_percent: 61, disk_percent: 44,
     },
     {
       id: backupId, hostname: "backup-01", status: "offline", version: "fixture",
+      protocol_version: 2, capabilities: ["telemetry", "diagnostics"],
       created_at: iso(now() - 86_400_000), last_seen_at: iso(now() - 600_000), sampled_at: iso(now() - 600_000),
       cpu_percent: 12, memory_percent: 38, disk_percent: 71,
     },
