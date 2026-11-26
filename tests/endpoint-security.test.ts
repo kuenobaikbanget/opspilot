@@ -5,6 +5,7 @@ import {
   validateEndpointTargetUrl,
 } from "../packages/contracts/src/index";
 import { probeEndpointTarget } from "../packages/ai/src/endpoint-probe";
+import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
 
 const mockEnv = { NODE_ENV: "development", OPSPILOT_ALLOW_LOOPBACK_PROBES: "true" };
 const prodEnv = { NODE_ENV: "production", OPSPILOT_ALLOW_LOOPBACK_PROBES: "true" };
@@ -302,13 +303,26 @@ function freePort(): number {
   return port;
 }
 
-async function startHub() {
+async function migrate(databaseUrl: string): Promise<void> {
+  const child = Bun.spawn([process.execPath, "--no-env-file", "tools/migrate.ts"], {
+    cwd: root,
+    env: { DATABASE_URL: databaseUrl },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const code = await child.exited;
+  if (code !== 0) {
+    throw new Error(`Migration failed with code ${code}: ${await new Response(child.stderr).text()}`);
+  }
+}
+
+async function startHub(databaseUrl: string) {
   const port = freePort();
   const child = Bun.spawn([process.execPath, "--no-env-file", "apps/hub/src/index.ts"], {
     cwd: root,
     env: {
       NODE_ENV: "development",
-      DATABASE_URL: "postgres://opspilot:opspilot_dev@127.0.0.1:5433/opspilot",
+      DATABASE_URL: databaseUrl,
       ADMIN_PASSWORD: password,
       SESSION_SECRET: sessionSecret,
       ALLOWED_ORIGIN: origin,
@@ -350,53 +364,58 @@ async function startHub() {
   };
 }
 
-test("endpoint monitor routes require admin session and exact origin", async () => {
-  const hub = await startHub();
-  try {
-    const id = "123e4567-e89b-42d3-a456-426614174000";
-    // Unauthenticated requests are rejected before any route logic or DB access.
-    for (const [method, path] of [
-      ["GET", "/api/services"],
-      ["POST", "/api/endpoints"],
-      ["PATCH", `/api/endpoints/${id}`],
-      ["DELETE", `/api/endpoints/${id}`],
-      ["POST", `/api/endpoints/${id}/check`],
-      ["GET", `/api/endpoints/${id}/runs`],
-    ] as const) {
-      const res = await fetch(`${hub.baseUrl}${path}`, {
-        method,
-        headers: { "content-type": "application/json", origin },
-        body: method === "GET" ? undefined : "{}",
+const integration = providerTestDatabaseAvailable ? test : test.skip;
+
+integration("endpoint monitor routes require admin session and exact origin", async () => {
+  await withProviderTestDb(async (_db, databaseUrl) => {
+    await migrate(databaseUrl);
+    const hub = await startHub(databaseUrl);
+    try {
+      const id = "123e4567-e89b-42d3-a456-426614174000";
+      // Unauthenticated requests are rejected before any route logic or DB access.
+      for (const [method, path] of [
+        ["GET", "/api/services"],
+        ["POST", "/api/endpoints"],
+        ["PATCH", `/api/endpoints/${id}`],
+        ["DELETE", `/api/endpoints/${id}`],
+        ["POST", `/api/endpoints/${id}/check`],
+        ["GET", `/api/endpoints/${id}/runs`],
+      ] as const) {
+        const res = await fetch(`${hub.baseUrl}${path}`, {
+          method,
+          headers: { "content-type": "application/json", origin },
+          body: method === "GET" ? undefined : "{}",
+        });
+        expect(res.status).toBe(401);
+        expect((await res.json()).error).toBe("Unauthorized");
+      }
+
+      // Login establishes the admin session cookie.
+      const login = await fetch(`${hub.baseUrl}/api/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password }),
       });
-      expect(res.status).toBe(401);
-      expect((await res.json()).error).toBe("Unauthorized");
+      expect(login.status).toBe(200);
+      const cookie = login.headers.get("set-cookie")!.split(";")[0];
+
+      // Authenticated but cross-origin mutations are rejected.
+      const crossOrigin = await fetch(`${hub.baseUrl}/api/endpoints`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://evil.example", cookie },
+        body: JSON.stringify({ name: "x", targetUrl: "https://example.com/health" }),
+      });
+      expect(crossOrigin.status).toBe(403);
+      expect((await crossOrigin.json()).code).toBe("forbidden_origin");
+
+      const crossOriginCheck = await fetch(`${hub.baseUrl}/api/endpoints/${id}/check`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://evil.example", cookie },
+        body: "{}",
+      });
+      expect(crossOriginCheck.status).toBe(403);
+    } finally {
+      await hub.stop();
     }
-
-    // Login establishes the admin session cookie.
-    const login = await fetch(`${hub.baseUrl}/api/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
-    expect(login.status).toBe(200);
-    const cookie = login.headers.get("set-cookie")!.split(";")[0];
-
-    // Authenticated but cross-origin mutations are rejected.
-    const crossOrigin = await fetch(`${hub.baseUrl}/api/endpoints`, {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: "http://evil.example", cookie },
-      body: JSON.stringify({ name: "x", targetUrl: "https://example.com/health" }),
-    });
-    expect(crossOrigin.status).toBe(403);
-    expect((await crossOrigin.json()).code).toBe("forbidden_origin");
-
-    const crossOriginCheck = await fetch(`${hub.baseUrl}/api/endpoints/${id}/check`, {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: "http://evil.example", cookie },
-      body: "{}",
-    });
-    expect(crossOriginCheck.status).toBe(403);
-  } finally {
-    await hub.stop();
-  }
+  });
 });
