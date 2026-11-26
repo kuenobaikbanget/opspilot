@@ -1,19 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { ProviderProtocol } from "@opspilot/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { AsciiLoading } from "../../../components/ascii-card-reveal";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../../../components/ui";
 import { WorkspaceIcon } from "../../../components/workspace-shell";
-import { api, ApiError } from "../../../lib/api";
+import { api, ApiError, getIncidentDetail, type IncidentDetailResponse, type IncidentEvidence, type InvestigationResultJson } from "../../../lib/api";
 import { percent, resources } from "../../../lib/host-pressure";
 import { useWorkspace, type Incident } from "../workspace";
 import { WorkspaceHeader } from "../workspace-header";
 import { useProviders } from "../use-providers";
 
-type Evidence = { id: string; source: string; content: string; created_at: string };
-type Investigation = { id: string; provider: { id: string | null; name: string; protocol: ProviderProtocol; baseUrl: string | null; model: string | null }; status: string; result_json: { probable_cause?: string; confidence?: number | string; evidence_ids?: string[]; recommended_checks?: string[] } | null; error: string | null };
-type Detail = { incident: Incident; evidence: Evidence[]; investigations: Investigation[] };
+type Detail = IncidentDetailResponse<Incident>;
+type EvidenceSort = "relevance" | "chronological";
 
 function categoryLabel(category: string) {
   switch (category) {
@@ -25,6 +23,50 @@ function categoryLabel(category: string) {
     default: return category;
   }
 }
+
+function shortId(id: string) {
+  return id.replace(/-/g, "").slice(0, 6);
+}
+
+/** Deterministic client-side ordering, mirroring the server's sortScoredEvidence. */
+function sortEvidence(items: IncidentEvidence[], mode: EvidenceSort): IncidentEvidence[] {
+  const sorted = [...items];
+  if (mode === "chronological") {
+    sorted.sort((a, b) => (a.created_at === b.created_at ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.created_at < b.created_at ? 1 : -1));
+    return sorted;
+  }
+  sorted.sort((a, b) => {
+    const citedDelta = Number(b.relevance?.cited ?? false) - Number(a.relevance?.cited ?? false);
+    if (citedDelta !== 0) return citedDelta;
+    const scoreDelta = (b.relevance?.score ?? 0) - (a.relevance?.score ?? 0);
+    if (scoreDelta !== 0) return scoreDelta;
+    if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  return sorted;
+}
+
+/** Compact truthful usage line; returns null when no token metadata is present. */
+function usageLine(result: InvestigationResultJson): string | null {
+  const total = typeof result.total_tokens === "number" && Number.isFinite(result.total_tokens)
+    ? result.total_tokens
+    : typeof result.input_tokens === "number" && typeof result.output_tokens === "number"
+      ? result.input_tokens + result.output_tokens
+      : null;
+  if (total === null) return null;
+  const cost = typeof result.estimated_cost_usd === "number" && Number.isFinite(result.estimated_cost_usd)
+    ? `est. $${result.estimated_cost_usd.toFixed(4)}`
+    : "cost unknown";
+  return `${Math.round(total).toLocaleString("en-US")} tokens · ${cost}`;
+}
+
+const SIGNAL_LABELS: Record<string, string> = {
+  cited_by_hypothesis: "cited by hypothesis",
+  error_signal: "error signal",
+  category_match: "category match",
+  keyword_overlap: "keyword overlap",
+  source_priority: "priority source",
+};
 
 export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
   const { fleet, fleetError, incidents, incidentsError, openIncidents, refresh, selection, consumeSelection } = useWorkspace();
@@ -44,6 +86,10 @@ export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
   const [resolution, setResolution] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [evidenceSort, setEvidenceSort] = useState<EvidenceSort | null>(null);
+  const [highlightedEvidence, setHighlightedEvidence] = useState<string | null>(null);
+  const evidenceRefs = useRef<Map<string, HTMLLIElement>>(new Map());
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hosts = fleet?.hosts ?? [];
   const visibleIncidents = drift ? incidents.filter(i => i.category === "config_drift") : incidents;
@@ -51,6 +97,28 @@ export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
   const selectedProvider = providers.find(p => p.id === providerId && p.enabled);
   const detailHost = detail && hosts.find(h => h.id === detail.incident.agent_id);
   const providersPending = providersLoading && !providers.length && !providersError;
+
+  // Latest completed investigation defines the active hypothesis and its citations.
+  const activeHypothesis = detail?.investigations.find(x => x.status === "completed" && x.result_json?.probable_cause) ?? null;
+  const evidenceById = useMemo(() => new Map((detail?.evidence ?? []).map(e => [e.id, e])), [detail?.evidence]);
+  // Relevance is the default ordering once a hypothesis exists; otherwise chronological.
+  const sortMode: EvidenceSort = evidenceSort ?? (activeHypothesis ? "relevance" : "chronological");
+  const sortedEvidence = useMemo(() => detail ? sortEvidence(detail.evidence, sortMode) : [], [detail, sortMode]);
+
+  useEffect(() => () => {
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+  }, []);
+
+  /** Scrolls to, highlights and focuses an evidence card from a citation pill. */
+  function focusEvidence(id: string) {
+    const card = evidenceRefs.current.get(id);
+    if (!card) return;
+    setHighlightedEvidence(id);
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.focus({ preventScroll: true });
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(() => setHighlightedEvidence(current => (current === id ? null : current)), 2600);
+  }
 
   if (!selected) {
     const first = (!drift && selection?.href === "/incidents" ? selection.id : null)
@@ -90,7 +158,7 @@ export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
     const read = detailRead.current;
     if (read?.id !== id || read.signal.aborted) return;
     try {
-      const result: Detail = await api(`/incidents/${id}`, "GET", undefined, read.signal);
+      const result = await getIncidentDetail<Incident>(id, read.signal);
       if (!read.signal.aborted) {
         setDetail(result);
         setDetailError("");
@@ -196,17 +264,52 @@ export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
           </section>}
           <div className="detail-grid">
             <div>
-              <h3>Activity timeline</h3>
-              <p className="muted small">Recorded incident activity and diagnostic evidence.</p>
+              <div className="evidence-head">
+                <div>
+                  <h3>Measured Signals</h3>
+                  <p className="muted small">Collected host/agent evidence. The relevance score is a deterministic ranking, not a confidence level.</p>
+                </div>
+                {detail.evidence.length > 0 && <div className="evidence-sort" role="group" aria-label="Sort evidence">
+                  <Button size="sm" variant={sortMode === "relevance" ? "primary" : "secondary"} aria-pressed={sortMode === "relevance"} onClick={() => setEvidenceSort("relevance")}>Relevance</Button>
+                  <Button size="sm" variant={sortMode === "chronological" ? "primary" : "secondary"} aria-pressed={sortMode === "chronological"} onClick={() => setEvidenceSort("chronological")}>Chronological</Button>
+                </div>}
+              </div>
+              {detail.evidence.length === 0 ? <p className="muted">No evidence collected for this incident yet.</p> : <ol className="evidence-list">
+                {sortedEvidence.map(e => (
+                  <li
+                    key={e.id}
+                    id={`evidence-${e.id}`}
+                    ref={card => { if (card) evidenceRefs.current.set(e.id, card); else evidenceRefs.current.delete(e.id); }}
+                    tabIndex={-1}
+                    aria-label={`Evidence ${e.source} ${shortId(e.id)}${e.relevance?.cited ? ", cited by AI hypothesis" : ""}`}
+                    className={`evidence evidence-card${highlightedEvidence === e.id ? " evidence-card--highlighted" : ""}`}
+                  >
+                    <div className="evidence-card-head">
+                      <strong>{e.source}</strong>
+                      <span className="evidence-badges">
+                        {e.relevance && <Badge tone="info">Score {e.relevance.score}</Badge>}
+                        {e.relevance?.cited && <Badge tone="warning">Cited</Badge>}
+                      </span>
+                    </div>
+                    <code>{e.content}</code>
+                    <div className="evidence-meta">
+                      <small>ID: {e.id} · <time dateTime={e.created_at}>{new Date(e.created_at).toLocaleString()}</time></small>
+                      {e.relevance && e.relevance.matchedSignals.length > 0 && <span className="signal-chips" aria-label="Matched signals">
+                        {e.relevance.matchedSignals.map(signal => <span className="signal-chip" key={signal} title={signal}>{SIGNAL_LABELS[signal] ?? signal}</span>)}
+                      </span>}
+                    </div>
+                  </li>
+                ))}
+              </ol>}
+              <h3 className="timeline-heading">Activity timeline</h3>
               <ol className="incident-timeline">
                 {detail.incident.resolved_at && <li><time dateTime={detail.incident.resolved_at}>{new Date(detail.incident.resolved_at).toLocaleString()}</time><div>Human-confirmed resolution recorded</div></li>}
-                {detail.evidence.map(e => <li className="evidence" key={e.id}><time dateTime={e.created_at}>{new Date(e.created_at).toLocaleString()}</time><div><strong>{e.source}</strong><code>{e.content}</code><small>ID: {e.id}</small></div></li>)}
                 <li><time dateTime={detail.incident.created_at}>{new Date(detail.incident.created_at).toLocaleString()}</time><div>Incident opened</div></li>
               </ol>
             </div>
             <div>
-              <h3>AI investigation</h3>
-              <Notice tone="info" className="investigation-notice">AI findings are hypotheses. Review the cited evidence before taking action.</Notice>
+              <h3>AI Hypothesis</h3>
+              <Notice tone="info" className="investigation-notice">AI output is an unverified hypothesis — never a confirmed root cause. Review the cited measured signals before taking action.</Notice>
               {providersError && <Notice tone="danger" role="alert">{providersError} Provider metadata may be stale. Investigate is disabled until a successful refresh. <Button size="sm" disabled={providersLoading} onClick={() => void refreshProviders()}>Retry provider refresh</Button></Notice>}
               {!providersLoading && !providersError && !encryptionConfigured && <Notice tone="warning">AI is unavailable until the server administrator configures AI_PROVIDER_ENCRYPTION_KEY on the Hub and Worker.</Notice>}
               {investigationError && <Notice tone="danger" role="alert">{investigationError}</Notice>}
@@ -224,15 +327,42 @@ export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
                 {providerReviewRequired && <Button disabled={providersLoading || !!providersError || !selectedProvider || !encryptionConfigured} onClick={() => { setProviderReviewRequired(false); setInvestigationError(""); }}>I reviewed the updated destination and model</Button>}
                 <Button type="submit" variant="primary" loading={busy} aria-describedby={selectedProvider ? "investigation-destination" : undefined} disabled={!selectedProvider || !selectedProvider.hasApiKey || !encryptionConfigured || !model.trim() || providersLoading || !!providersError || providerReviewRequired || detail.incident.status !== "open"}>Investigate</Button>
               </form>}
-              {detail.investigations.length === 0 ? <p className="muted">Investigation has not been started.</p> : detail.investigations.map(x => (
+              {detail.investigations.length === 0 ? <p className="muted">Investigation has not been started.</p> : detail.investigations.map(x => {
+                const result = x.result_json;
+                const citedIds = (result?.evidence_ids ?? []).filter(id => evidenceById.has(id));
+                const invalidCitations = (result?.evidence_ids ?? []).length - citedIds.length;
+                const usage = result ? usageLine(result) : null;
+                return (
                 <div className="finding" key={x.id}>
                   <div className="finding-head"><div><strong>{x.provider.name}</strong><span className="finding-provider-meta">{x.provider.protocol} · {x.provider.model ?? "Model not recorded (legacy)"}</span>{x.provider.baseUrl && <span className="finding-provider-meta">{x.provider.baseUrl}</span>}</div><Badge tone={x.status === "failed" ? "danger" : x.status === "completed" ? "info" : "warning"}>{x.status}</Badge></div>
-                  {x.result_json ? <><p><strong>AI hypothesis: {x.result_json.probable_cause}</strong></p><p>Confidence: {x.result_json.confidence}</p><p>Evidence: {x.result_json.evidence_ids?.join(", ") || "none"}</p>{x.result_json.recommended_checks && <ul>{x.result_json.recommended_checks.map((c, k) => <li key={k}>{c}</li>)}</ul>}</> : x.error ? <Notice tone="danger">{x.error}</Notice> : <p className="muted">Queued or running. Refresh in a few seconds.</p>}
+                  {result ? <>
+                    <p><strong>AI hypothesis (unverified): {result.probable_cause}</strong></p>
+                    <p>Confidence: {result.confidence ?? "unknown"}</p>
+                    <div className="citation-block">
+                      <span className="citation-label">Cited evidence:</span>
+                      {citedIds.length === 0
+                        ? <Notice tone="warning" className="citation-empty">No verified evidence citations — confidence capped at low</Notice>
+                        : <span className="citation-pills">
+                            {citedIds.map(id => {
+                              const evidence = evidenceById.get(id);
+                              if (!evidence) return null;
+                              return <button type="button" key={id} className="citation-pill" onClick={() => focusEvidence(id)} aria-label={`Jump to cited evidence ${evidence.source} ${shortId(id)}`}>
+                                [{evidence.source} · {shortId(id)}]
+                              </button>;
+                            })}
+                          </span>}
+                      {invalidCitations > 0 && <p className="muted small">{invalidCitations} cited ID{invalidCitations === 1 ? "" : "s"} did not match collected evidence and {invalidCitations === 1 ? "was" : "were"} ignored.</p>}
+                    </div>
+                    {usage && <p className="usage-line">{usage}</p>}
+                    {result.recommended_checks && <ul>{result.recommended_checks.map((c, k) => <li key={k}>{c}</li>)}</ul>}
+                  </> : x.error ? <Notice tone="danger">{x.error}</Notice> : <p className="muted">Queued or running. Refresh in a few seconds.</p>}
                 </div>
-              ))}
+                );
+              })}
               {detail.incident.status === "open" ? (
                 <form className="resolution-form" onSubmit={e => { e.preventDefault(); void act(() => api(`/incidents/${detail.incident.id}/resolve`, "POST", { resolution })); }}>
-                  <h3>Resolve &amp; save to memory</h3>
+                  <h3>Human-Confirmed Resolution</h3>
+                  <p className="muted small">Only an operator-entered resolution is treated as confirmed; it is saved to incident memory.</p>
                   <Field id="incident-resolution" label="Confirmed resolution" hint="Describe what actually fixed this incident. Minimum 8 characters." required><Textarea id="incident-resolution" value={resolution} onChange={e => setResolution(e.target.value)} aria-describedby="incident-resolution-hint" rows={3} required minLength={8} /></Field>
                   <Button type="submit" loading={busy} disabled={resolution.trim().length < 8}>Mark resolved</Button>
                 </form>

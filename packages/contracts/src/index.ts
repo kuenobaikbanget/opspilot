@@ -527,6 +527,32 @@ export type Diagnosis = {
   recommended_checks: string[];
 };
 
+/** Deterministic, transparent reason tags produced by evidence-relevance scoring. */
+export type EvidenceRelevanceSignal =
+  | "cited_by_hypothesis"
+  | "error_signal"
+  | "category_match"
+  | "keyword_overlap"
+  | "source_priority";
+
+/** Deterministic relevance data attached to an evidence item; computed without any LLM call. */
+export type EvidenceRelevance = {
+  /** Integer 0-100; higher means more relevant to the incident. */
+  score: number;
+  /** True only when the latest AI hypothesis cited this evidence ID. */
+  cited: boolean;
+  matchedSignals: EvidenceRelevanceSignal[];
+};
+
+/** An evidence item carrying its deterministic relevance annotation. */
+export type ScoredEvidenceItem = {
+  id: string;
+  source: string;
+  content: string;
+  created_at: string | null;
+  relevance: EvidenceRelevance;
+};
+
 /** Type guard verifying that a value is an allowlisted diagnostic tool name. */
 export function safeTool(x: unknown): x is DiagnosticTool {
   return typeof x === "string" && (ALLOWED_TOOLS as readonly string[]).includes(x);

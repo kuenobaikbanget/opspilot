@@ -274,6 +274,140 @@
   font-variant-numeric: tabular-nums;
 }
 
+.evidence-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.evidence-head h3 {
+  margin: 0;
+}
+
+.evidence-head p {
+  margin: 4px 0 0;
+}
+
+.evidence-sort {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.evidence-list {
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.evidence-card {
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: background-color 0.4s ease;
+}
+
+.evidence-card:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.evidence-card--highlighted {
+  background: var(--color-surface-raised);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.evidence-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.evidence-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.evidence-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: var(--space-2);
+}
+
+.signal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.signal-chip {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  color: var(--color-text-muted);
+  font: 11px/1.4 var(--font-mono);
+}
+
+.timeline-heading {
+  margin-top: var(--space-6);
+}
+
+.citation-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-block: var(--space-2);
+}
+
+.citation-label {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.citation-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.citation-pill {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font: 12px/1.4 var(--font-mono);
+  cursor: pointer;
+}
+
+.citation-pill:hover {
+  border-color: var(--color-accent);
+  background: var(--color-input);
+}
+
+.citation-pill:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.citation-empty {
+  font-size: var(--text-sm);
+}
+
+.usage-line {
+  color: var(--color-text-muted);
+  font: 11px/1.5 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .investigation-notice {
   margin-bottom: var(--space-4);
   font-size: var(--text-sm);
