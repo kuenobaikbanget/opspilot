@@ -8,12 +8,12 @@
 - [x] Docker Compose and systemd templates
 - [x] Run `bun install`, generate/commit bun.lock
 - [x] Run `go mod tidy`, commit go.sum
-- [ ] Verify local services and Linux AMD64/ARM64 binary builds
+- [x] Verify local services and Linux AMD64/ARM64 binary builds
 - [x] Verify Next.js production build on developer machine
-- [ ] Verify Docker builds on developer machine
+- [x] Verify Docker builds on developer machine
 - [x] Extract shared UI tokens/components and verify desktop/mobile design-system catalog
 
-**Exit gate:** `healthz`, login and first enrolled host all work.
+- [x] **Exit gate:** `healthz`, login and first enrolled host all work.
 
 ## Phase 1 — Monitoring foundation
 
