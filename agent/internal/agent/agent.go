@@ -60,8 +60,21 @@ const protocolVersion = 2
 // agentVersion identifies the running binary; overridable at build time via -ldflags.
 var agentVersion = "0.1.0"
 
-// advertisedCapabilities lists what this agent can do; the Hub negotiates the intersection.
+// advertisedCapabilities lists what this agent can do by default; the Hub negotiates the
+// intersection. `config_diffs` is appended only when the operator opted in via
+// OPSPILOT_CONFIG_DIFFS=true (see capabilitiesFor).
 var advertisedCapabilities = []string{"telemetry", "systemd_status", "diagnostics"}
+
+// capabilitiesFor returns the capabilities this agent advertises for the given config:
+// the base set plus "config_diffs" only when controlled config diffs are enabled locally.
+func capabilitiesFor(cfg config) []string {
+	caps := make([]string, 0, len(advertisedCapabilities)+1)
+	caps = append(caps, advertisedCapabilities...)
+	if cfg.ConfigDiffs {
+		caps = append(caps, "config_diffs")
+	}
+	return caps
+}
 
 type helloMessage struct {
 	Type            string   `json:"type"`
@@ -78,16 +91,20 @@ type helloAck struct {
 
 // capabilitySet tracks the negotiated capabilities; before any ack it defaults to all advertised.
 type capabilitySet struct {
-	mu  sync.Mutex
-	set map[string]bool
+	mu         sync.Mutex
+	advertised []string
+	set        map[string]bool
 }
 
-func newCapabilitySet() *capabilitySet {
+func newCapabilitySet(capabilities ...string) *capabilitySet {
+	if len(capabilities) == 0 {
+		capabilities = advertisedCapabilities
+	}
 	set := map[string]bool{}
-	for _, c := range advertisedCapabilities {
+	for _, c := range capabilities {
 		set[c] = true
 	}
-	return &capabilitySet{set: set}
+	return &capabilitySet{advertised: capabilities, set: set}
 }
 
 func (c *capabilitySet) has(name string) bool {
@@ -101,7 +118,7 @@ func (c *capabilitySet) applyAck(ack helloAck) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	next := map[string]bool{}
-	for _, advertised := range advertisedCapabilities {
+	for _, advertised := range c.advertised {
 		for _, negotiated := range ack.Capabilities {
 			if negotiated == advertised {
 				next[advertised] = true
@@ -124,6 +141,7 @@ type config struct {
 	Interval                              time.Duration
 	AllowedServices                       map[string]bool
 	ConfigFiles                           []string
+	ConfigDiffs                           bool
 	Docker                                bool
 	WorkloadDocker                        bool
 	WorkloadSystemd                       bool
@@ -177,7 +195,7 @@ func readConfig() config {
 			allowed[s] = true
 		}
 	}
-	return config{HubURL: strings.TrimRight(env("OPSPILOT_HUB_URL", "http://localhost:3001"), "/"), StatePath: env("OPSPILOT_AGENT_STATE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "identity.json")), ProcRoot: env("OPSPILOT_PROC_ROOT", "/proc"), DiskPath: env("OPSPILOT_DISK_PATH", "/"), Interval: time.Duration(seconds) * time.Second, AllowedServices: allowed, ConfigFiles: splitCSV(env("OPSPILOT_CONFIG_FILES", "")), Docker: env("OPSPILOT_ENABLE_DOCKER", "false") == "true", WorkloadDocker: env("OPSPILOT_WORKLOADS_DOCKER", "false") == "true", WorkloadSystemd: env("OPSPILOT_WORKLOADS_SYSTEMD", "false") == "true", SystemdUnit: os.Getenv("OPSPILOT_SYSTEMD_UNIT"),
+	return config{HubURL: strings.TrimRight(env("OPSPILOT_HUB_URL", "http://localhost:3001"), "/"), StatePath: env("OPSPILOT_AGENT_STATE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "identity.json")), ProcRoot: env("OPSPILOT_PROC_ROOT", "/proc"), DiskPath: env("OPSPILOT_DISK_PATH", "/"), Interval: time.Duration(seconds) * time.Second, AllowedServices: allowed, ConfigFiles: splitCSV(env("OPSPILOT_CONFIG_FILES", "")), ConfigDiffs: env("OPSPILOT_CONFIG_DIFFS", "false") == "true", Docker: env("OPSPILOT_ENABLE_DOCKER", "false") == "true", WorkloadDocker: env("OPSPILOT_WORKLOADS_DOCKER", "false") == "true", WorkloadSystemd: env("OPSPILOT_WORKLOADS_SYSTEMD", "false") == "true", SystemdUnit: os.Getenv("OPSPILOT_SYSTEMD_UNIT"),
 		QueuePath:       env("OPSPILOT_QUEUE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "queue.jsonl")),
 		MaxQueueEntries: clampInt(env("OPSPILOT_QUEUE_MAX_ENTRIES", "2000"), 1, 100_000, 2000),
 		MaxQueueAge:     time.Duration(clampInt(env("OPSPILOT_QUEUE_MAX_AGE_SECONDS", "86400"), 60, 604_800, 86_400)) * time.Second,
@@ -238,7 +256,7 @@ func enroll(cfg config) (identity, error) {
 		return id, errors.New("set OPSPILOT_ENROLL_TOKEN to a fresh one-time token")
 	}
 	hostname, _ := os.Hostname()
-	payload, _ := json.Marshal(enrollRequest{Token: token, Hostname: hostname, Version: agentVersion, ProtocolVersion: protocolVersion, Capabilities: advertisedCapabilities})
+	payload, _ := json.Marshal(enrollRequest{Token: token, Hostname: hostname, Version: agentVersion, ProtocolVersion: protocolVersion, Capabilities: capabilitiesFor(cfg)})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.HubURL+"/api/agents/enroll", bytes.NewReader(payload))
@@ -381,12 +399,33 @@ func runConnection(ws *websocket.Conn, cfg config, sampler *cpuSampler, queue *d
 	conn := &safeConn{ws: ws}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	caps := newCapabilitySet()
+	caps := newCapabilitySet(capabilitiesFor(cfg)...)
 
 	// Report wire protocol version and capabilities first; the Hub answers with hello_ack.
-	if err := conn.send(helloMessage{Type: "hello", ProtocolVersion: protocolVersion, AgentVersion: agentVersion, Capabilities: advertisedCapabilities}); err != nil {
+	if err := conn.send(helloMessage{Type: "hello", ProtocolVersion: protocolVersion, AgentVersion: agentVersion, Capabilities: capabilitiesFor(cfg)}); err != nil {
 		log.Printf("hello send failed: %v", err)
 		return
+	}
+
+	// Controlled config snapshots: strictly opt-in (OPSPILOT_CONFIG_DIFFS=true) and gated on
+	// the negotiated "config_diffs" capability. Sends on connect and on hash change only.
+	drift := newDriftTracker()
+	if cfg.ConfigDiffs {
+		go func() {
+			tick := time.NewTicker(driftInterval)
+			defer tick.Stop()
+			for {
+				drift.sync(conn, cfg, caps)
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+				}
+			}
+		}()
 	}
 
 	if queue != nil {
@@ -484,6 +523,9 @@ func runConnection(ws *websocket.Conn, cfg config, sampler *cpuSampler, queue *d
 		switch envelope.Type {
 		case "hello_ack":
 			caps.applyAck(helloAck{Type: envelope.Type, ProtocolVersion: envelope.ProtocolVersion, Capabilities: envelope.Capabilities})
+			// Re-sync after negotiation so snapshots are only sent when the Hub actually
+			// negotiated "config_diffs" (no-op when nothing changed since connect).
+			drift.sync(conn, cfg, caps)
 		case "diagnostic_request":
 			if len(envelope.RequestID) > 100 || !caps.has("diagnostics") {
 				continue
@@ -541,14 +583,34 @@ func runCommand(binary string, args ...string) (bool, string) {
 	return true, result
 }
 
-var patterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*bearer\s+)\S+`),
-	regexp.MustCompile(`(?i)((?:password|api[_-]?key|token|secret)\s*[:=]\s*)[^\s,;]+`),
+// redactRule pairs a secret pattern with its replacement; ${1} refers to capture group 1
+// (the key/prefix to preserve). Applied in order by redact and redactWithCount.
+type redactRule struct {
+	re          *regexp.Regexp
+	replacement string
+}
+
+// redactRules cover Bearer/Basic/Digest tokens, password/passwd/pwd/api_key/token/secret
+// assignments, *_PASSWORD/*_SECRET/*_KEY/*_TOKEN env/INI keys, AWS AKIA/ASIA keys, GitHub
+// gh[pousr]_/github_pat_ tokens, PEM private key blocks, Slack xox* tokens, sk- API keys,
+// JWTs and URL userinfo credentials (scheme://user:pass@host).
+var redactRules = []redactRule{
+	{regexp.MustCompile(`(?i)(authorization\s*[:=]\s*(?:bearer|basic|digest|token)\s+)\S+`), "${1}[REDACTED]"},
+	{regexp.MustCompile(`(?i)((?:password|passwd|pwd|api[_-]?key|token|secret)\s*[:=]\s*["']?)[^\s,;"']+`), "${1}[REDACTED]"},
+	{regexp.MustCompile(`(?i)\b([A-Za-z0-9_.-]*(?:password|secret|key|token)\s*[:=]\s*["']?)[^\s,;"']+`), "${1}[REDACTED]"},
+	{regexp.MustCompile(`\b((?:AKIA|ASIA)[0-9A-Z]{16})\b`), "[REDACTED_AWS_KEY]"},
+	{regexp.MustCompile(`\b(gh[pousr]_[A-Za-z0-9_]{20,})\b`), "[REDACTED_GITHUB_TOKEN]"},
+	{regexp.MustCompile(`\b(github_pat_[A-Za-z0-9_]{20,})\b`), "[REDACTED_GITHUB_TOKEN]"},
+	{regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----`), "[REDACTED_PRIVATE_KEY]"},
+	{regexp.MustCompile(`\b(xox[baprs]-[A-Za-z0-9-]{10,})\b`), "[REDACTED_SLACK_TOKEN]"},
+	{regexp.MustCompile(`\b(sk-[A-Za-z0-9_-]{16,})\b`), "[REDACTED]"},
+	{regexp.MustCompile(`\b(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b`), "[REDACTED_JWT]"},
+	{regexp.MustCompile(`([a-z][a-z0-9+.-]*://)([^\s/:@]+):([^\s@]+)@`), "${1}[REDACTED]:[REDACTED]@"},
 }
 
 func redact(raw string) string {
-	for _, re := range patterns {
-		raw = re.ReplaceAllString(raw, "${1}[REDACTED]")
+	for _, rule := range redactRules {
+		raw = rule.re.ReplaceAllString(raw, rule.replacement)
 	}
 	return raw
 }

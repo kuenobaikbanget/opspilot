@@ -31,6 +31,7 @@ import {
 } from "./auth";
 import { audit, db } from "./db";
 import { createIncident, effectiveThresholds, hostThresholds } from "./incidents";
+import { driftRoutes } from "./drift";
 import { isDevLoopbackInstallEnabled, loadHttpsAgentInstaller, readAgentInstallConfig } from "./agent-install";
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
@@ -120,6 +121,8 @@ async function router(req: Request): Promise<Response> {
   if (providerResponse) return providerResponse;
   const serviceResponse = await serviceRoutes(req, path, method);
   if (serviceResponse) return serviceResponse;
+  const driftResponse = await driftRoutes(req, path, method);
+  if (driftResponse) return driftResponse;
 
 
   if (path === "/api/auth/me" && method === "GET") {

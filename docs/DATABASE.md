@@ -21,7 +21,7 @@ erDiagram
   metric_samples_hourly { uuid agent_id PK; timestamptz hour PK; int sample_count; float cpu_min; float cpu_max; float cpu_avg; bigint network_rx_bytes }
   alert_thresholds { uuid agent_id PK; float cpu_percent; float memory_percent; float disk_percent }
   alert_conditions { uuid agent_id PK; text metric PK; text state; int consecutive; timestamptz cooldown_until; uuid incident_id FK }
-  config_snapshots { uuid id PK; uuid agent_id FK; text file_path; text checksum_sha256; timestamptz captured_at }
+  config_snapshots { uuid id PK; uuid agent_id FK; text file_path; text checksum_sha256; uuid previous_snapshot_id FK; text diff_status; text unavailable_reason; text content_format; text content_redacted; bool content_truncated; int redaction_count; jsonb semantic_diff_json; text diff_summary; uuid incident_id FK; timestamptz captured_at }
   incidents { uuid id PK; uuid agent_id FK; text title; text category; text status; text resolution }
   evidence { uuid id PK; uuid incident_id FK; text source; text content }
   investigations { uuid id PK; uuid incident_id FK; uuid provider_id FK; text provider_name; text provider_protocol; text provider_model; text status; jsonb result_json }
@@ -37,7 +37,7 @@ erDiagram
 | `agents` | enrollment identity hash, name, wire protocol version, negotiated capabilities, last contact | until deletion |
 | `enrollment_tokens` | one-time SHA256 token + TTL/used flag | worker deletes spent/expired rows after 24h |
 | `metric_samples` | 15s telemetry samples per host | raw window `METRIC_RAW_RETENTION_HOURS` (default 168 = 7d), then rolled up and deleted by the worker |
-| `config_snapshots` | allowlisted file hash history | 90d or per-policy |
+| `config_snapshots` | allowlisted file hash history, plus opt-in redacted snapshots, semantic diffs and drift incident links (migration 012) | 90d or per-policy |
 | `incidents` | incident lifecycle & human resolution | until archive |
 | `evidence` | bounded diagnostic output | 30–90d based on privacy |
 | `ai_providers` | connection metadata, encrypted key, one bounded asynchronous test slot | credential deleted with connection; no test history table |
@@ -71,6 +71,7 @@ erDiagram
 - Migration 007 adds `host_workload_reports` and optional `cpu_percent`/`memory_bytes` columns on `host_services` for opt-in bounded Docker/systemd workload inventory (`source='agent_workloads'`).
 - Migration 008 adds `enabled` and `check_interval_seconds` (15–86400 s, default 60) to `endpoint_monitors` and creates `endpoint_monitor_runs` with a named `probe_location` and `started_at`/`finished_at` source timestamps per probe execution. Runs cascade on monitor deletion; retention is bounded to 200 rows per monitor, pruned in the same transaction as each insert. The Worker scheduler claims at most 8 due enabled monitors per tick with `FOR UPDATE SKIP LOCKED`; run counts read via `monitor_id`-scoped LATERAL aggregates, never fleet-wide. Audit events for monitor mutations never contain the target URL.
 - Migration 010 adds investigation reliability columns to `investigations`: `lease_expires_at`, `worker_id`, `attempts` (default 0), `max_attempts` (default 3), `next_retry_at` and `dedupe_key`. A partial unique index allows at most one active (`queued`/`running`) investigation per `dedupe_key`, so terminal rows can always be re-investigated; claim and lease-recovery partial indexes serve worker polling. Lease expiries are audited as `investigation.lease_expired` with only non-secret fields (incident id, worker id, attempts, outcome).
+- Migration 012 extends `config_snapshots` backwards-compatibly for the drift timeline: `previous_snapshot_id` (self FK, `ON DELETE SET NULL`), `diff_status` (`hash_only`|`diff_available`|`unavailable`, default `hash_only`), `unavailable_reason`, `content_format`, `content_redacted` (always redacted; never raw file bytes), `content_truncated`, `redaction_count` (default 0, CHECK >= 0), `semantic_diff_json` (JSONB, redacted + bounded), `diff_summary` and `incident_id` (FK to `incidents`, `ON DELETE SET NULL`), plus `captured_at DESC` and `(agent_id, captured_at DESC)` indexes for timeline queries. Existing hash-only rows keep `diff_status='hash_only'` and remain valid; a `config_snapshot` frame whose checksum matches the latest telemetry-inserted row enriches that row instead of duplicating it.
 
 ## Full-text retrieval (currently implemented)
 

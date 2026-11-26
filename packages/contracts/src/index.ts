@@ -1,3 +1,5 @@
+export * from "./drift";
+
 /** Maximum permitted WebSocket frame payload size in bytes. */
 export const MAX_WS_MESSAGE_BYTES = 64 * 1024;
 
@@ -217,8 +219,12 @@ export const PROTOCOL_VERSION = 2;
 /** Oldest agent wire protocol version still accepted. */
 export const MIN_PROTOCOL_VERSION = 1;
 
-/** Capabilities an agent may advertise; the Hub negotiates the intersection with this list. */
-export const AGENT_CAPABILITIES = ["telemetry", "systemd_status", "diagnostics"] as const;
+/**
+ * Capabilities an agent may advertise; the Hub negotiates the intersection with this list.
+ * `config_diffs` is opt-in: agents only advertise it when OPSPILOT_CONFIG_DIFFS=true, and
+ * older agents that never advertise it simply keep hash-only drift tracking.
+ */
+export const AGENT_CAPABILITIES = ["telemetry", "systemd_status", "diagnostics", "config_diffs"] as const;
 
 /** Union of advertised agent capability names. */
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
