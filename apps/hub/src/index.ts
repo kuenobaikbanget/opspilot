@@ -9,6 +9,7 @@ import type {
 } from "@opspilot/contracts";
 import { parseEnrollRequest, parseInvestigateRequest, parseThresholdsUpdate } from "@opspilot/contracts";
 import { decryptProviderKey, ProviderCredentialError, readProviderMasterKey } from "@opspilot/ai/credentials";
+import { scoreEvidenceRelevance } from "@opspilot/ai/evidence-scoring";
 import {
   agentOnline,
   authenticateAgent,
@@ -337,8 +338,7 @@ async function router(req: Request): Promise<Response> {
     if (!incident.length) {
       return invalid("Not found", 404);
     }
-    const evidence =
-      await db`SELECT id,source,content,created_at FROM evidence WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 50`;
+    const evidence = await db<{ id: string; source: string; content: string; created_at: Date }[]>`SELECT id,source,content,created_at FROM evidence WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 50`;
     const rows = await db<{
       id: string;
       provider_id: string | null;
@@ -353,6 +353,19 @@ async function router(req: Request): Promise<Response> {
       completed_at: Date | null;
     }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,created_at,completed_at
       FROM investigations WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 10`;
+
+    // Cited IDs come from the latest completed investigation's diagnosis, when present.
+    const citedIds: string[] = rows
+      .filter((row) => row.status === "completed")
+      .map((row) => (row.result_json as { evidence_ids?: unknown } | null)?.evidence_ids)
+      .filter((ids): ids is string[] => Array.isArray(ids) && ids.every((id) => typeof id === "string"))
+      .at(0) ?? [];
+    const scored = scoreEvidenceRelevance(
+      { title: incident[0].title, category: incident[0].category },
+      evidence.map((item) => ({ ...item, created_at: item.created_at.toISOString() })),
+      citedIds,
+    );
+
     const investigations = rows.map((row) => ({
       id: row.id,
       provider: {
@@ -368,7 +381,12 @@ async function router(req: Request): Promise<Response> {
       created_at: row.created_at,
       completed_at: row.completed_at,
     }));
-    return j({ incident: incident[0], evidence, investigations });
+    // Backwards-compatible: evidence items keep all existing fields, with relevance added.
+    return j({
+      incident: incident[0],
+      evidence: scored,
+      investigations,
+    });
   }
 
   match = path.match(/^\/api\/incidents\/([^/]+)\/investigate$/);

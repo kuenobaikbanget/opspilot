@@ -1,5 +1,9 @@
 import type { Diagnosis, ProviderProtocol } from "@opspilot/contracts";
 import { normalizeProviderBaseUrl, postProviderJson, ProviderError, type ProviderPost } from "./provider-http";
+import { sortScoredEvidence, scoreEvidenceRelevance, type EvidenceLike, type IncidentLike, type SortOptions } from "./evidence-scoring";
+
+export { sortScoredEvidence, scoreEvidenceRelevance };
+export type { EvidenceLike, IncidentLike, SortOptions };
 
 export type ProviderConnection = {
   id: string;
