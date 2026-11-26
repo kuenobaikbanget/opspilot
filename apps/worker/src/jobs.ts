@@ -250,7 +250,8 @@ export async function runOneProviderTest(
   return true;
 }
 
-const RETENTION_WINDOW_MS = 6 * 3_600_000;
+const HOUR_MS = 3_600_000;
+const RETENTION_WINDOW_MS = 6 * HOUR_MS;
 
 function retentionConfig() {
   const raw = Number(process.env.METRIC_RAW_RETENTION_HOURS || 168);
@@ -266,7 +267,7 @@ function retentionConfig() {
  * rolls up and deletes one 6-hour window of raw samples that left the raw retention
  * window. Each call does at most one window so the poll loop stays bounded.
  */
-export async function runMetricRetention(db: SQL): Promise<boolean> {
+export async function runMetricRetention(db: SQL, now: Date = new Date()): Promise<boolean> {
   const { rawHours, rollupDays } = retentionConfig();
 
   await db`DELETE FROM metric_samples_hourly WHERE hour < NOW() - make_interval(days => ${rollupDays})`;
@@ -274,7 +275,8 @@ export async function runMetricRetention(db: SQL): Promise<boolean> {
     WHERE (used_at IS NOT NULL AND used_at < NOW() - INTERVAL '24 hours')
        OR (used_at IS NULL AND expires_at < NOW() - INTERVAL '24 hours')`;
 
-  const horizon = new Date(Date.now() - rawHours * 3_600_000);
+  // Truncate to a full hour boundary so only complete hours are rolled up and deleted.
+  const horizon = new Date(Math.floor((now.getTime() - rawHours * HOUR_MS) / HOUR_MS) * HOUR_MS);
   const [oldest] =
     await db<{ min: Date | null }[]>`SELECT MIN(sampled_at) AS min FROM metric_samples WHERE sampled_at < ${horizon}`;
   const min = oldest?.min;

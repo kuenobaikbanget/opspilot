@@ -20,8 +20,8 @@ export async function storeSystemdReport(agentId: string, sessionId: string, rep
     if (report.status === "observed") {
       await tx`INSERT INTO host_services(agent_id,name,runtime,state,source,observed_at)
         VALUES(${agentId},${report.unit},'systemd',${report.state},${source},${report.observedAt})
-        ON CONFLICT (agent_id,name) DO UPDATE SET runtime=excluded.runtime,state=excluded.state,
-          source=excluded.source,observed_at=excluded.observed_at`;
+        ON CONFLICT (agent_id,source,runtime,name) DO UPDATE SET state=excluded.state,
+          observed_at=excluded.observed_at`;
     }
   });
 }

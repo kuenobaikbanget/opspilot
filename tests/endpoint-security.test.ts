@@ -221,6 +221,15 @@ test("probe enforces strict timeouts and response body read cap", async () => {
     fetch(req) {
       const pathname = new URL(req.url).pathname;
       if (pathname === "/hang") return new Promise<Response>(() => {});
+      if (pathname === "/slow-redir-1") {
+        return Bun.sleep(120).then(() => Response.redirect(`http://127.0.0.1:${server.port}/slow-redir-2`, 302));
+      }
+      if (pathname === "/slow-redir-2") {
+        return Bun.sleep(120).then(() => Response.redirect(`http://127.0.0.1:${server.port}/slow-redir-3`, 302));
+      }
+      if (pathname === "/slow-redir-3") {
+        return Bun.sleep(120).then(() => new Response("ok", { status: 200 }));
+      }
       if (pathname === "/big") {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -242,6 +251,15 @@ test("probe enforces strict timeouts and response body read cap", async () => {
     expect(timeout.status).toBe("down");
     expect(timeout.error).toBe("timeout");
     expect(timeout.latencyMs).toBeLessThan(2000);
+
+    // Cumulative timeout across redirects: 3 hops x 120ms = 360ms must exceed a 250ms total budget.
+    const redirectTimeout = await probeEndpointTarget(`${base}/slow-redir-1`, 200, mockEnv, {
+      totalTimeoutMs: 250,
+      connectTimeoutMs: 250,
+    });
+    expect(redirectTimeout.status).toBe("down");
+    expect(redirectTimeout.error).toBe("timeout");
+    expect(redirectTimeout.latencyMs).toBeLessThan(350);
 
     const big = await probeEndpointTarget(`${base}/big`, 200, mockEnv, { totalTimeoutMs: 3000 });
     expect(big.status).toBe("up");

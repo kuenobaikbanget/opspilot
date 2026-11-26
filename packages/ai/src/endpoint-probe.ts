@@ -139,6 +139,7 @@ export async function probeEndpointTarget(
   if (!current) return down("blocked_target");
 
   for (let hop = 0; ; hop++) {
+    if (bounds.totalTimeoutMs - (performance.now() - startedAt) <= 0) return down("timeout");
     const parsed: URL = new URL(current);
     // Re-validate scheme/credentials/host on the initial URL and on every redirect hop.
     current = validateEndpointTargetUrl(current, { allowLoopbackMock });
@@ -156,7 +157,12 @@ export async function probeEndpointTarget(
       pinned = resolved;
     }
 
-    const result = await requestOnce(parsed, pinned, bounds);
+    const remainingMs = bounds.totalTimeoutMs - (performance.now() - startedAt);
+    if (remainingMs <= 0) return down("timeout");
+    const result = await requestOnce(parsed, pinned, {
+      totalTimeoutMs: remainingMs,
+      connectTimeoutMs: Math.min(bounds.connectTimeoutMs, remainingMs),
+    });
     if (result.kind === "error") return down(result.error);
     const { status, location } = result;
     if (status >= 300 && status < 400 && location) {

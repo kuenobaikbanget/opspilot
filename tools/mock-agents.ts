@@ -206,9 +206,8 @@ async function seedMockDatabase(sql: SQL, seedOnly: boolean) {
           await tx`
             INSERT INTO host_services(agent_id, name, runtime, state, source, observed_at)
             VALUES(${host.id}, ${host.systemd.unit}, 'systemd', ${host.systemd.state}, 'agent_systemd', ${observedAt})
-            ON CONFLICT (agent_id, name) DO UPDATE SET
+            ON CONFLICT (agent_id, source, runtime, name) DO UPDATE SET
               state=excluded.state,
-              source=excluded.source,
               observed_at=GREATEST(host_services.observed_at, excluded.observed_at)
           `;
         }

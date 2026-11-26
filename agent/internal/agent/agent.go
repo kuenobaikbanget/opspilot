@@ -307,6 +307,33 @@ func EnrollOnly() error {
 	return err
 }
 
+func startTelemetrySampler(ctx context.Context, cfg config, sampler *cpuSampler, queue *diskQueue, notify chan<- struct{}) {
+	pushSample := func() {
+		t := sample(cfg, sampler)
+		if err := queue.push(t); err != nil {
+			log.Printf("telemetry queue write failed: %v", err)
+			return
+		}
+		select {
+		case notify <- struct{}{}:
+		default:
+		}
+	}
+	pushSample()
+	go func() {
+		tick := time.NewTicker(cfg.Interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				pushSample()
+			}
+		}
+	}()
+}
+
 func Run() error {
 	cfg := readConfig()
 	id, err := loadOrEnroll(cfg)
@@ -316,6 +343,18 @@ func Run() error {
 	endpoint, err := wsAddress(cfg.HubURL)
 	if err != nil {
 		return err
+	}
+	sampler := newCPUSampler(cfg.ProcRoot)
+	// Durable bounded queue: opened once at startup so sampling continues while the Hub is unreachable.
+	queue, err := openQueue(cfg.QueuePath, cfg.MaxQueueEntries, cfg.MaxQueueAge)
+	if err != nil {
+		log.Printf("telemetry queue unavailable (%v); sending without durable buffering", err)
+		queue = nil
+	}
+	var notify chan struct{}
+	if queue != nil {
+		notify = make(chan struct{}, 1)
+		startTelemetrySampler(context.Background(), cfg, sampler, queue, notify)
 	}
 	log.Printf("OpsPilot agent starting; hub=%s interval=%s", cfg.HubURL, cfg.Interval)
 	for {
@@ -332,17 +371,16 @@ func Run() error {
 			continue
 		}
 		log.Print("Connected to OpsPilot Hub")
-		runConnection(conn, cfg)
+		runConnection(conn, cfg, sampler, queue, notify)
 		log.Print("Disconnected; retrying")
 		time.Sleep(5 * time.Second)
 	}
 }
-func runConnection(ws *websocket.Conn, cfg config) {
+func runConnection(ws *websocket.Conn, cfg config, sampler *cpuSampler, queue *diskQueue, notify <-chan struct{}) {
 	defer ws.Close()
 	conn := &safeConn{ws: ws}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sampler := newCPUSampler(cfg.ProcRoot)
 	caps := newCapabilitySet()
 
 	// Report wire protocol version and capabilities first; the Hub answers with hello_ack.
@@ -351,34 +389,45 @@ func runConnection(ws *websocket.Conn, cfg config) {
 		return
 	}
 
-	// Durable bounded queue: samples are persisted before send and flushed in order on reconnect.
-	queue, err := openQueue(cfg.QueuePath, cfg.MaxQueueEntries, cfg.MaxQueueAge)
-	if err != nil {
-		log.Printf("telemetry queue unavailable (%v); sending without durable buffering", err)
-		queue = nil
-	}
 	if queue != nil {
-		flushQueue(conn, queue)
-	}
-	sendTelemetry := func() {
-		if !caps.has("telemetry") {
-			return
+		if caps.has("telemetry") {
+			flushQueue(conn, queue)
 		}
-		t := sample(cfg, sampler)
-		if queue == nil {
-			if err := conn.send(t); err != nil {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-notify:
+					if caps.has("telemetry") {
+						flushQueue(conn, queue)
+					}
+				}
+			}
+		}()
+	} else {
+		sendDirect := func() {
+			if !caps.has("telemetry") {
+				return
+			}
+			if err := conn.send(sample(cfg, sampler)); err != nil {
 				log.Printf("telemetry send failed: %v", err)
 			}
-			return
 		}
-		// Re-stamp at send time: the Hub bounds timestamp age, and queued samples keep order.
-		t.Timestamp = time.Now().UTC().Format(time.RFC3339)
-		if err := queue.push(t); err != nil {
-			log.Printf("telemetry queue write failed: %v", err)
-		}
-		flushQueue(conn, queue)
+		sendDirect()
+		go func() {
+			tick := time.NewTicker(cfg.Interval)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					sendDirect()
+				}
+			}
+		}()
 	}
-	sendTelemetry()
 	go func() {
 		tick := time.NewTicker(systemdInterval)
 		defer tick.Stop()
@@ -416,18 +465,6 @@ func runConnection(ws *websocket.Conn, cfg config) {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-			}
-		}
-	}()
-	go func() {
-		tick := time.NewTicker(cfg.Interval)
-		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-				sendTelemetry()
 			}
 		}
 	}()

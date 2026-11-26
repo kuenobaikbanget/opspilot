@@ -144,9 +144,12 @@ export async function checkThresholds(
         }
       } else {
         consecutive = 0;
-        if (state === "breached" || state === "breaching") {
+        if (state === "breached") {
           nextState = "cooldown";
           cooldownUntil = new Date(now + cooldownMs);
+        } else if (state === "breaching") {
+          nextState = "ok";
+          cooldownUntil = null;
         } else if (state === "cooldown" && (!cooldownUntil || cooldownUntil.getTime() <= now)) {
           nextState = "ok";
           cooldownUntil = null;

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -297,5 +298,78 @@ func TestCapabilityNegotiationIntersection(t *testing.T) {
 	}
 	if !caps.has("telemetry") {
 		t.Fatal("telemetry should stay enabled")
+	}
+}
+
+func TestFlushQueueRestampsDelayedSamplesAndPrunesExpired(t *testing.T) {
+	recorder := newWSRecorder(t)
+	path := filepath.Join(t.TempDir(), "queue.jsonl")
+	queue, err := openQueue(path, 100, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	// Older than MaxQueueAge (1h): must be pruned, not re-stamped.
+	if err := queue.push(sampleAt(now.Add(-2*time.Hour), 1)); err != nil {
+		t.Fatal(err)
+	}
+	// Delayed >120s (Hub MAX_TELEMETRY_AGE_MS) but within MaxQueueAge: must be re-stamped on flush.
+	if err := queue.push(sampleAt(now.Add(-10*time.Minute), 42)); err != nil {
+		t.Fatal(err)
+	}
+
+	conn := &safeConn{ws: dial(t, recorder.server)}
+	beforeFlush := time.Now().UTC().Add(-2 * time.Second)
+	if !flushQueue(conn, queue) {
+		t.Fatal("flush did not drain the queue")
+	}
+	select {
+	case got := <-recorder.received:
+		if got.CPUPercent != 42 {
+			t.Fatalf("expected surviving delayed sample cpu=42, got %v", got.CPUPercent)
+		}
+		ts, err := time.Parse(time.RFC3339, got.Timestamp)
+		if err != nil {
+			t.Fatalf("invalid flushed timestamp %q: %v", got.Timestamp, err)
+		}
+		if ts.Before(beforeFlush) || ts.After(time.Now().UTC().Add(2*time.Second)) {
+			t.Fatalf("flushed timestamp was not re-stamped at send time: %s", got.Timestamp)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for re-stamped sample")
+	}
+}
+
+func TestTelemetrySamplerQueuesSamplesWhileOffline(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "queue.jsonl")
+	queue, err := openQueue(path, 100, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config{
+		ProcRoot: dir,
+		DiskPath: dir,
+		Interval: 20 * time.Millisecond,
+	}
+	notify := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startTelemetrySampler(ctx, cfg, newCPUSampler(dir), queue, notify)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for queue.len() < 2 && time.Now().Before(deadline) {
+		time.Sleep(15 * time.Millisecond)
+	}
+	cancel()
+	if queue.len() < 2 {
+		t.Fatalf("expected offline sampler to queue >=2 samples, got %d", queue.len())
+	}
+	reopened, err := openQueue(path, 100, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.len() < 2 {
+		t.Fatalf("expected >=2 durable samples on disk, got %d", reopened.len())
 	}
 }

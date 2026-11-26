@@ -148,6 +148,7 @@ integration("Go wire, authenticated workload inventory frames and scoped reads i
       const okFrame = frame({ status: "ok", workloads: [
         { name: "web", runtime: "docker", state: "running", cpuPercent: 1.5, memoryBytes: 67108864 },
         { name: "nginx.service", runtime: "systemd", state: "stopped" },
+        { name: "nginx.service", runtime: "docker", state: "running" },
       ] });
       // Invalid names, shapes, counts, timestamps, sizes and spoofed host identity are ignored.
       for (const raw of ["null", "{broken json", JSON.stringify({ ...okFrame, agentId: other.agentId }),
@@ -165,13 +166,15 @@ integration("Go wire, authenticated workload inventory frames and scoped reads i
       expect((await hostWorkloads(id)).collection).toBeNull();
       expect((await hostWorkloads(other.agentId)).collection).toBeNull();
 
-      // A measured snapshot persists workload rows with scoped resources and freshness.
+      // A measured snapshot persists workload rows with scoped resources and freshness,
+      // and coexists with single-unit systemd reports sharing the same unit name.
+      socket.send(JSON.stringify({ type: "systemd_status", version: 1, observedAt: okFrame.observedAt, status: "observed", unit: "nginx.service", state: "running" }));
       socket.send(JSON.stringify(okFrame));
-      const measured = await eventually(() => hostWorkloads(id), row => row.collection?.status === "ok" && row.workloads.length === 2, "live inventory");
+      const measured = await eventually(() => hostWorkloads(id), row => row.collection?.status === "ok" && row.workloads.length === 3, "live inventory");
       expect(measured).toMatchObject({
         online: true,
         collection: { status: "ok", reason: null, skipped: [], current: true, observed_at: okFrame.observedAt },
-        counts: { total: 2, running: 1, stopped: 1, failed: 0, unknown: 0 },
+        counts: { total: 3, running: 2, stopped: 1, failed: 0, unknown: 0 },
       });
       expect(measured.workloads).toContainEqual(expect.objectContaining({
         name: "web", runtime: "docker", state: "running", source: "agent_workloads", freshness: "fresh",
@@ -181,13 +184,18 @@ integration("Go wire, authenticated workload inventory frames and scoped reads i
         name: "nginx.service", runtime: "systemd", state: "stopped", freshness: "fresh",
         cpu_percent: null, memory_bytes: null,
       }));
+      expect(measured.workloads).toContainEqual(expect.objectContaining({
+        name: "nginx.service", runtime: "docker", state: "running", source: "agent_workloads", freshness: "fresh",
+      }));
+      const systemdStatus = await (await api(`/api/hosts/${id}/services`)).json();
+      expect(systemdStatus.service).toMatchObject({ name: "nginx.service", source: "agent_systemd", state: "running" });
       const fleet = await fleetWorkloads();
       expect(fleet).toMatchObject({
-        total: 2, hosts_total: 3, hosts_online: 1, hosts_collecting: 1,
-        counts: { total: 2, running: 1, stopped: 1, failed: 0, unknown: 0 },
+        total: 3, hosts_total: 3, hosts_online: 1, hosts_collecting: 1,
+        counts: { total: 3, running: 2, stopped: 1, failed: 0, unknown: 0 },
         limit: 200, stale_after_seconds: 120,
       });
-      expect(fleet.workloads).toHaveLength(2);
+      expect(fleet.workloads).toHaveLength(3);
 
       // A newer successful scan replaces the row set; an older frame cannot overwrite it.
       const next = frame({ status: "ok", workloads: [{ name: "web", runtime: "docker", state: "failed", cpuPercent: 0, memoryBytes: 0 }] }, new Date(Date.now() + 1000).toISOString());

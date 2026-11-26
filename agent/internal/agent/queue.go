@@ -21,7 +21,9 @@ type diskQueue struct {
 	maxEntries int
 	maxAge     time.Duration
 
+	flushMu sync.Mutex
 	mu      sync.Mutex
+	headSeq uint64
 	entries []telemetry
 }
 
@@ -73,10 +75,13 @@ func (q *diskQueue) enforceLocked(now time.Time) {
 		}
 		if first > 0 {
 			q.entries = append([]telemetry(nil), q.entries[first:]...)
+			q.headSeq += uint64(first)
 		}
 	}
 	if len(q.entries) > q.maxEntries {
-		q.entries = append([]telemetry(nil), q.entries[len(q.entries)-q.maxEntries:]...)
+		dropped := len(q.entries) - q.maxEntries
+		q.entries = append([]telemetry(nil), q.entries[dropped:]...)
+		q.headSeq += uint64(dropped)
 	}
 }
 
@@ -147,6 +152,7 @@ func (q *diskQueue) popN(n int) error {
 		return nil
 	}
 	q.entries = append([]telemetry(nil), q.entries[n:]...)
+	q.headSeq += uint64(n)
 	return q.persistLocked()
 }
 
@@ -163,11 +169,47 @@ func (q *diskQueue) snapshot() []telemetry {
 	return append([]telemetry(nil), q.entries...)
 }
 
-// flushQueue sends queued samples in FIFO order and pops them only after a successful
-// write. It returns true when the queue is fully drained.
+// pruneAndSnapshot drops expired entries before returning a consistent FIFO snapshot and its starting sequence.
+func (q *diskQueue) pruneAndSnapshot(now time.Time) ([]telemetry, uint64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	before := len(q.entries)
+	q.enforceLocked(now)
+	if len(q.entries) != before {
+		if err := q.persistLocked(); err != nil {
+			log.Printf("telemetry queue persist failed: %v", err)
+		}
+	}
+	return append([]telemetry(nil), q.entries...), q.headSeq
+}
+
+// popUpTo removes entries with sequence numbers strictly below endSeq, so concurrent capacity evictions never drop unsent samples.
+func (q *diskQueue) popUpTo(endSeq uint64) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if endSeq <= q.headSeq {
+		return nil
+	}
+	drop := int(endSeq - q.headSeq)
+	if drop > len(q.entries) {
+		drop = len(q.entries)
+	}
+	q.entries = append([]telemetry(nil), q.entries[drop:]...)
+	q.headSeq += uint64(drop)
+	return q.persistLocked()
+}
+
+// flushQueue sends queued samples in FIFO order, re-stamping each frame at send time so
+// delayed samples stay within the Hub's timestamp window, and pops them only after a
+// successful write. It returns true when the queue is fully drained.
 func flushQueue(conn *safeConn, q *diskQueue) bool {
+	q.flushMu.Lock()
+	defer q.flushMu.Unlock()
+	entries, startSeq := q.pruneAndSnapshot(time.Now())
 	sent := 0
-	for _, t := range q.snapshot() {
+	for _, t := range entries {
+		// Re-stamp at send time: the Hub bounds timestamp age, and queued samples keep order.
+		t.Timestamp = time.Now().UTC().Format(time.RFC3339)
 		if err := conn.send(t); err != nil {
 			log.Printf("queued telemetry send failed: %v", err)
 			break
@@ -175,7 +217,7 @@ func flushQueue(conn *safeConn, q *diskQueue) bool {
 		sent++
 	}
 	if sent > 0 {
-		if err := q.popN(sent); err != nil {
+		if err := q.popUpTo(startSeq + uint64(sent)); err != nil {
 			log.Printf("telemetry queue persist failed: %v", err)
 		}
 	}

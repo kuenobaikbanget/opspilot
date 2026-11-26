@@ -211,6 +211,14 @@ async function router(req: Request): Promise<Response> {
           FROM metric_samples_hourly
           WHERE agent_id=${match[1]} AND hour >= date_trunc('hour', ${from}::timestamptz) AND hour < ${to}::timestamptz
           ORDER BY hour DESC LIMIT ${limit}`;
+    } else if (resolution === "hourly") {
+      rows =
+        await db<HostMetricRow[]>`SELECT hour AS sampled_at,
+          cpu_avg AS cpu_percent, memory_avg AS memory_percent, disk_avg AS disk_percent,
+          network_rx_bytes::double precision AS network_rx_bytes, network_tx_bytes::double precision AS network_tx_bytes
+          FROM metric_samples_hourly
+          WHERE agent_id=${match[1]}
+          ORDER BY hour DESC LIMIT ${limit}`;
     } else if (from && to) {
       rows =
         await db<HostMetricRow[]>`SELECT sampled_at,cpu_percent,memory_percent,disk_percent,network_rx_bytes::double precision AS network_rx_bytes,network_tx_bytes::double precision AS network_tx_bytes

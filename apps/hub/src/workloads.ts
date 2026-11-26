@@ -33,19 +33,19 @@ export async function storeWorkloadInventory(agentId: string, sessionId: string,
       await tx`DELETE FROM host_services WHERE agent_id=${agentId} AND source=${source}`;
       return;
     }
-    const names = report.workloads.map(w => w.name);
-    // Names match strict [A-Za-z0-9_.@-] patterns, so a literal is injection-safe here.
-    const namesLiteral = `{${names.join(",")}}`;
-    if (names.length) {
-      await tx`DELETE FROM host_services WHERE agent_id=${agentId} AND source=${source} AND NOT (name = ANY(${namesLiteral}::text[]))`;
+    const keys = report.workloads.map(w => `${w.runtime}:${w.name}`);
+    // Runtimes are fixed enums and names match strict [A-Za-z0-9_.@-] patterns, so a literal is injection-safe here.
+    const keysLiteral = `{${keys.join(",")}}`;
+    if (keys.length) {
+      await tx`DELETE FROM host_services WHERE agent_id=${agentId} AND source=${source} AND NOT ((runtime || ':' || name) = ANY(${keysLiteral}::text[]))`;
     } else {
       await tx`DELETE FROM host_services WHERE agent_id=${agentId} AND source=${source}`;
     }
     for (const w of report.workloads) {
       await tx`INSERT INTO host_services(agent_id,name,runtime,state,source,observed_at,cpu_percent,memory_bytes)
         VALUES(${agentId},${w.name},${w.runtime},${w.state},${source},${report.observedAt},${w.cpuPercent ?? null},${w.memoryBytes ?? null})
-        ON CONFLICT (agent_id,name) DO UPDATE SET runtime=excluded.runtime,state=excluded.state,
-          source=excluded.source,observed_at=excluded.observed_at,cpu_percent=excluded.cpu_percent,memory_bytes=excluded.memory_bytes`;
+        ON CONFLICT (agent_id,source,runtime,name) DO UPDATE SET state=excluded.state,
+          observed_at=excluded.observed_at,cpu_percent=excluded.cpu_percent,memory_bytes=excluded.memory_bytes`;
     }
   });
 }

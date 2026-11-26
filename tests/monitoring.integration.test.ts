@@ -189,8 +189,22 @@ integration("hello negotiates protocol/capabilities, telemetry validation is str
       expect(payload.thresholds).toEqual({ cpu_percent: 50, memory_percent: 90, disk_percent: null });
       expect(Array.isArray(payload.conditions)).toBe(true);
 
-      // Breach twice -> incident + persisted breached condition.
+      // Single breaching sample followed by normal value resets to ok (not cooldown).
       const socket2 = await openSocket(hub, ok);
+      send(socket2, telemetry({ cpuPercent: 80 }));
+      await eventually(async () => {
+        const rows = await db<{ state: string; consecutive: number }[]>`
+          SELECT state,consecutive FROM alert_conditions WHERE agent_id=${id} AND metric='cpu'`;
+        return rows[0];
+      }, row => row?.state === "breaching" && row.consecutive === 1, "single breaching sample");
+      send(socket2, telemetry({ cpuPercent: 10 }));
+      await eventually(async () => {
+        const rows = await db<{ state: string; cooldown_until: Date | null }[]>`
+          SELECT state,cooldown_until FROM alert_conditions WHERE agent_id=${id} AND metric='cpu'`;
+        return rows[0];
+      }, row => row?.state === "ok" && row.cooldown_until === null, "reset from breaching to ok without cooldown");
+
+      // Breach twice -> incident + persisted breached condition.
       send(socket2, telemetry({ cpuPercent: 80 }));
       send(socket2, telemetry({ cpuPercent: 80 }));
       await eventually(async () => {
@@ -280,7 +294,34 @@ integration("retention rolls up and deletes raw samples; metrics API serves hour
       expect(rollups.reduce((sum, row) => sum + row.sample_count, 0)).toBe(120);
       expect(rollups[0].cpu_max).toBeGreaterThanOrEqual(rollups[0].cpu_avg);
 
-      // Metrics API: raw recent range and hourly historical range.
+      // Partial hour at the retention horizon must not be split or dropped.
+      const partialHourStart = new Date(Date.UTC(2026, 0, 10, 10, 0, 0));
+      await db`INSERT INTO metric_samples(agent_id,sampled_at,cpu_percent,memory_percent,disk_percent,network_rx_bytes,network_tx_bytes,uptime_seconds)
+        VALUES
+          (${id}, ${new Date(partialHourStart.getTime() + 10 * 60_000)}, 40, 20, 30, 100, 50, 60),
+          (${id}, ${new Date(partialHourStart.getTime() + 30 * 60_000)}, 60, 20, 30, 200, 100, 60)`;
+      process.env.METRIC_RAW_RETENTION_HOURS = "1";
+      process.env.METRIC_ROLLUP_RETENTION_DAYS = "3650";
+      try {
+        // At 11:25, raw cutoff is 10:25 -> truncated horizon is 10:00, so 10:00-11:00 stays raw.
+        await runMetricRetention(db, new Date(Date.UTC(2026, 0, 10, 11, 25, 0)));
+        const midHourRaw = await db<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM metric_samples
+          WHERE agent_id=${id} AND sampled_at >= ${partialHourStart} AND sampled_at < ${new Date(partialHourStart.getTime() + 3_600_000)}`;
+        expect(midHourRaw[0].count).toBe(2);
+        // At 12:05, raw cutoff is 11:05 -> truncated horizon is 11:00, so the full 10:00 hour rolls up together.
+        await runMetricRetention(db, new Date(Date.UTC(2026, 0, 10, 12, 5, 0)));
+        const afterHourRaw = await db<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM metric_samples
+          WHERE agent_id=${id} AND sampled_at >= ${partialHourStart} AND sampled_at < ${new Date(partialHourStart.getTime() + 3_600_000)}`;
+        expect(afterHourRaw[0].count).toBe(0);
+        const [fullHourRollup] = await db<{ sample_count: number; cpu_avg: number }[]>`
+          SELECT sample_count,cpu_avg FROM metric_samples_hourly WHERE agent_id=${id} AND hour=${partialHourStart}`;
+        expect(fullHourRollup).toEqual({ sample_count: 2, cpu_avg: 50 });
+      } finally {
+        delete process.env.METRIC_RAW_RETENTION_HOURS;
+        delete process.env.METRIC_ROLLUP_RETENTION_DAYS;
+      }
+
+      // Metrics API: raw recent range, hourly historical range, and hourly without from/to.
       const nowIso = new Date().toISOString();
       const fromIso = new Date(Date.now() - 300 * 24 * 3_600_000).toISOString();
       const rawRange = await hub.api(`/api/hosts/${id}/metrics?from=${encodeURIComponent(new Date(Date.now() - 3_600_000).toISOString())}&to=${encodeURIComponent(nowIso)}&resolution=raw`) as Response;
@@ -290,6 +331,11 @@ integration("retention rolls up and deletes raw samples; metrics API serves hour
       const hourlyRows = await hourly.json() as HostMetric[];
       expect(hourlyRows.length).toBe(rollups.length);
       expect(hourlyRows[0].cpu_percent).toBeGreaterThan(0);
+      // resolution=hourly without from/to reads metric_samples_hourly instead of falling back to raw.
+      const hourlyUnbounded = await hub.api(`/api/hosts/${id}/metrics?resolution=hourly`) as Response;
+      const hourlyUnboundedRows = await hourlyUnbounded.json() as HostMetric[];
+      expect(hourlyUnboundedRows.length).toBe(rollups.length + 1);
+      expect(hourlyUnboundedRows.some(r => r.sampled_at === partialHourStart.toISOString())).toBe(true);
       // auto picks hourly for spans beyond the raw retention window.
       const auto = await hub.api(`/api/hosts/${id}/metrics?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(nowIso)}`) as Response;
       expect((await auto.json() as HostMetric[]).length).toBe(rollups.length);
