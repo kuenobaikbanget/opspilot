@@ -344,6 +344,9 @@ function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
   thresholds: HostList["thresholds"] | undefined;
   onInspectHost: Props["onInspectHost"];
 }) {
+  const statusTone = cached ? "warning" : host.status === "online" ? (fresh ? "success" : "warning") : "danger";
+  const statusLabel = cached ? "Cached" : host.status === "online" ? (fresh ? "Online" : "Stale") : "Offline";
+
   return (
     <AsciiCardReveal as="li" className="overview-inventory-item" lazy={true} {...cardReveal}>
       <div className="overview-inventory-row" data-ascii="surface">
@@ -352,31 +355,43 @@ function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
           <span className="overview-identity">
             <span className="overview-hostname">{host.hostname}</span>
             <span className="overview-meta">
-              {host.version ? `Agent ${host.version}` : "Device"}
+              {host.version ? `v${host.version}` : "Device"}
             </span>
           </span>
         </div>
         <div className="overview-inventory-status">
-          <Badge data-ascii="fade"><OverviewIcon name={host.status === "online" ? "online" : "offline"} />{host.status === "online" ? "Agent online" : "Agent offline"}{cached ? " · cached" : ""}</Badge>
+          <Badge tone={statusTone} dot data-ascii="fade">{statusLabel}</Badge>
           {host.status === "offline" && host.last_seen_at && (
             <span className="overview-meta">Last seen <SampleTime value={host.last_seen_at} /></span>
           )}
           <span className="overview-meta">
-            {cached ? "Cached snapshot · No current reading"
-              : host.status === "offline" ? "Disconnected · No current reading"
+            {cached ? "Cached snapshot"
+              : host.status === "offline" ? "Disconnected"
                 : fresh ? <SampleTime value={host.sampled_at} />
-                  : host.sampled_at ? <>Stale sample · <SampleTime value={host.sampled_at} /></> : "No sample received"}
+                  : host.sampled_at ? <SampleTime value={host.sampled_at} /> : "No sample received"}
           </span>
         </div>
         <dl className="overview-inventory-metrics" aria-label="Current readings and configured thresholds">
           {resources.map(({ key, label }) => {
             const value = fresh && finitePercent(host[key]) ? host[key] : null;
             const limit = thresholds?.[key] ?? null;
+            const headroom = value !== null && limit !== null ? limit - value : null;
+            const pressureState = headroom === null ? undefined : headroom <= 0 ? "exceeded" : headroom <= 5 ? "near" : undefined;
             return (
-              <div key={key}>
-                <dt>{label}</dt>
+              <div key={key} className="overview-inventory-metric" data-pressure={pressureState}>
+                <dt className="overview-inventory-metric-label">{label}</dt>
                 <dd>
-                  <span aria-hidden="true">{percent(value)} <span className="overview-inventory-limit">/ {percent(limit)}</span></span>
+                  <span className="overview-inventory-reading" aria-hidden="true">
+                    <strong>{percent(value)}</strong>
+                    <span className="overview-inventory-limit">/ {percent(limit)}</span>
+                  </span>
+                  <span
+                    className="overview-inventory-meter"
+                    aria-hidden="true"
+                    style={{ "--usage": `${value ?? 0}%` } as CSSProperties}
+                  >
+                    {value !== null && value > 0 && <span className="overview-inventory-meter-fill" />}
+                  </span>
                   <span className="sr-only">
                     {value === null ? "No current reading" : `${percent(value)} current`}; {limit === null ? "No threshold reported" : `${percent(limit)} threshold`}
                   </span>
@@ -385,7 +400,7 @@ function InventoryRow({ host, fresh, cached, thresholds, onInspectHost }: {
             );
           })}
         </dl>
-        <Button size="sm" className="overview-inventory-action" data-ascii="fade" aria-label={`Inspect ${host.hostname}`} onClick={() => onInspectHost(host.id)}>
+        <Button variant="ghost" size="sm" className="overview-inventory-action" data-ascii="fade" aria-label={`Inspect ${host.hostname}`} onClick={() => onInspectHost(host.id)}>
           Inspect <OverviewIcon name="arrow" />
         </Button>
       </div>
@@ -803,18 +818,30 @@ export function ThresholdOverview({
           </AsciiCardReveal>
         )}
         {visibleDevices?.length ? (
-          <ul className="overview-inventory-list" role="list">
-            {visibleDevices.map(({ host, fresh }) => (
-              <InventoryRow
-                key={host.id}
-                host={host}
-                fresh={fresh}
-                cached={cached}
-                thresholds={thresholds}
-                onInspectHost={onInspectHost}
-              />
-            ))}
-          </ul>
+          <>
+            <div className="overview-inventory-columns" aria-hidden="true">
+              <span>Device</span>
+              <span>Status</span>
+              <div className="overview-inventory-columns-metrics">
+                {resources.map(({ key, label }) => (
+                  <span key={key}>{label}</span>
+                ))}
+              </div>
+              <span className="overview-inventory-columns-action">Action</span>
+            </div>
+            <ul className="overview-inventory-list" role="list">
+              {visibleDevices.map(({ host, fresh }) => (
+                <InventoryRow
+                  key={host.id}
+                  host={host}
+                  fresh={fresh}
+                  cached={cached}
+                  thresholds={thresholds}
+                  onInspectHost={onInspectHost}
+                />
+              ))}
+            </ul>
+          </>
         ) : fleetLoading ? (
           <div className="overview-inventory-skeleton" role="status">
             <span className="sr-only" data-ascii="skip">Loading device inventory…</span>
