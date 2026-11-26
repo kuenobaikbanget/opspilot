@@ -14,7 +14,12 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}` |
 | GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; 400 invalid ID, 404 unknown host |
 | GET | `/api/hosts/:id/services` | none | selected-host `HostSystemdStatus`; 400 invalid ID, 404 unknown host |
-| GET | `/api/services` | none | `{endpoints}` (existing independent endpoint records) |
+| GET | `/api/services` | none | `{endpoints: EndpointMonitor[]}` with per-monitor `run_counts` |
+| POST | `/api/endpoints` | `{name,targetUrl,expectedStatus?,agentId?,serviceName?,checkIntervalSeconds?,enabled?}` | `201 {endpoint}`; `400 invalid_request`/`invalid_target` (SSRF policy), 404 unknown host |
+| PATCH | `/api/endpoints/:id` | subset of create fields, at least one | `200 {endpoint}`; same validation; audits `endpoint.updated` |
+| DELETE | `/api/endpoints/:id` | none | `200 {ok:true}`; run history cascades; audits `endpoint.deleted` |
+| POST | `/api/endpoints/:id/check` | none | `200 {endpoint}` after a bounded server-side probe; persists a run; audits `endpoint.probe` |
+| GET | `/api/endpoints/:id/runs` | none | `{runs: EndpointMonitorRun[], limit: 50}` newest first |
 | GET | `/api/ai/providers` | none | `{providers: AiProvider[], encryptionConfigured: boolean}` |
 | POST | `/api/ai/providers` | `{name,protocol,baseUrl,apiKey,defaultModel,enabled}` | `201 {provider}` |
 | PATCH | `/api/ai/providers/:id` | subset of create fields, at least one | `200 {provider}` |
@@ -153,10 +158,14 @@ Starter wire version is implicit 0.1; add `protocolVersion` on enrollment and ev
 
 ## Fleet & services contract boundary (planned)
 
-The current host list provides typed host observations and full-fleet enrolled/connected counts. The host-scoped systemd read adds one opted-in process observation; broader runtime inventory, per-workload resources, OS/capacity metadata, scheduled probe results, endpoint aggregate totals and configurable alert-policy metadata are outside this slice.
+The current host list provides typed host observations and full-fleet enrolled/connected counts. The host-scoped systemd read adds one opted-in process observation; broader runtime inventory, per-workload resources, OS/capacity metadata and configurable alert-policy metadata remain outside this slice. Endpoint monitors are implemented as described below.
 
-Before implementing those surfaces, define validated read/write schemas for the [planned read models](BACKEND-DESIGN.md#fleet-services-data-boundary-planned), including stable host/workload/endpoint associations, source and collection/check timestamps, stale/unknown/unavailable reasons, units and list/aggregate coverage. Independently fresh probe results must survive an agent disconnect without becoming a fabricated host-health verdict.
+### Endpoint monitors (implemented)
 
-Endpoint creation/editing must require admin authorization, same-origin mutation protection, bounded validated HTTP(S) target/expected-response/schedule inputs and audit. Probe execution is server-side and subject to the [SSRF/egress policy](SECURITY.md#planned-inventory-and-endpoint-monitoring), not a browser fetch, an arbitrary shell command or an LLM-selected URL.
+`EndpointMonitor` (in `packages/contracts`) carries `id`, `agent_id`, `service_name`, `name`, `target_url`, `expected_status`, `probe_location`, `enabled`, `check_interval_seconds`, `run_counts: {total,up,down}`, and `last_status` (`up|down|unknown`), `last_http_status`, `last_latency_ms`, `last_error`, `last_checked_at` (ISO). `run_counts` are aggregate run counts scoped to that one monitor via `monitor_id`, never fleet-wide. `probe_location` is the server-side named probe origin (`OPSPILOT_PROBE_LOCATION`, default `hub-local`), never client-supplied.
+
+Create/patch payloads are structurally validated (`parseCreateEndpointMonitorRequest` / `parseUpdateEndpointMonitorRequest`): `name` 1–80 chars, `targetUrl` ≤2048, `expectedStatus` integer 100–599 (default 200), `agentId` UUID or null, `serviceName` ≤80 or null, `checkIntervalSeconds` integer 15–86400 (default 60), `enabled` boolean (default true). The target URL additionally passes `validateEndpointTargetUrl` SSRF/egress validation (http/https only, no credentials/fragment; private, loopback, link-local, CGNAT, multicast, reserved, metadata and IPv4-mapped/NAT64 IPv6 destinations rejected), returning `400 {error, code:"invalid_target"}` otherwise. Non-production `OPSPILOT_ALLOW_LOOPBACK_PROBES=true` permits loopback targets for local development only.
+
+Probe execution is server-side only (`packages/ai/src/endpoint-probe.ts`): DNS answers are all validated and the socket pinned to one approved address (DNS-rebinding defense), redirects are followed manually up to 5 hops with full re-validation per hop, total timeout 5 s / connect 3 s, headers ≤16 KiB, body read ≤256 KiB and never stored, TLS verification cannot be disabled. Run outcomes use fixed error codes: `blocked_target`, `dns_blocked`, `redirect_blocked`, `redirect_limit`, `timeout`, `connection_failed`, `http_<status>`, `tls_verification_disabled`. Each execution is persisted as an `EndpointMonitorRun` (`id`, `monitor_id`, `probe_location`, `status`, `http_status`, `latency_ms`, `error`, `started_at`, `finished_at`, `created_at` ISO timestamps), bounded to 200 rows per monitor; `last_*` on the monitor mirrors the newest run. The Worker scheduler claims at most 8 due enabled monitors per tick (`FOR UPDATE SKIP LOCKED`, per-monitor interval). All routes require the admin cookie; mutations also require exact `ALLOWED_ORIGIN` and are audited as `endpoint.created`/`endpoint.updated`/`endpoint.deleted`/`endpoint.probe` with no target URL in audit data. Probe execution is subject to the [SSRF/egress policy](SECURITY.md#planned-inventory-and-implemented-endpoint-monitoring), not a browser fetch, an arbitrary shell command, a generic URL-fetch tool or an LLM-selected URL. Independently fresh probe results survive an agent disconnect without becoming a fabricated host-health verdict.
 
 Any agent wire change must update `packages/contracts`, the Go agent, this document and interoperability/negative tests together; unsupported capabilities must render unavailable rather than silently inventing inventory.

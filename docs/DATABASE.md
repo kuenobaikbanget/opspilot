@@ -38,6 +38,8 @@ erDiagram
 | `incident_memory` | searchable human-confirmed resolution | opt-in long term |
 | `audit_events` | important admin actions | 90d, tamper protection later |
 | `host_systemd_reports`, `host_services` | latest collector report and up to one real systemd observation per host | replaced on new report/observation, cascade on host deletion; no history |
+| `endpoint_monitors` | admin-configured HTTP monitor: target, expected status, server-side `probe_location`, `enabled`, per-monitor `check_interval_seconds`, latest `last_*` result | until deletion; cascade |
+| `endpoint_monitor_runs` | one persisted probe execution: named `probe_location`, status/HTTP status/latency/error, `started_at`/`finished_at` source timestamps | bounded to 200 rows per monitor, pruned per insert; cascade on monitor deletion |
 
 ## SQL invariants
 
@@ -54,6 +56,7 @@ erDiagram
 - Migration 002 backfills legacy brand names/protocols, leaves unrecorded model/base URL null and preserves terminal results/errors/timestamps. Legacy queued/running jobs become failed with a migration notice. Old binaries must be stopped before dropping the old `provider` column.
 - `last_test_*` columns retain one slot per connection, including model/revision and 90-second expiry. Conditional result writes and audits cannot overwrite replaced/expired slots.
 - Migration 004 adds the report status, source timestamp and socket session ID separate from the measured unit/state in `host_services`. The two rows change atomically and only on an increasing observation timestamp. Read-time freshness does not mutate rows. A new configured name or explicit opt-out removes the old live unit; `demo_fixture` rows are not read as live observations.
+- Migration 008 adds `enabled` and `check_interval_seconds` (15–86400 s, default 60) to `endpoint_monitors` and creates `endpoint_monitor_runs` with a named `probe_location` and `started_at`/`finished_at` source timestamps per probe execution. Runs cascade on monitor deletion; retention is bounded to 200 rows per monitor, pruned in the same transaction as each insert. The Worker scheduler claims at most 8 due enabled monitors per tick with `FOR UPDATE SKIP LOCKED`; run counts read via `monitor_id`-scoped LATERAL aggregates, never fleet-wide. Audit events for monitor mutations never contain the target URL.
 
 ## Full-text retrieval (currently implemented)
 
