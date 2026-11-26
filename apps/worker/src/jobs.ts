@@ -1,6 +1,5 @@
 import type { SQL } from "bun";
 import { generateDiagnosis, type ProviderConnection } from "@opspilot/ai";
-import { probeEndpointTarget } from "@opspilot/ai/endpoint-probe";
 import { decryptProviderKey, ProviderCredentialError } from "@opspilot/ai/credentials";
 import { ProviderError, type ProviderErrorCode } from "@opspilot/ai/provider-http";
 import type { ProviderProtocol } from "@opspilot/contracts";
@@ -248,27 +247,6 @@ export async function runOneProviderTest(
     if (failure) console.error("Provider test failed", slot.last_test_id, slot.id, failure.code, failure.httpStatus);
     else console.log("Completed provider test", slot.last_test_id, slot.id);
   }
-  return true;
-}
-
-/** Probes at most one due endpoint monitor outside any DB transaction. */
-export async function runOneEndpointProbe(db: SQL): Promise<boolean> {
-  const rows = await db<{ id: string; target_url: string; expected_status: number }[]>`
-    SELECT id,target_url,expected_status
-    FROM endpoint_monitors
-    WHERE last_checked_at IS NULL OR last_checked_at <= NOW() - INTERVAL '15 seconds'
-    ORDER BY last_checked_at NULLS FIRST, created_at
-    LIMIT 1`;
-  const monitor = rows[0];
-  if (!monitor) return false;
-  const result = await probeEndpointTarget(monitor.target_url, monitor.expected_status);
-  await db`UPDATE endpoint_monitors SET
-      last_status=${result.status},
-      last_http_status=${result.httpStatus},
-      last_latency_ms=${result.latencyMs},
-      last_error=${result.error},
-      last_checked_at=NOW()
-    WHERE id=${monitor.id}`;
   return true;
 }
 

@@ -48,6 +48,8 @@ erDiagram
 | `metric_samples_hourly` | hourly rollups (count, min/max/avg per resource, last network counters) | `METRIC_ROLLUP_RETENTION_DAYS` (default 90d), deleted by the worker |
 | `alert_thresholds` | per-host alert limit overrides (null = environment default) | until host deletion or reset; changes audited |
 | `alert_conditions` | persisted per-metric condition state (ok/breaching/breached/cooldown, streak, cooldown, incident link) | until host deletion; survives Hub restarts |
+| `endpoint_monitors` | admin-configured HTTP monitor: target, expected status, server-side `probe_location`, `enabled`, per-monitor `check_interval_seconds`, latest `last_*` result | until deletion; cascade |
+| `endpoint_monitor_runs` | one persisted probe execution: named `probe_location`, status/HTTP status/latency/error, `started_at`/`finished_at` source timestamps | bounded to 200 rows per monitor, pruned per insert; cascade on monitor deletion |
 
 ## SQL invariants
 
@@ -66,6 +68,8 @@ erDiagram
 - Migration 004 adds the report status, source timestamp and socket session ID separate from the measured unit/state in `host_services`. The two rows change atomically and only on an increasing observation timestamp. Read-time freshness does not mutate rows. A new configured name or explicit opt-out removes the old live unit; `demo_fixture` rows are not read as live observations.
 - Migration 005 adds `alert_thresholds` (per-host overrides, CHECK 0-100 or NULL), `alert_conditions` (state machine `ok|breaching|breached|cooldown`, `consecutive`, `cooldown_until`, nullable incident FK) and the `agents.protocol_version`/`agents.capabilities` columns recorded at enrollment/hello. Threshold changes reset that host's condition rows; threshold mutations are audited.
 - Migration 006 adds `metric_samples_hourly` and a `sampled_at` index on `metric_samples` for retention scans.
+- Migration 007 adds `host_workload_reports` and optional `cpu_percent`/`memory_bytes` columns on `host_services` for opt-in bounded Docker/systemd workload inventory (`source='agent_workloads'`).
+- Migration 008 adds `enabled` and `check_interval_seconds` (15–86400 s, default 60) to `endpoint_monitors` and creates `endpoint_monitor_runs` with a named `probe_location` and `started_at`/`finished_at` source timestamps per probe execution. Runs cascade on monitor deletion; retention is bounded to 200 rows per monitor, pruned in the same transaction as each insert. The Worker scheduler claims at most 8 due enabled monitors per tick with `FOR UPDATE SKIP LOCKED`; run counts read via `monitor_id`-scoped LATERAL aggregates, never fleet-wide. Audit events for monitor mutations never contain the target URL.
 
 ## Full-text retrieval (currently implemented)
 

@@ -632,6 +632,8 @@ export type HostSystemdStatus = {
   service: (HostService & { freshness: "fresh" | "stale" }) | null;
 };
 
+export type EndpointMonitorRunCounts = { total: number; up: number; down: number };
+
 export type EndpointMonitor = {
   id: string;
   agent_id: string | null;
@@ -640,6 +642,9 @@ export type EndpointMonitor = {
   target_url: string;
   expected_status: number;
   probe_location: string;
+  enabled: boolean;
+  check_interval_seconds: number;
+  run_counts: EndpointMonitorRunCounts;
   last_status: "up" | "down" | "unknown";
   last_http_status: number | null;
   last_latency_ms: number | null;
@@ -703,32 +708,218 @@ export type WorkloadList = {
   stale_after_seconds: number;
 };
 
-const PRIVATE_OR_METADATA_HOSTS = new Set([
-  "localhost",
-  "localhost.localdomain",
-  "metadata.google.internal",
-  "metadata",
-]);
+/** One persisted, timestamped probe execution with its actual named probe location. */
+export type EndpointMonitorRun = {
+  id: string;
+  monitor_id: string;
+  probe_location: string;
+  status: "up" | "down";
+  http_status: number | null;
+  latency_ms: number | null;
+  error: string | null;
+  started_at: string;
+  finished_at: string;
+  created_at: string;
+};
 
-function isLoopbackOrPrivateHost(hostname: string): boolean {
-  const lower = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (PRIVATE_OR_METADATA_HOSTS.has(lower) || lower === "::1" || lower === "::") return true;
-  if (/^127\./.test(lower) || /^10\./.test(lower) || /^169\.254\./.test(lower) || /^0\./.test(lower)) return true;
-  const m172 = lower.match(/^172\.(\d+)\./);
-  if (m172 && Number(m172[1]) >= 16 && Number(m172[1]) <= 31) return true;
-  if (/^192\.168\./.test(lower)) return true;
-  if (/^(fc|fd|fe80)/i.test(lower)) return true;
-  return false;
+export type EndpointRunsPayload = {
+  runs: EndpointMonitorRun[];
+  limit: number;
+};
+
+export type CreateEndpointMonitorRequest = {
+  name: string;
+  targetUrl: string;
+  expectedStatus: number;
+  agentId: string | null;
+  serviceName: string | null;
+  checkIntervalSeconds: number;
+  enabled: boolean;
+};
+
+export type UpdateEndpointMonitorRequest = Partial<CreateEndpointMonitorRequest>;
+
+export const ENDPOINT_NAME_MAX = 80;
+export const ENDPOINT_TARGET_URL_MAX = 2048;
+export const ENDPOINT_CHECK_INTERVAL_MIN_SECONDS = 15;
+export const ENDPOINT_CHECK_INTERVAL_MAX_SECONDS = 86400;
+export const ENDPOINT_RUNS_LIMIT = 50;
+/** Bounded per-monitor run history retained in the database. */
+export const ENDPOINT_RUNS_RETENTION = 200;
+
+const PRIVATE_OR_METADATA_HOSTS: Record<string, true> = {
+  localhost: true,
+  "localhost.localdomain": true,
+  "metadata.google.internal": true,
+  metadata: true,
+};
+
+
+// IANA IPv4 special-purpose ranges: this host, private, CGNAT, loopback,
+// link-local (incl. cloud metadata 169.254.0.0/16), benchmarking, documentation,
+// multicast and reserved.
+const BLOCKED_IPV4_SUBNETS: ReadonlyArray<readonly [base: number, prefix: number]> = [
+  [0x00000000, 8], [0x0a000000, 8], [0x64400000, 10], [0x7f000000, 8],
+  [0xa9fe0000, 16], [0xac100000, 12], [0xc0000000, 24], [0xc0000200, 24],
+  [0xc01fc400, 24], [0xc034c100, 24], [0xc0586300, 24], [0xc0a80000, 16],
+  [0xc0af3000, 24], [0xc6120000, 15], [0xc6336400, 24], [0xcb007100, 24],
+  [0xe0000000, 4], [0xf0000000, 4],
+];
+
+function ipv4ToInt(host: string): number | null {
+  const parts = host.split(".");
+  if (parts.length !== 4) return null;
+  let value = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const octet = Number(part);
+    if (octet > 255) return null;
+    value = value * 256 + octet;
+  }
+  return value >>> 0;
 }
 
-/** Validates an operator-supplied HTTP(S) endpoint check URL against SSRF/egress policy. */
+function isBlockedIpv4Value(value: number): boolean {
+  return BLOCKED_IPV4_SUBNETS.some(([base, prefix]) => {
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    return (value & mask) === (base & mask);
+  });
+}
+
+function isLoopbackIpv4Value(value: number): boolean {
+  return (value & 0xff000000) === 0x7f000000;
+}
+
+/** Expands an IPv6 literal (with optional zone id and embedded IPv4 tail) to 8 groups. */
+function expandIpv6(host: string): number[] | null {
+  const zone = host.indexOf("%");
+  const addr = zone === -1 ? host : host.slice(0, zone);
+  const doubleColon = addr.indexOf("::");
+  let head = addr;
+  let tail: string | null = null;
+  if (doubleColon !== -1) {
+    if (addr.indexOf("::", doubleColon + 1) !== -1) return null;
+    head = addr.slice(0, doubleColon);
+    tail = addr.slice(doubleColon + 2);
+  }
+  const parseGroups = (input: string): number[] | null => {
+    if (input === "") return [];
+    const groups = input.split(":");
+    const out: number[] = [];
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i];
+      if (group.includes(".")) {
+        if (i !== groups.length - 1) return null;
+        const v4 = ipv4ToInt(group);
+        if (v4 === null) return null;
+        out.push((v4 >>> 16) & 0xffff, v4 & 0xffff);
+        continue;
+      }
+      if (!/^[0-9a-fA-F]{1,4}$/.test(group)) return null;
+      out.push(parseInt(group, 16));
+    }
+    return out;
+  };
+  const headGroups = parseGroups(head);
+  const tailGroups = tail === null ? null : parseGroups(tail);
+  if (!headGroups || (tail !== null && !tailGroups)) return null;
+  if (tail === null) return headGroups.length === 8 ? headGroups : null;
+  const total = headGroups.length + tailGroups!.length;
+  if (total > 8) return null;
+  return [...headGroups, ...new Array<number>(8 - total).fill(0), ...tailGroups!];
+}
+
+/** Compares the first `prefix` bits of two 128-bit addresses given as 8 groups. */
+function ipv6InSubnet(groups: number[], base: readonly number[], prefix: number): boolean {
+  let remaining = prefix;
+  for (let i = 0; i < 8; i++) {
+    if (remaining <= 0) return true;
+    if (remaining >= 16) {
+      if (groups[i] !== base[i]) return false;
+      remaining -= 16;
+      continue;
+    }
+    const mask = (0xffff << (16 - remaining)) & 0xffff;
+    return (groups[i] & mask) === (base[i] & mask);
+  }
+  return true;
+}
+
+// Special-purpose subnets inside 2000::/3 (global unicast): Teredo/benchmarking,
+// documentation, 6to4, ORCHIDv2, benchmarking. Everything outside 2000::/3
+// (loopback, ULA, link-local, multicast, unspecified, IPv4-mapped) is rejected
+// by the allowlist itself.
+const BLOCKED_IPV6_SUBNETS: ReadonlyArray<readonly [base: readonly number[], prefix: number]> = [
+  [[0x2001, 0, 0, 0, 0, 0, 0, 0], 23],
+  [[0x2001, 0x0db8, 0, 0, 0, 0, 0, 0], 32],
+  [[0x2002, 0, 0, 0, 0, 0, 0, 0], 16],
+  [[0x2620, 0x004f, 0x8000, 0, 0, 0, 0, 0], 48],
+  [[0x3fff, 0, 0, 0, 0, 0, 0, 0], 20],
+];
+
+function isBlockedIpv6Groups(groups: number[]): boolean {
+  // IPv4-mapped (::ffff:0:0/96) and NAT64 (64:ff9b::/96) embed an IPv4 address.
+  const mapped =
+    groups.slice(0, 5).every((g) => g === 0) &&
+    (groups[5] === 0xffff || (groups[0] === 0x0064 && groups[1] === 0xff9b && groups.slice(2, 6).every((g) => g === 0)));
+  if (mapped) {
+    const v4 = ((groups[6] << 16) | groups[7]) >>> 0;
+    return isBlockedIpv4Value(v4);
+  }
+  if ((groups[0] & 0xe000) !== 0x2000) return true; // not global unicast 2000::/3
+  return BLOCKED_IPV6_SUBNETS.some(([base, prefix]) => ipv6InSubnet(groups, base, prefix));
+}
+
+function isLoopbackIpv6Groups(groups: number[]): boolean {
+  return groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1;
+}
+
+/** Classifies an IP literal host; returns "blocked" | "loopback" | "public" | null when not a literal. */
+function classifyIpLiteral(host: string): "blocked" | "loopback" | "public" | null {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    const value = ipv4ToInt(host);
+    if (value === null) return null;
+    if (isLoopbackIpv4Value(value)) return "loopback";
+    return isBlockedIpv4Value(value) ? "blocked" : "public";
+  }
+  if (host.includes(":")) {
+    const groups = expandIpv6(host);
+    if (!groups) return null;
+    if (isLoopbackIpv6Groups(groups)) return "loopback";
+    // Unmap IPv4-mapped/NAT64 loopback so the mock policy can allow it explicitly.
+    if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+      const v4 = ((groups[6] << 16) | groups[7]) >>> 0;
+      if (isLoopbackIpv4Value(v4)) return "loopback";
+    }
+    return isBlockedIpv6Groups(groups) ? "blocked" : "public";
+  }
+  return null;
+}
+
+/** Static SSRF/egress classification of a URL host: "blocked" | "loopback" | "public". */
+export function classifyEndpointHost(hostname: string): "blocked" | "loopback" | "public" {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  if (!host) return "blocked";
+  if (PRIVATE_OR_METADATA_HOSTS[host] === true || host.endsWith(".localhost")) return "blocked";
+  const literal = classifyIpLiteral(host);
+  if (literal) return literal;
+  return "public";
+}
+
+/**
+ * Validates an operator-supplied HTTP(S) endpoint check URL against SSRF/egress policy.
+ * Only http/https schemes without credentials or fragments are allowed; private,
+ * loopback, link-local, CGNAT, multicast, reserved and cloud-metadata destinations
+ * (IPv4 and IPv6, including IPv4-mapped IPv6) are rejected. DNS names are re-validated
+ * against every resolved address at execution time (see packages/ai endpoint-probe).
+ */
 export function validateEndpointTargetUrl(
   raw: string,
   options: { allowLoopbackMock?: boolean } = {},
 ): string | null {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
-  if (!trimmed || trimmed.length > 2048) return null;
+  if (!trimmed || trimmed.length > ENDPOINT_TARGET_URL_MAX) return null;
   let parsed: URL;
   try {
     parsed = new URL(trimmed);
@@ -737,14 +928,74 @@ export function validateEndpointTargetUrl(
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
   if (parsed.username || parsed.password || parsed.hash) return null;
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (!host) return null;
-  if (host === "169.254.169.254" || host === "metadata.google.internal") return null;
-  const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
-  if (isLoopback && options.allowLoopbackMock) {
-    return parsed.toString();
-  }
-  if (isLoopbackOrPrivateHost(host)) return null;
-  if (parsed.protocol !== "https:") return null;
+  if (parsed.port && !/^\d{1,5}$/.test(parsed.port)) return null;
+  const classification = classifyEndpointHost(parsed.hostname);
+  if (classification === "blocked") return null;
+  if (classification === "loopback" && !options.allowLoopbackMock) return null;
   return parsed.toString();
+}
+
+/** Structural validation of a create payload; server-side URL egress policy is applied separately. */
+export function parseCreateEndpointMonitorRequest(value: unknown): CreateEndpointMonitorRequest | null {
+  if (!requestObject(value)) return null;
+  const name = trimmedString(value.name, ENDPOINT_NAME_MAX);
+  const targetUrl = trimmedString(value.targetUrl, ENDPOINT_TARGET_URL_MAX);
+  if (!name || !targetUrl) return null;
+  const expectedStatus = value.expectedStatus === undefined ? 200 : Number(value.expectedStatus);
+  if (!Number.isInteger(expectedStatus) || expectedStatus < 100 || expectedStatus > 599) return null;
+  const checkIntervalSeconds =
+    value.checkIntervalSeconds === undefined
+      ? 60
+      : Number(value.checkIntervalSeconds);
+  if (
+    !Number.isInteger(checkIntervalSeconds) ||
+    checkIntervalSeconds < ENDPOINT_CHECK_INTERVAL_MIN_SECONDS ||
+    checkIntervalSeconds > ENDPOINT_CHECK_INTERVAL_MAX_SECONDS
+  ) return null;
+  const agentId = value.agentId === undefined || value.agentId === null || value.agentId === "" ? null : String(value.agentId);
+  const serviceName = trimmedString(value.serviceName, ENDPOINT_NAME_MAX);
+  const enabled = value.enabled === undefined ? true : value.enabled;
+  if (typeof enabled !== "boolean") return null;
+  return { name, targetUrl, expectedStatus, agentId, serviceName, checkIntervalSeconds, enabled };
+}
+
+/** Structural validation of a patch payload; at least one field must be present. */
+export function parseUpdateEndpointMonitorRequest(value: unknown): UpdateEndpointMonitorRequest | null {
+  if (!requestObject(value)) return null;
+  const out: UpdateEndpointMonitorRequest = {};
+  if (value.name !== undefined) {
+    const name = trimmedString(value.name, ENDPOINT_NAME_MAX);
+    if (!name) return null;
+    out.name = name;
+  }
+  if (value.targetUrl !== undefined) {
+    const targetUrl = trimmedString(value.targetUrl, ENDPOINT_TARGET_URL_MAX);
+    if (!targetUrl) return null;
+    out.targetUrl = targetUrl;
+  }
+  if (value.expectedStatus !== undefined) {
+    const expectedStatus = Number(value.expectedStatus);
+    if (!Number.isInteger(expectedStatus) || expectedStatus < 100 || expectedStatus > 599) return null;
+    out.expectedStatus = expectedStatus;
+  }
+  if (value.agentId !== undefined) {
+    out.agentId = value.agentId === null || value.agentId === "" ? null : String(value.agentId);
+  }
+  if (value.serviceName !== undefined) {
+    out.serviceName = trimmedString(value.serviceName, ENDPOINT_NAME_MAX);
+  }
+  if (value.checkIntervalSeconds !== undefined) {
+    const checkIntervalSeconds = Number(value.checkIntervalSeconds);
+    if (
+      !Number.isInteger(checkIntervalSeconds) ||
+      checkIntervalSeconds < ENDPOINT_CHECK_INTERVAL_MIN_SECONDS ||
+      checkIntervalSeconds > ENDPOINT_CHECK_INTERVAL_MAX_SECONDS
+    ) return null;
+    out.checkIntervalSeconds = checkIntervalSeconds;
+  }
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== "boolean") return null;
+    out.enabled = value.enabled;
+  }
+  return Object.keys(out).length ? out : null;
 }
