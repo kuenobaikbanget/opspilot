@@ -14,7 +14,9 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}` |
 | GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; 400 invalid ID, 404 unknown host |
 | GET | `/api/hosts/:id/services` | none | selected-host `HostSystemdStatus`; 400 invalid ID, 404 unknown host |
+| GET | `/api/hosts/:id/workloads` | none | host-scoped `HostWorkloads`; 400 invalid ID, 404 unknown host |
 | GET | `/api/services` | none | `{endpoints}` (existing independent endpoint records) |
+| GET | `/api/workloads` | none | fleet `WorkloadList`; totals/counts cover the whole fleet, not the capped page |
 | GET | `/api/ai/providers` | none | `{providers: AiProvider[], encryptionConfigured: boolean}` |
 | POST | `/api/ai/providers` | `{name,protocol,baseUrl,apiKey,defaultModel,enabled}` | `201 {provider}` |
 | PATCH | `/api/ai/providers/:id` | subset of create fields, at least one | `200 {provider}` |
@@ -68,6 +70,10 @@ The current display freshness policy is `stale_after_seconds: 60`. An online con
 History returns `sampled_at`, host CPU/memory/disk percentages and cumulative `network_rx_bytes`/`network_tx_bytes`; counters are not network rates. Samples are neither aggregated nor interpolated.
 
 `HostSystemdStatus` returns `{agent_id,online,checked_at,report,service}`. `report` is null until an accepted v1 report; otherwise it has `{status,observed_at,current}`. `service` is null until there is an actual observation, or a `HostService` with `runtime:"systemd"`, `source:"agent_systemd"` and `freshness:"fresh"|"stale"`. `fresh` requires a measured report from the current authenticated socket and an observation at most 60 seconds old. `checked_at` is the read time, not the observation time. Disconnect/replacement or a current collection error can make a previous sample stale without changing its observed state/time. An explicit disabled report or change of configured unit removes the previous unit from the selected-host view. Synthetic `host_services` rows are excluded.
+
+`HostWorkloads` returns `{agent_id,online,checked_at,collection,workloads,counts}`. `collection` is null until an accepted v1 inventory report; otherwise `{status,reason,skipped,observed_at,current}` where `status` is `ok`/`disabled`/`unsupported`/`unavailable`, `reason` is a fixed enum present only on `unavailable` (optional on `unsupported`), `skipped` lists enabled collectors that failed during an otherwise ok report, and `current` means the report came from the current authenticated socket and is at most 120 seconds old. `workloads` are `Workload` rows with `source:"agent_workloads"`, nullable `cpu_percent`/`memory_bytes` and `freshness:"fresh"|"stale"` (fresh only when the collection is current and `ok`). `counts` covers only that host's workloads. `checked_at` is the read time.
+
+`GET /api/workloads` returns `WorkloadList`: at most 200 newest `Workload` rows fleet-wide, with `total` and `counts` computed over all fleet workload rows (not the capped page), `hosts_total`/`hosts_online` over the entire enrolled fleet, `hosts_collecting` counting hosts whose latest report is `ok`, fresh and from their current socket, plus `limit`, `observed_at` and `stale_after_seconds: 120`. A successful empty scan (`ok` with `workloads: []`) removes the host's rows; `disabled`/`unsupported`/`unavailable` also remove them and keep only the collection status, so a failure is never presented as a measured empty fleet. Workload state is a process/container observation, not endpoint availability.
 
 Example agent install / Hub interaction:
 
@@ -125,6 +131,25 @@ Maximum 512 UTF-8 bytes; no extra keys or unit arrays. Unit names are case-sensi
 
 `observed` requires `LoadState=loaded`. `ActiveState=active`, `reloading` and `refreshing` map to `running` (systemd's active unit status, not a guarantee of a running PID); `inactive` maps to `stopped`, and `failed` maps to `failed`. Known transition states map to `unknown`. Missing units, denied/failed queries and unrecognized properties are unavailable, not `stopped`. The Hub admits at most one in-flight status write per host; periodic reports do not queue or block metrics.
 
+### Agent → Hub workload inventory v1
+
+Separate optional frame on the same authenticated socket at connection and every 60 seconds. The collectors are opt-in per agent (`OPSPILOT_WORKLOADS_DOCKER`, `OPSPILOT_WORKLOADS_SYSTEMD`, both default false); no Hub message configures, triggers or names inventory targets. Older agents may send telemetry only; older Hubs can ignore the new message. This frame is not derived from `docker_status` diagnostic output.
+
+```json
+{"type":"workload_inventory","version":1,"observedAt":"2026-11-26T12:00:00.123Z","status":"ok","workloads":[{"name":"web","runtime":"docker","state":"running","cpuPercent":1.5,"memoryBytes":67108864},{"name":"nginx.service","runtime":"systemd","state":"stopped"}],"skipped":["systemd"]}
+```
+
+| `status` | Fields beyond `type`, `version`, `observedAt`, `status` |
+|---|---|
+| `ok` | Exactly `workloads` (array of 0–64 entries) plus optional `skipped`; at least one enabled collector measured |
+| `disabled` | None; no collector was opted in — an explicit capability statement, not a zero count |
+| `unsupported` | Optional `reason`; the enabled runtime is absent on the host (no docker CLI / no systemd manager) |
+| `unavailable` | Required `reason`; every enabled collector failed. Never a process state |
+
+Each entry has exactly `name`, `runtime` (`docker`|`systemd`), `state` (`running`|`stopped`|`failed`|`unknown`) and optional nullable `cpuPercent` (finite, 0–25600) and `memoryBytes` (safe integer ≥ 0); resource fields are docker stats only and are null/absent for systemd units. Docker names are 1–128 chars starting alphanumeric with `[A-Za-z0-9_.-]`; systemd names are literal `.service` units per the systemd v1 rules. `(runtime,name)` pairs must be unique. `reason` is one of `docker_cli_missing`, `docker_daemon_unreachable`, `systemd_manager_missing`, `permission_denied`, `command_failed`, `command_timeout`, `output_overflow`. `skipped` lists at most the two collector names that failed during an ok report.
+
+Maximum 16 KiB UTF-8 per frame (well below the 64 KiB WS limit); no extra keys. `observedAt` follows the same canonical UTC millisecond rule and ±120s/+5s clock window as systemd v1. Equal/older timestamps are ignored; the Hub admits at most one in-flight inventory write per host and identity comes only from the current authenticated socket. A `disabled`/`unsupported`/`unavailable` report removes the host's persisted `agent_workloads` rows; only `ok` (including an empty array) writes rows.
+
 ### Hub → Agent diagnostic request
 
 ```json
@@ -153,7 +178,7 @@ Starter wire version is implicit 0.1; add `protocolVersion` on enrollment and ev
 
 ## Fleet & services contract boundary (planned)
 
-The current host list provides typed host observations and full-fleet enrolled/connected counts. The host-scoped systemd read adds one opted-in process observation; broader runtime inventory, per-workload resources, OS/capacity metadata, scheduled probe results, endpoint aggregate totals and configurable alert-policy metadata are outside this slice.
+The current host list provides typed host observations and full-fleet enrolled/connected counts. The host-scoped systemd read adds one opted-in process observation, and the opt-in workload inventory above adds bounded typed Docker/systemd rows with source timestamps, capability/unavailable reasons, a 120-second stale policy and fleet-scoped aggregate counts. OS/capacity metadata, scheduled probe results, endpoint aggregate totals and configurable alert-policy metadata remain outside this slice.
 
 Before implementing those surfaces, define validated read/write schemas for the [planned read models](BACKEND-DESIGN.md#fleet-services-data-boundary-planned), including stable host/workload/endpoint associations, source and collection/check timestamps, stale/unknown/unavailable reasons, units and list/aggregate coverage. Independently fresh probe results must survive an agent disconnect without becoming a fabricated host-health verdict.
 
