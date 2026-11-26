@@ -32,8 +32,8 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | POST | `/api/ai/providers/:id/test` | `{}` | `202 {id,providerId,status:"queued"}` |
 | GET | `/api/incidents` | none | last 100 incidents |
 | POST | `/api/incidents` | `{"agentId":"uuid","title":"..."}` | `201 {id}` |
-| GET | `/api/incidents/:id` | none | `{incident,evidence,investigations}` |
-| POST | `/api/incidents/:id/investigate` | `{"providerId":"uuid","providerRevision":1,"model":"explicit-model"}` | `202 {id,status,liveAgent}` |
+| GET | `/api/incidents/:id` | none | `{incident,evidence,investigations}`; each investigation also exposes `attempts,max_attempts,next_retry_at,lease_expires_at` |
+| POST | `/api/incidents/:id/investigate` | `{"providerId":"uuid","providerRevision":1,"model":"explicit-model"}` | `202 {id,status,deduplicated,liveAgent}`; an active (queued/running) investigation with the same incident+provider+revision+model returns that row with `deduplicated:true` |
 | POST | `/api/incidents/:id/resolve` | `{"resolution":"..."}` | `200 {ok:true}` |
 | GET | `/api/memory?q=text` | none | searchable resolved incidents |
 | GET | `/healthz` | none | `{ok,db}` |

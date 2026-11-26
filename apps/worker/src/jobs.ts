@@ -4,8 +4,8 @@ import { decryptProviderKey, ProviderCredentialError } from "@opspilot/ai/creden
 import { ProviderError, type ProviderErrorCode } from "@opspilot/ai/provider-http";
 import type { ProviderProtocol } from "@opspilot/contracts";
 
-type FailureCode = ProviderErrorCode | "provider_unavailable" | "provider_disabled" | "provider_changed" | "credential_unavailable";
-type Failure = { code: FailureCode; httpStatus: number | null };
+type FailureCode = ProviderErrorCode | "provider_unavailable" | "provider_disabled" | "provider_changed" | "credential_unavailable" | "worker_lease_expired";
+export type Failure = { code: FailureCode; httpStatus: number | null };
 type ProviderRow = {
   id: string;
   protocol: ProviderProtocol;
@@ -20,6 +20,8 @@ type InvestigationJob = {
   provider_id: string | null;
   provider_revision: number | null;
   provider_model: string | null;
+  attempts: number;
+  max_attempts: number;
 };
 type TestIdentity = {
   id: string;
@@ -62,6 +64,97 @@ function captureConnection(provider: ProviderRow, model: string, masterKey: Uint
   };
 }
 
+export type WorkerReliabilityOptions = {
+  /** Stable worker identity persisted on claimed rows; injectable for tests. */
+  workerId?: string;
+  /** Claim lease duration; expired leases make a job claimable by recovery. */
+  leaseMs?: number;
+  /** Base delay before the first retry; grows exponentially per attempt. */
+  retryBackoffMs?: number;
+};
+
+const DEFAULT_LEASE_MS = 90_000;
+const DEFAULT_RETRY_BACKOFF_MS = 5_000;
+const MAX_BACKOFF_MS = 300_000;
+const MAX_LEASE_MS = 3_600_000;
+
+// One stable default identity per worker process.
+let processWorkerId: string | undefined;
+function resolveWorkerId(explicit?: string): string {
+  return explicit ?? (processWorkerId ??= crypto.randomUUID());
+}
+
+function boundedMs(raw: number | undefined, fallback: number, max: number): number {
+  if (raw === undefined || !Number.isFinite(raw) || raw < 0 || raw > max) return fallback;
+  return Math.trunc(raw);
+}
+
+/** Attempts are 1-based here: attempt N gets base * 2^(N-1) delay, capped. Exported for tests. */
+export function retryDelayMs(retryBackoffMs: number, attempts: number): number {
+  return Math.min(retryBackoffMs * 2 ** Math.max(0, attempts - 1), MAX_BACKOFF_MS);
+}
+
+/**
+ * Conservative cost guardrail: only transient/unbounded failures replay a paid
+ * provider call. Configuration, credentials, blocked egress and invalid
+ * responses are deterministic and fail immediately regardless of budget.
+ * Exported for tests.
+ */
+export function isRetryableFailure(failure: Failure): boolean {
+  switch (failure.code) {
+    case "provider_timeout":
+    case "provider_network":
+    case "dns_failed":
+    case "worker_lease_expired":
+      return true;
+    case "provider_http":
+      return failure.httpStatus === 429 || (failure.httpStatus !== null && failure.httpStatus >= 500);
+    default:
+      // provider_changed, provider_disabled, provider_unavailable, credential_unavailable,
+      // provider_invalid_response, provider_egress-class codes, and HTTP 4xx (other than 429)
+      // are permanent: retrying them would only repeat a deterministic failure.
+      return false;
+  }
+}
+
+/**
+ * Recovers expired leases before new claims: requeues jobs still inside their
+ * retry budget, terminalizes exhausted ones, with one audit per transition.
+ */
+export async function recoverExpiredLeases(db: SQL): Promise<boolean> {
+  return db.begin(async (tx) => {
+    // The FROM subquery locks the expired rows and preserves their pre-update worker_id
+    // for the RETURNING clause (the UPDATE itself clears it).
+    const expired = await tx<(InvestigationJob & { worker_id: string | null })[]>`UPDATE investigations i SET
+        status=CASE WHEN e.attempts >= e.max_attempts THEN 'failed' ELSE 'queued' END,
+        error='worker_lease_expired',
+        lease_expires_at=NULL,worker_id=NULL,
+        next_retry_at=CASE WHEN e.attempts < e.max_attempts THEN NOW() ELSE NULL END,
+        completed_at=CASE WHEN e.attempts >= e.max_attempts THEN NOW() ELSE NULL END
+      FROM (SELECT id,incident_id,provider_id,provider_revision,provider_model,worker_id,attempts,max_attempts
+        FROM investigations
+        WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= NOW()
+        ORDER BY lease_expires_at,id FOR UPDATE SKIP LOCKED) e
+      WHERE i.id = e.id
+      RETURNING i.id,e.incident_id,e.provider_id,e.provider_revision,e.provider_model,e.worker_id,e.attempts,e.max_attempts`;
+    for (const job of expired) {
+      const requeued = job.attempts < job.max_attempts;
+      await tx`INSERT INTO audit_events(action,target_id,data)
+        VALUES('investigation.lease_expired',${job.id},${{
+          incidentId: job.incident_id,
+          workerId: job.worker_id,
+          attempts: job.attempts,
+          maxAttempts: job.max_attempts,
+          outcome: requeued ? "requeued" : "failed",
+        }}::jsonb)`;
+      if (!requeued) console.error("Investigation lease expired", job.id, job.provider_id, "worker_lease_expired");
+      else console.error("Investigation lease expired; requeued", job.id, job.provider_id);
+    }
+    return expired.length > 0;
+  });
+}
+
+
 async function auditTest(tx: SQL, slot: TestIdentity, failure: Failure | null): Promise<void> {
   const action = failure ? "ai.provider.test_failed" : "ai.provider.test_completed";
   const data = {
@@ -74,10 +167,29 @@ async function auditTest(tx: SQL, slot: TestIdentity, failure: Failure | null): 
     VALUES(${action},${slot.id},${data}::jsonb)`;
 }
 
-async function failInvestigation(tx: SQL, job: InvestigationJob, failure: Failure): Promise<void> {
-  await tx`UPDATE investigations SET status='failed',error=${failure.code},completed_at=NOW()
-    WHERE id=${job.id} AND status='running'`;
+/**
+ * Persists a failure with the conservative retry policy: retryable failures requeue
+ * inside the budget with backoff, everything else terminalizes immediately. The
+ * worker guard keeps a stale worker from touching a lease-recovered row.
+ */
+async function failInvestigation(tx: SQL, job: InvestigationJob, failure: Failure, workerId: string, retryBackoffMs: number): Promise<boolean> {
+  if (isRetryableFailure(failure) && job.attempts < job.max_attempts) {
+    const delay = retryDelayMs(retryBackoffMs, job.attempts);
+    const requeued = await tx<{ id: string }[]>`UPDATE investigations SET
+        status='queued',error=${failure.code},lease_expires_at=NULL,worker_id=NULL,
+        next_retry_at=NOW()+${delay} * INTERVAL '1 millisecond'
+      WHERE id=${job.id} AND status='running' AND worker_id=${workerId} RETURNING id`;
+    if (requeued.length) {
+      console.error(
+        "Investigation failed; requeued", job.id, job.provider_id, failure.code, failure.httpStatus, job.attempts, job.max_attempts,
+      );
+      return true;
+    }
+  }
+  await tx`UPDATE investigations SET status='failed',error=${failure.code},lease_expires_at=NULL,worker_id=NULL,completed_at=NOW()
+    WHERE id=${job.id} AND status='running' AND worker_id=${workerId}`;
   console.error("Investigation failed", job.id, job.provider_id, failure.code, failure.httpStatus);
+  return false;
 }
 
 /** Claims at most one investigation; importing this module never starts a polling loop. */
@@ -85,12 +197,22 @@ export async function runOneInvestigation(
   db: SQL,
   masterKey: Uint8Array | null,
   generate: typeof generateDiagnosis = generateDiagnosis,
+  options: WorkerReliabilityOptions = {},
 ): Promise<boolean> {
+  const workerId = resolveWorkerId(options.workerId);
+  const leaseMs = boundedMs(options.leaseMs, DEFAULT_LEASE_MS, MAX_LEASE_MS);
+  const retryBackoffMs = boundedMs(options.retryBackoffMs, DEFAULT_RETRY_BACKOFF_MS, MAX_BACKOFF_MS);
+
+  // Recover expired leases before claiming: a dead worker's job re-enters the queue
+  // (or terminalizes when its retry budget is spent).
+  await recoverExpiredLeases(db);
   if (!masterKey) return false;
 
   const claimed = await db.begin(async (tx) => {
     const [candidate] = await tx<Pick<InvestigationJob, "id" | "provider_id">[]>`SELECT id,provider_id
-      FROM investigations WHERE status='queued' ORDER BY created_at,id LIMIT 1`;
+      FROM investigations
+      WHERE status='queued' AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+      ORDER BY created_at,id LIMIT 1`;
     if (!candidate) return null;
 
     // Provider first, then investigation: deletion takes this same order through its FK.
@@ -98,9 +220,16 @@ export async function runOneInvestigation(
       ? await tx<ProviderRow[]>`SELECT id,protocol,base_url,enabled,revision,api_key_ciphertext
           FROM ai_providers WHERE id=${candidate.provider_id} FOR UPDATE`
       : [];
-    const jobs = await tx<InvestigationJob[]>`UPDATE investigations SET status='running',started_at=NOW()
-      WHERE id=(SELECT id FROM investigations WHERE id=${candidate.id} AND status='queued' FOR UPDATE SKIP LOCKED)
-      RETURNING id,incident_id,provider_id,provider_revision,provider_model`;
+    const jobs = await tx<InvestigationJob[]>`UPDATE investigations SET
+        status='running',
+        started_at=COALESCE(started_at,NOW()),
+        attempts=attempts+1,
+        worker_id=${workerId},
+        lease_expires_at=NOW()+${leaseMs} * INTERVAL '1 millisecond',
+        next_retry_at=NULL
+      WHERE id=(SELECT id FROM investigations WHERE id=${candidate.id} AND status='queued'
+        AND (next_retry_at IS NULL OR next_retry_at <= NOW()) FOR UPDATE SKIP LOCKED)
+      RETURNING id,incident_id,provider_id,provider_revision,provider_model,attempts,max_attempts`;
     const job = jobs[0];
     if (!job) return null;
 
@@ -115,7 +244,7 @@ export async function runOneInvestigation(
         failure = failureFrom(error);
       }
     }
-    if (failure) await failInvestigation(tx, job, failure);
+    if (failure) await failInvestigation(tx, job, failure, workerId, retryBackoffMs);
     return { job, connection };
   });
   if (!claimed) return false;
@@ -126,7 +255,7 @@ export async function runOneInvestigation(
     const incidents = await db<{ title: string; category: string }[]>`SELECT title,category FROM incidents WHERE id=${job.incident_id}`;
     const incident = incidents[0];
     if (!incident) {
-      await failInvestigation(db, job, { code: "provider_unavailable", httpStatus: null });
+      await failInvestigation(db, job, { code: "provider_unavailable", httpStatus: null }, workerId, retryBackoffMs);
       return true;
     }
     const evidence = await db<Parameters<typeof generateDiagnosis>[2]>`SELECT id,source,content FROM evidence
@@ -135,11 +264,13 @@ export async function runOneInvestigation(
       WHERE to_tsvector('simple',summary || ' ' || resolution) @@ plainto_tsquery('simple',${incident.title})
       ORDER BY created_at DESC LIMIT 5`;
     const diagnosis = await generate(connection, incident, evidence, memories);
-    await db`UPDATE investigations SET status='completed',result_json=${diagnosis}::jsonb,error=NULL,completed_at=NOW()
-      WHERE id=${job.id} AND status='running'`;
+    // The worker guard keeps a slow worker whose lease expired and was recovered
+    // from overwriting the row's new state.
+    await db`UPDATE investigations SET status='completed',result_json=${diagnosis}::jsonb,error=NULL,completed_at=NOW(),lease_expires_at=NULL,worker_id=NULL
+      WHERE id=${job.id} AND status='running' AND worker_id=${workerId}`;
     console.log("Completed investigation", job.id, connection.id);
   } catch (error: unknown) {
-    await failInvestigation(db, job, failureFrom(error));
+    await failInvestigation(db, job, failureFrom(error), workerId, retryBackoffMs);
   }
   return true;
 }

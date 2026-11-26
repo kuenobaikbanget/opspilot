@@ -632,11 +632,22 @@ integration("upstream errors echoing credentials never enter reports, test DTOs 
       expect(lastTest.httpStatus).toBe(429);
       const { incidentId } = await seedIncident(db);
       const jobId = await investigate(hub, incidentId, provider);
-      expect(await runOneInvestigation(db, masterKey, generate)).toBe(true);
-      const report = (await json<Detail>(await hub.request(`/api/incidents/${incidentId}`))).investigations.find((entry) => entry.id === jobId)!;
-      expect(report.status).toBe("failed");
-      expect(report.error).toBe("provider_http");
-      expect(report.result_json).toBeNull();
+      // HTTP 429 is transient: the worker retries within its budget (backoff 0 keeps
+      // the test fast) and only terminalizes once max_attempts is spent.
+      let report: Report | undefined;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        expect(await runOneInvestigation(db, masterKey, generate, { retryBackoffMs: 0 })).toBe(true);
+        report = (await json<Detail>(await hub.request(`/api/incidents/${incidentId}`))).investigations.find((entry) => entry.id === jobId)!;
+        if (report.status !== "queued" && report.status !== "running") break;
+      }
+      expect(report!.status).toBe("failed");
+      expect(report!.error).toBe("provider_http");
+      expect(report!.result_json).toBeNull();
+      // One provider test plus three investigation attempts (default max_attempts).
+      expect(fixture.requests.length).toBe(4);
+      const [retryState] = await db`SELECT attempts,error FROM investigations WHERE id=${jobId}`;
+      expect(retryState.attempts).toBe(3);
+      expect(retryState.error).toBe("provider_http");
       expect(JSON.stringify(report)).not.toContain("attacker.invalid");
       const [stored] = await db`SELECT error,result_json FROM investigations WHERE id=${jobId}`;
       expect(JSON.stringify(stored)).not.toContain(dummyKey);

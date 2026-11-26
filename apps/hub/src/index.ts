@@ -55,6 +55,23 @@ type HostRow = Omit<
 
 type HostMetricRow = Omit<HostMetric, "sampled_at"> & { sampled_at: Date };
 
+/**
+ * Deterministic deduplication key for active investigations: at most one queued/running
+ * investigation per (incident, provider, revision, model). Terminal rows never collide
+ * because the partial unique index only covers queued/running rows.
+ */
+function investigationDedupeKey(incidentId: string, providerId: string, providerRevision: number, model: string): string {
+  return new Bun.CryptoHasher("sha256")
+    .update(`${incidentId}\n${providerId}\n${providerRevision}\n${model}`)
+    .digest("hex");
+}
+
+/** PostgreSQL unique violation (SQLSTATE 23505) on the active-dedupe index. */
+function isDedupeViolation(error: unknown): boolean {
+  const pg = error as { errno?: unknown; constraint?: unknown } | null;
+  return !!pg && (pg.errno === 23505 || pg.errno === "23505" || pg.constraint === "idx_investigations_dedupe_active");
+}
+
 async function router(req: Request): Promise<Response> {
   const path = new URL(req.url).pathname;
   const method = req.method.toUpperCase();
@@ -349,9 +366,13 @@ async function router(req: Request): Promise<Response> {
       status: string;
       result_json: unknown;
       error: string | null;
+      attempts: number;
+      max_attempts: number;
+      next_retry_at: Date | null;
+      lease_expires_at: Date | null;
       created_at: Date;
       completed_at: Date | null;
-    }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,created_at,completed_at
+    }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,attempts,max_attempts,next_retry_at,lease_expires_at,created_at,completed_at
       FROM investigations WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 10`;
     const investigations = rows.map((row) => ({
       id: row.id,
@@ -365,6 +386,10 @@ async function router(req: Request): Promise<Response> {
       status: row.status,
       result_json: row.result_json,
       error: row.error,
+      attempts: row.attempts,
+      max_attempts: row.max_attempts,
+      next_retry_at: row.next_retry_at,
+      lease_expires_at: row.lease_expires_at,
       created_at: row.created_at,
       completed_at: row.completed_at,
     }));
@@ -405,6 +430,15 @@ async function router(req: Request): Promise<Response> {
     if (rows[0].status !== "open") return apiError("Incident is resolved", "invalid_request", 409);
     const id = match[1];
     const agentId = rows[0].agent_id;
+    // Deduplicate active investigations before dispatching any agent diagnostics:
+    // same incident + provider + revision + model already queued/running returns that row.
+    const dedupeKey = investigationDedupeKey(id, data.providerId, data.providerRevision, data.model);
+    const [active] = await db<{ id: string; status: string }[]>`SELECT id,status FROM investigations
+      WHERE dedupe_key=${dedupeKey} AND status IN ('queued','running')
+      ORDER BY created_at DESC,id DESC LIMIT 1`;
+    if (active) {
+      return j({ id: active.id, status: active.status, deduplicated: true, liveAgent: agentOnline(agentId) }, 202);
+    }
     const tools: Array<[DiagnosticTool, string?]> =
       rows[0].category === "disk"
         ? [["disk_usage"]]
@@ -421,33 +455,47 @@ async function router(req: Request): Promise<Response> {
         ),
       );
     }
-    return await db.begin(async (tx) => {
-      const [provider] = await tx<{
-        id: string;
-        enabled: boolean;
-        revision: number;
-        name: string;
-        protocol: ProviderProtocol;
-        base_url: string;
-      }[]>`SELECT id,enabled,revision,name,protocol,base_url FROM ai_providers WHERE id=${data.providerId} FOR UPDATE`;
-      if (!provider || provider.revision !== data.providerRevision) {
-        return apiError("Provider configuration changed; review the latest configuration", "provider_changed", 409);
+    try {
+      return await db.begin(async (tx) => {
+        const [provider] = await tx<{
+          id: string;
+          enabled: boolean;
+          revision: number;
+          name: string;
+          protocol: ProviderProtocol;
+          base_url: string;
+        }[]>`SELECT id,enabled,revision,name,protocol,base_url FROM ai_providers WHERE id=${data.providerId} FOR UPDATE`;
+        if (!provider || provider.revision !== data.providerRevision) {
+          return apiError("Provider configuration changed; review the latest configuration", "provider_changed", 409);
+        }
+        if (!provider.enabled) return apiError("Provider is disabled", "provider_disabled", 409);
+        const [incident] = await tx<{ status: string }[]>`SELECT status FROM incidents WHERE id=${id} FOR UPDATE`;
+        if (!incident) return apiError("Incident not found", "invalid_request", 404);
+        if (incident.status !== "open") return apiError("Incident is resolved", "invalid_request", 409);
+        const [queued] = await tx<{ id: string }[]>`INSERT INTO investigations(
+          incident_id,provider_id,provider_revision,provider_name,provider_protocol,provider_base_url,provider_model,dedupe_key
+        ) VALUES(${id},${provider.id},${provider.revision},${provider.name},${provider.protocol},${provider.base_url},${data.model},${dedupeKey}) RETURNING id`;
+        await audit("investigation.queued", queued.id, {
+          incidentId: id,
+          providerId: provider.id,
+          revision: provider.revision,
+          protocol: provider.protocol,
+        }, tx);
+        return j({ id: queued.id, status: "queued", deduplicated: false, liveAgent: agentOnline(agentId) }, 202);
+      });
+    } catch (error: unknown) {
+      // A concurrent identical request won the insert: the partial unique index on
+      // dedupe_key (active rows only) is the atomic arbiter. Return the existing row.
+      if (isDedupeViolation(error)) {
+        const [existing] = await db<{ id: string; status: string }[]>`SELECT id,status FROM investigations
+          WHERE dedupe_key=${dedupeKey} AND status IN ('queued','running')
+          ORDER BY created_at DESC,id DESC LIMIT 1`;
+        if (existing) {
+          return j({ id: existing.id, status: existing.status, deduplicated: true, liveAgent: agentOnline(agentId) }, 202);
+        }
       }
-      if (!provider.enabled) return apiError("Provider is disabled", "provider_disabled", 409);
-      const [incident] = await tx<{ status: string }[]>`SELECT status FROM incidents WHERE id=${id} FOR UPDATE`;
-      if (!incident) return apiError("Incident not found", "invalid_request", 404);
-      if (incident.status !== "open") return apiError("Incident is resolved", "invalid_request", 409);
-      const [queued] = await tx<{ id: string }[]>`INSERT INTO investigations(
-        incident_id,provider_id,provider_revision,provider_name,provider_protocol,provider_base_url,provider_model
-      ) VALUES(${id},${provider.id},${provider.revision},${provider.name},${provider.protocol},${provider.base_url},${data.model}) RETURNING id`;
-      await audit("investigation.queued", queued.id, {
-        incidentId: id,
-        providerId: provider.id,
-        revision: provider.revision,
-        protocol: provider.protocol,
-      }, tx);
-      return j({ id: queued.id, status: "queued", liveAgent: agentOnline(agentId) }, 202);
-    });
+      throw error;
+    }
   }
 
   match = path.match(/^\/api\/incidents\/([^/]+)\/resolve$/);
