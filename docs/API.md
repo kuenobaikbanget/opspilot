@@ -32,11 +32,20 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | POST | `/api/ai/providers/:id/test` | `{}` | `202 {id,providerId,status:"queued"}` |
 | GET | `/api/incidents` | none | last 100 incidents |
 | POST | `/api/incidents` | `{"agentId":"uuid","title":"..."}` | `201 {id}` |
-| GET | `/api/incidents/:id` | none | `{incident,evidence,investigations}`; each investigation also exposes `attempts,max_attempts,next_retry_at,lease_expires_at` |
+| GET | `/api/incidents/:id` | none | `{incident,evidence,investigations}`; each investigation also exposes `attempts,max_attempts,next_retry_at,lease_expires_at` and `retrieved_memories` (bounded `InvestigationMemoryAttribution[]` snapshot persisted by the Worker, `null` for legacy/active rows) |
 | POST | `/api/incidents/:id/investigate` | `{"providerId":"uuid","providerRevision":1,"model":"explicit-model"}` | `202 {id,status,deduplicated,liveAgent}`; an active (queued/running) investigation with the same incident+provider+revision+model returns that row with `deduplicated:true` |
-| POST | `/api/incidents/:id/resolve` | `{"resolution":"..."}` | `200 {ok:true}` |
-| GET | `/api/memory?q=text` | none | searchable resolved incidents |
+| POST | `/api/incidents/:id/resolve` | `{"resolution":"..."}` | `200 {ok:true,memoryId,deduplicated,occurrenceCount}`; the resolution is redacted, fingerprinted and deduplicated against canonical memories inside one transaction |
+| GET | `/api/memory?q=text` | none | canonical `IncidentMemoryRecord[]` (max 20) with `occurrence_count`, `last_confirmed_at`, `content_fingerprint` and `sources[]` provenance; optional `q` full-text search |
+| POST | `/api/memory/merge` | `{"sourceMemoryId":"uuid","targetMemoryId":"uuid"}` | `200 {ok:true,memory}`; merges source into target, preserving all `incident_memory_sources`, recomputing `occurrence_count`; `400` invalid/self-merge, `404` unknown id, `409` non-canonical; audited as `memory.merged` |
 | GET | `/healthz` | none | `{ok,db}` |
+
+### Incident memory deduplication and provenance
+
+Resolving an incident stores one canonical `incident_memory` row per distinct root cause/fix, not one per incident. `POST /api/incidents/:id/resolve` redacts the title/resolution, computes a SHA-256 `content_fingerprint` over the normalized text, and matches against recent canonical memories (`canonical_memory_id IS NULL`): an exact fingerprint match or a near-duplicate (normalized token Jaccard similarity on the resolution ≥ 0.85) increments `occurrence_count`, refreshes `last_confirmed_at` and appends the incident to `incident_memory_sources` — contributing incidents are never dropped. Otherwise a new canonical memory is created. Audits `memory.created` / `memory.deduplicated` carry only non-secret IDs and counts.
+
+`POST /api/memory/merge` moves all source-provenance rows from the source memory into the target (`ON CONFLICT DO NOTHING`), marks the source non-canonical (`canonical_memory_id = target`), recomputes the target's `occurrence_count` from distinct source incidents and its `last_confirmed_at` via `GREATEST(...)`, and audits `memory.merged`. Both routes sit behind the admin cookie; mutating requests additionally require `Origin` exactly equal to `ALLOWED_ORIGIN` (`403 forbidden_origin` otherwise, `401` unauthenticated).
+
+The Worker retrieves only canonical memories (`WHERE canonical_memory_id IS NULL`), deduplicates exact/near-duplicate candidates before the LLM call, and persists the bounded attribution snapshot (`memory_id`, summary, resolution preview, occurrence count, source incident IDs, retrieval method, score, last confirmed) as `investigations.retrieved_memories_json` when the investigation completes; `GET /api/incidents/:id` returns it as `retrieved_memories` on each investigation. Prior memory is fallible human-confirmed context, displayed separately from measured signals and AI hypotheses in the UI.
 
 ### Stored AI connections
 

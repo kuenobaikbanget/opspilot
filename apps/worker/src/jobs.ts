@@ -2,7 +2,8 @@ import type { SQL } from "bun";
 import { generateDiagnosis, generateDiagnosisWithUsage, type ProviderConnection } from "@opspilot/ai";
 import { decryptProviderKey, ProviderCredentialError } from "@opspilot/ai/credentials";
 import { ProviderError, type ProviderErrorCode } from "@opspilot/ai/provider-http";
-import type { ProviderProtocol } from "@opspilot/contracts";
+import type { InvestigationMemoryAttribution, ProviderProtocol } from "@opspilot/contracts";
+import { deduplicateMemoryCandidates, MEMORY_RETRIEVAL_LIMIT } from "../../hub/src/memory-dedup";
 
 type FailureCode = ProviderErrorCode | "provider_unavailable" | "provider_disabled" | "provider_changed" | "credential_unavailable" | "worker_lease_expired";
 export type Failure = { code: FailureCode; httpStatus: number | null };
@@ -263,9 +264,31 @@ export async function runOneInvestigation(
     }
     const evidence = await db<Parameters<typeof generateDiagnosis>[2]>`SELECT id,source,content FROM evidence
       WHERE incident_id=${job.incident_id} ORDER BY created_at DESC LIMIT 12`;
-    const memories = await db<Parameters<typeof generateDiagnosis>[3]>`SELECT id,summary,resolution FROM incident_memory
-      WHERE to_tsvector('simple',summary || ' ' || resolution) @@ plainto_tsquery('simple',${incident.title})
-      ORDER BY created_at DESC LIMIT 5`;
+    // Only canonical memories are candidates; merged rows are reachable through their
+    // canonical memory's source provenance instead.
+    type MemoryCandidate = { id: string; summary: string; resolution: string; occurrence_count: number; last_confirmed_at: Date | null };
+    const memoryRows = await db<MemoryCandidate[]>`SELECT id,summary,resolution,occurrence_count,last_confirmed_at FROM incident_memory
+      WHERE canonical_memory_id IS NULL
+        AND to_tsvector('simple',summary || ' ' || resolution) @@ plainto_tsquery('simple',${incident.title})
+      ORDER BY last_confirmed_at DESC LIMIT 10`;
+    // Exact/near-duplicate canonical memories are collapsed before the LLM or the
+    // persisted attribution ever sees them.
+    const memories = deduplicateMemoryCandidates(memoryRows, MEMORY_RETRIEVAL_LIMIT);
+    const sourceRows = memories.length
+      ? await db<{ memory_id: string; incident_id: string }[]>`SELECT memory_id,incident_id FROM incident_memory_sources
+        WHERE memory_id = ANY(${`{${memories.map((m) => m.id).join(",")}}`}::uuid[])`
+      : [];
+    // Bounded, non-secret attribution snapshot of what this investigation retrieved.
+    const retrievedMemories: InvestigationMemoryAttribution[] = memories.map((memory) => ({
+      memory_id: memory.id,
+      summary: memory.summary,
+      resolution_preview: memory.resolution.slice(0, 200),
+      occurrence_count: memory.occurrence_count,
+      source_incident_ids: sourceRows.filter((row) => row.memory_id === memory.id).map((row) => row.incident_id),
+      retrieval_method: "fts",
+      score: null,
+      last_confirmed_at: memory.last_confirmed_at ? new Date(memory.last_confirmed_at).toISOString() : null,
+    }));
     const outcome = await generate(connection, incident, evidence, memories);
     const diagnosis = "diagnosis" in outcome ? outcome.diagnosis : outcome;
     const usage = "usage" in outcome ? outcome.usage : null;
@@ -275,7 +298,8 @@ export async function runOneInvestigation(
       lease_expires_at=NULL,worker_id=NULL,
       input_tokens=${usage?.inputTokens ?? null},output_tokens=${usage?.outputTokens ?? null},
       thinking_tokens=${usage?.thinkingTokens ?? null},total_tokens=${usage?.totalTokens ?? null},
-      estimated_cost_usd=${usage?.estimatedCostUsd ?? null}
+      estimated_cost_usd=${usage?.estimatedCostUsd ?? null},
+      retrieved_memories_json=${retrievedMemories}::jsonb
       WHERE id=${job.id} AND status='running' AND worker_id=${workerId}
       RETURNING id`;
     if (completed.length) {

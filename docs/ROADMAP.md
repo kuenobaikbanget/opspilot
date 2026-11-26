@@ -64,7 +64,7 @@ The [Monochrome workspace](UI-UX.md#fleet-services-dashboard-contract-target) im
 - [ ] Drift timeline and semantic diffs with controlled file reading & redaction
 - [ ] Link deployments/config changes to incident timeline without claiming causation
 - [ ] Hybrid retrieval with pgvector if recall benchmark supports it
-- [ ] De-dup memory and attribution/UI provenance
+- [x] De-dup memory and attribution/UI provenance
 
 **Exit gate:** repeat-incident memory useful on a measured evaluation set; drift changes observable and explainable.
 

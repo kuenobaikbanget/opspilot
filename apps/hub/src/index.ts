@@ -5,9 +5,10 @@ import type {
   HostList,
   HostMetric,
   HostThresholds,
+  InvestigationMemoryAttribution,
   ProviderProtocol,
 } from "@opspilot/contracts";
-import { parseEnrollRequest, parseInvestigateRequest, parseThresholdsUpdate } from "@opspilot/contracts";
+import { parseEnrollRequest, parseInvestigateRequest, parseMergeMemoryRequest, parseThresholdsUpdate } from "@opspilot/contracts";
 import { decryptProviderKey, ProviderCredentialError, readProviderMasterKey } from "@opspilot/ai/credentials";
 import { scoreEvidenceRelevance } from "@opspilot/ai/evidence-scoring";
 import {
@@ -31,6 +32,7 @@ import {
 } from "./auth";
 import { audit, db } from "./db";
 import { createIncident, effectiveThresholds, hostThresholds } from "./incidents";
+import { listCanonicalMemories, MemoryMergeError, mergeMemories, recordResolvedIncidentMemory } from "./memory-dedup";
 import { isDevLoopbackInstallEnabled, loadHttpsAgentInstaller, readAgentInstallConfig } from "./agent-install";
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
@@ -71,6 +73,20 @@ function investigationDedupeKey(incidentId: string, providerId: string, provider
 function isDedupeViolation(error: unknown): boolean {
   const pg = error as { errno?: unknown; constraint?: unknown } | null;
   return !!pg && (pg.errno === 23505 || pg.errno === "23505" || pg.constraint === "idx_investigations_dedupe_active");
+}
+
+/** Normalizes `investigations.retrieved_memories_json` (jsonb may arrive as a JSON string). */
+function parseRetrievedMemories(value: InvestigationMemoryAttribution[] | string | null): InvestigationMemoryAttribution[] | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed) ? (parsed as InvestigationMemoryAttribution[]) : null;
+    } catch {
+      return null;
+    }
+  }
+  return Array.isArray(value) ? value : null;
 }
 
 async function router(req: Request): Promise<Response> {
@@ -375,9 +391,10 @@ async function router(req: Request): Promise<Response> {
       thinking_tokens: number | null;
       total_tokens: number | null;
       estimated_cost_usd: string | null;
+      retrieved_memories_json: InvestigationMemoryAttribution[] | string | null;
       created_at: Date;
       completed_at: Date | null;
-    }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,attempts,max_attempts,next_retry_at,lease_expires_at,input_tokens,output_tokens,thinking_tokens,total_tokens,estimated_cost_usd,created_at,completed_at
+    }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,attempts,max_attempts,next_retry_at,lease_expires_at,input_tokens,output_tokens,thinking_tokens,total_tokens,estimated_cost_usd,retrieved_memories_json,created_at,completed_at
       FROM investigations WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 10`;
 
     // Cited IDs come from the latest completed investigation's diagnosis, when present.
@@ -413,6 +430,8 @@ async function router(req: Request): Promise<Response> {
       thinking_tokens: row.thinking_tokens,
       total_tokens: row.total_tokens,
       estimated_cost_usd: row.estimated_cost_usd === null ? null : Number(row.estimated_cost_usd),
+      // Bounded snapshot of which prior memories this investigation retrieved (null for legacy/active rows).
+      retrieved_memories: parseRetrievedMemories(row.retrieved_memories_json),
       created_at: row.created_at,
       completed_at: row.completed_at,
     }));
@@ -536,26 +555,43 @@ async function router(req: Request): Promise<Response> {
     if (resolution.length < 8 || resolution.length > 3000) {
       return invalid("Resolution must be 8-3000 characters");
     }
-    const incident =
-      await db`UPDATE incidents SET status='resolved',resolution=${resolution},resolved_at=NOW() WHERE id=${match[1]} AND status='open' RETURNING id,title`;
-    if (!incident.length) {
+    // Resolve + memory dedup in one transaction: a repeat root cause merges into the
+    // existing canonical memory (occurrence_count grows) with full source provenance.
+    const result = await db.begin(async (tx) => {
+      const incident = await tx<{ id: string; title: string; agent_id: string; category: string; resolved_at: Date }[]>`
+        UPDATE incidents SET status='resolved',resolution=${resolution},resolved_at=NOW()
+        WHERE id=${match[1]} AND status='open'
+        RETURNING id,title,agent_id,category,resolved_at`;
+      if (!incident.length) return null;
+      await audit("incident.resolved", match[1], {}, tx);
+      return await recordResolvedIncidentMemory(tx, incident[0], resolution);
+    });
+    if (!result) {
       return invalid("Not found or already resolved", 404);
     }
-    await db`INSERT INTO incident_memory(incident_id,summary,resolution) VALUES(${match[1]},${incident[0].title},${resolution}) ON CONFLICT(incident_id) DO UPDATE SET resolution=excluded.resolution`;
-    await audit("incident.resolved", match[1]);
-    return j({ ok: true });
+    return j({ ok: true, memoryId: result.memoryId, deduplicated: result.deduplicated, occurrenceCount: result.occurrenceCount });
   }
 
   if (path === "/api/memory" && method === "GET") {
     const q = new URL(req.url).searchParams.get("q")?.slice(0, 100) || "";
-    if (q) {
-      return j(
-        await db`SELECT id,incident_id,summary,resolution,created_at FROM incident_memory WHERE to_tsvector('simple',summary || ' ' || resolution) @@ plainto_tsquery('simple',${q}) ORDER BY created_at DESC LIMIT 20`,
-      );
+    return j(await listCanonicalMemories(db, q, 20));
+  }
+
+  if (path === "/api/memory/merge" && method === "POST") {
+    const data = await jsonBody(req);
+    const parsed = parseMergeMemoryRequest(data);
+    if (!parsed) {
+      return apiError("sourceMemoryId and targetMemoryId must be distinct UUIDs", "invalid_request");
     }
-    return j(
-      await db`SELECT id,incident_id,summary,resolution,created_at FROM incident_memory ORDER BY created_at DESC LIMIT 20`,
-    );
+    try {
+      const memory = await mergeMemories(db, parsed.sourceMemoryId, parsed.targetMemoryId);
+      return j({ ok: true, memory });
+    } catch (error) {
+      if (error instanceof MemoryMergeError) {
+        return apiError(error.message, error.code, error.status);
+      }
+      throw error;
+    }
   }
 
   return invalid("Not found", 404);

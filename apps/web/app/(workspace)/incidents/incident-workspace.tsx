@@ -333,6 +333,7 @@ export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
                 const citedIds = (result?.evidence_ids ?? []).filter(id => evidenceById.has(id));
                 const invalidCitations = (result?.evidence_ids ?? []).length - citedIds.length;
                 const usage = usageLine(x);
+                const retrievedMemories = x.retrieved_memories ?? null;
                 return (
                 <div className="finding" key={x.id}>
                   <div className="finding-head"><div><strong>{x.provider.name}</strong><span className="finding-provider-meta">{x.provider.protocol} · {x.provider.model ?? "Model not recorded (legacy)"}</span>{x.provider.baseUrl && <span className="finding-provider-meta">{x.provider.baseUrl}</span>}</div><Badge tone={x.status === "failed" ? "danger" : x.status === "completed" ? "info" : "warning"}>{x.status}</Badge></div>
@@ -357,6 +358,30 @@ export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
                     {usage && <p className="usage-line">{usage}</p>}
                     {result.recommended_checks && <ul>{result.recommended_checks.map((c, k) => <li key={k}>{c}</li>)}</ul>}
                   </> : x.error ? <Notice tone="danger">{x.error}</Notice> : <p className="muted">Queued or running. Refresh in a few seconds.</p>}
+                  {x.status === "completed" && retrievedMemories !== null && (
+                    <section className="memory-attribution" aria-label="Prior memory context used by this investigation">
+                      <h4>Prior memory context used</h4>
+                      {retrievedMemories.length === 0
+                        ? <p className="muted small">No prior incident memory matched</p>
+                        : <>
+                          <Notice tone="warning" className="memory-attribution-notice">Prior resolutions are fallible context from past incidents — separate from current measured signals; always verify against them.</Notice>
+                          <ul className="memory-attribution-list">
+                            {retrievedMemories.map(m => (
+                              <li key={m.memory_id}>
+                                <strong>{m.summary}</strong>
+                                <p className="muted small">{m.resolution_preview}{m.resolution_preview.length >= 200 ? "…" : ""}</p>
+                                <small>
+                                  Confirmed {m.occurrence_count} time{m.occurrence_count === 1 ? "" : "s"}
+                                  {" · "}sources: {m.source_incident_ids.map(shortId).join(", ") || "none"}
+                                  {" · "}retrieved via {m.retrieval_method}
+                                  {m.last_confirmed_at ? ` · last confirmed ${new Date(m.last_confirmed_at).toLocaleString()}` : ""}
+                                </small>
+                              </li>
+                            ))}
+                          </ul>
+                        </>}
+                    </section>
+                  )}
                 </div>
                 );
               })}

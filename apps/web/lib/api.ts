@@ -1,4 +1,6 @@
-import type { EvidenceRelevance, ProviderProtocol } from "@opspilot/contracts";
+import type { EvidenceRelevance, IncidentMemoryRecord, InvestigationMemoryAttribution, ProviderProtocol } from "@opspilot/contracts";
+
+export type { IncidentMemoryRecord, InvestigationMemoryAttribution, MemorySourceProvenance } from "@opspilot/contracts";
 
 /** Evidence item as returned by GET /api/incidents/:id. `relevance` is deterministic (no LLM), added server-side. */
 export type IncidentEvidence = {
@@ -32,6 +34,8 @@ export type Investigation = InvestigationUsage & {
   status: string;
   result_json: InvestigationResultJson | null;
   error: string | null;
+  /** Bounded snapshot of prior memories this investigation retrieved; null for legacy/active rows. */
+  retrieved_memories?: InvestigationMemoryAttribution[] | null;
   created_at: string;
   completed_at: string | null;
 };
@@ -45,6 +49,17 @@ export type IncidentDetailResponse<TIncident> = {
 /** Fetches one incident with its scored evidence and investigations. */
 export async function getIncidentDetail<TIncident>(id: string, signal?: AbortSignal): Promise<IncidentDetailResponse<TIncident>> {
   return api(`/incidents/${encodeURIComponent(id)}`, "GET", undefined, signal) as Promise<IncidentDetailResponse<TIncident>>;
+}
+
+/** Lists canonical incident memories with provenance, optionally filtered by `q`. */
+export async function listMemories(q: string, signal?: AbortSignal): Promise<IncidentMemoryRecord[]> {
+  return api(`/memory?q=${encodeURIComponent(q)}`, "GET", undefined, signal) as Promise<IncidentMemoryRecord[]>;
+}
+
+/** Merges the source canonical memory into the target canonical memory; returns the updated target. */
+export async function mergeMemories(sourceMemoryId: string, targetMemoryId: string): Promise<IncidentMemoryRecord> {
+  const result = await api("/memory/merge", "POST", { sourceMemoryId, targetMemoryId }) as { ok: boolean; memory: IncidentMemoryRecord };
+  return result.memory;
 }
 
 export class ApiError extends Error {
