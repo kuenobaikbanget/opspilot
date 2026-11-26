@@ -1,3 +1,52 @@
+import type { EvidenceRelevance, ProviderProtocol } from "@opspilot/contracts";
+
+/** Evidence item as returned by GET /api/incidents/:id. `relevance` is deterministic (no LLM), added server-side. */
+export type IncidentEvidence = {
+  id: string;
+  source: string;
+  content: string;
+  created_at: string;
+  relevance?: EvidenceRelevance;
+};
+
+/** Optional token/cost metadata an investigation may carry; all fields optional and nullable. */
+export type InvestigationUsage = {
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  thinking_tokens?: number | null;
+  total_tokens?: number | null;
+  estimated_cost_usd?: number | null;
+};
+
+export type InvestigationResultJson = {
+  probable_cause?: string;
+  confidence?: number | string;
+  evidence_ids?: string[];
+  missing_evidence?: string[];
+  recommended_checks?: string[];
+};
+
+export type Investigation = InvestigationUsage & {
+  id: string;
+  provider: { id: string | null; name: string; protocol: ProviderProtocol; baseUrl: string | null; model: string | null };
+  status: string;
+  result_json: InvestigationResultJson | null;
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
+export type IncidentDetailResponse<TIncident> = {
+  incident: TIncident;
+  evidence: IncidentEvidence[];
+  investigations: Investigation[];
+};
+
+/** Fetches one incident with its scored evidence and investigations. */
+export async function getIncidentDetail<TIncident>(id: string, signal?: AbortSignal): Promise<IncidentDetailResponse<TIncident>> {
+  return api(`/incidents/${encodeURIComponent(id)}`, "GET", undefined, signal) as Promise<IncidentDetailResponse<TIncident>>;
+}
+
 export class ApiError extends Error {
   constructor(message: string, readonly code: string | null, readonly status: number) {
     super(message);

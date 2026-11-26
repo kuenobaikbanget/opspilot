@@ -68,6 +68,13 @@ Browser revision, queue snapshot and Worker claim checks prevent sending evidenc
 
 Address policy references: [IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/) and [IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/). Enforce independent network egress controls as defense in depth.
 
+### Provider usage, cost tracking and prompt-injection hardening
+
+- Every completed investigation records the provider-reported token usage (`input_tokens`, `output_tokens`, `thinking_tokens`, `total_tokens`) and an optional `estimated_cost_usd` on the `investigations` row (migration `011_investigation_usage_cost.sql`), plus a transactional `ai.investigation.completed` audit event containing only non-secret metadata (incident/provider IDs, model, token counts, cost estimate). The estimate comes from a small static per-1M-token reference catalog for known models; unknown/custom models or missing token counts store `NULL` — costs are never fabricated. This is observability only: no hard budget block is enforced yet.
+- Outbound prompts delimit all untrusted data (evidence, logs, prior incident memory) between explicit `BEGIN/END UNTRUSTED INPUT` markers and state that the content is data, not instructions; the system message repeats that evidence is untrusted. Log strings therefore cannot impersonate system instructions.
+- Redaction before any LLM call now also covers GitHub tokens (`gh[pousr]_…`, `github_pat_…`), PEM private-key blocks, Basic/Digest auth headers, standalone `sk-…` keys, AWS `AKIA`/`ASIA` keys, Slack `xox…` tokens, JWTs and URL userinfo (`scheme://user:pass@host`) in addition to the original Bearer/`password`/`api_key`/`token`/`secret` patterns. Parser output is redacted again, so echoed secrets never reach stored results. Redaction remains regex-based first-line defense, not a complete secret scanner (see release blockers).
+- Server-side post-processing strips every `evidence_id` not minted by the database and forces `confidence: "low"` when no valid citations remain, so hallucinated or injected citations cannot survive. Negative fixtures live in `tests/prompt-injection.test.ts` and `tests/provider-cost.test.ts`.
+
 ## Agent tool policy
 
 Tools are fixed in source code:
