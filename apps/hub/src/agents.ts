@@ -3,11 +3,13 @@ import { randomBytes } from "node:crypto";
 import {
   MAX_SYSTEMD_REPORT_BYTES,
   MAX_WS_MESSAGE_BYTES,
+  MAX_WORKLOAD_INVENTORY_BYTES,
   PROTOCOL_VERSION,
   negotiateCapabilities,
   parseAgentHello,
   parseSystemdReport,
   parseTelemetry,
+  parseWorkloadInventory,
   type AgentCapability,
   type DiagnosticResult,
   type DiagnosticTool,
@@ -16,6 +18,7 @@ import {
 import { db, hashSecret, audit } from "./db";
 import { checkThresholds, checkConfigHashes, addEvidence } from "./incidents";
 import { storeSystemdReport } from "./systemd";
+import { storeWorkloadInventory } from "./workloads";
 
 /** Per-connection metadata attached to authenticated agent WebSockets. */
 export type SocketData = { agentId: string; sessionId: string };
@@ -30,6 +33,7 @@ type PendingDiagnostic = {
 
 const connections = new Map<string, ServerWebSocket<SocketData>>();
 const writingSystemdReports = new Set<string>();
+const writingWorkloadReports = new Set<string>();
 const pending = new Map<string, PendingDiagnostic>();
 
 const secret = () => randomBytes(32).toString("base64url");
@@ -108,7 +112,7 @@ export function socketClosed(ws: ServerWebSocket<SocketData>) {
   }
 }
 
-/** Processes bounded telemetry, systemd status, and diagnostic results from an agent WebSocket. */
+/** Processes bounded telemetry, systemd status, workload inventory, and diagnostic results from an agent WebSocket. */
 export async function socketMessage(
   ws: ServerWebSocket<SocketData>,
   message: string | Buffer,
@@ -150,6 +154,16 @@ export async function socketMessage(
       await storeSystemdReport(agentId, ws.data.sessionId, report);
     } finally {
       writingSystemdReports.delete(agentId);
+    }
+  } else if (msg.type === "workload_inventory") {
+    if (bytes > MAX_WORKLOAD_INVENTORY_BYTES || connections.get(agentId) !== ws || writingWorkloadReports.has(agentId)) return;
+    const report = parseWorkloadInventory(msg);
+    if (!report) return;
+    writingWorkloadReports.add(agentId);
+    try {
+      await storeWorkloadInventory(agentId, ws.data.sessionId, report);
+    } finally {
+      writingWorkloadReports.delete(agentId);
     }
   } else if (msg.type === "telemetry") {
     // Strict contract validation: finite bounded metrics, sane timestamp, bounded config hashes.

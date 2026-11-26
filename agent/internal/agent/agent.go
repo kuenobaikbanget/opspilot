@@ -125,6 +125,8 @@ type config struct {
 	AllowedServices                       map[string]bool
 	ConfigFiles                           []string
 	Docker                                bool
+	WorkloadDocker                        bool
+	WorkloadSystemd                       bool
 	SystemdUnit                           string
 	QueuePath                             string
 	MaxQueueEntries                       int
@@ -175,7 +177,7 @@ func readConfig() config {
 			allowed[s] = true
 		}
 	}
-	return config{HubURL: strings.TrimRight(env("OPSPILOT_HUB_URL", "http://localhost:3001"), "/"), StatePath: env("OPSPILOT_AGENT_STATE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "identity.json")), ProcRoot: env("OPSPILOT_PROC_ROOT", "/proc"), DiskPath: env("OPSPILOT_DISK_PATH", "/"), Interval: time.Duration(seconds) * time.Second, AllowedServices: allowed, ConfigFiles: splitCSV(env("OPSPILOT_CONFIG_FILES", "")), Docker: env("OPSPILOT_ENABLE_DOCKER", "false") == "true", SystemdUnit: os.Getenv("OPSPILOT_SYSTEMD_UNIT"),
+	return config{HubURL: strings.TrimRight(env("OPSPILOT_HUB_URL", "http://localhost:3001"), "/"), StatePath: env("OPSPILOT_AGENT_STATE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "identity.json")), ProcRoot: env("OPSPILOT_PROC_ROOT", "/proc"), DiskPath: env("OPSPILOT_DISK_PATH", "/"), Interval: time.Duration(seconds) * time.Second, AllowedServices: allowed, ConfigFiles: splitCSV(env("OPSPILOT_CONFIG_FILES", "")), Docker: env("OPSPILOT_ENABLE_DOCKER", "false") == "true", WorkloadDocker: env("OPSPILOT_WORKLOADS_DOCKER", "false") == "true", WorkloadSystemd: env("OPSPILOT_WORKLOADS_SYSTEMD", "false") == "true", SystemdUnit: os.Getenv("OPSPILOT_SYSTEMD_UNIT"),
 		QueuePath:       env("OPSPILOT_QUEUE_PATH", filepath.Join(home, ".local", "share", "opspilot-agent", "queue.jsonl")),
 		MaxQueueEntries: clampInt(env("OPSPILOT_QUEUE_MAX_ENTRIES", "2000"), 1, 100_000, 2000),
 		MaxQueueAge:     time.Duration(clampInt(env("OPSPILOT_QUEUE_MAX_AGE_SECONDS", "86400"), 60, 604_800, 86_400)) * time.Second,
@@ -390,6 +392,25 @@ func runConnection(ws *websocket.Conn, cfg config) {
 					log.Printf("systemd status send failed: %v", err)
 					return
 				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	go func() {
+		tick := time.NewTicker(workloadInterval)
+		defer tick.Stop()
+		for {
+			report := collectWorkloads(ctx, cfg, systemdManagerBooted(), runBoundedCommand, runBoundedCommand)
+			if ctx.Err() != nil {
+				return
+			}
+			if err := conn.send(report); err != nil {
+				log.Printf("workload inventory send failed: %v", err)
+				return
 			}
 			select {
 			case <-ctx.Done():

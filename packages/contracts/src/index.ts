@@ -369,6 +369,137 @@ export function parseSystemdReport(value: unknown, now = Date.now()): SystemdRep
   }
   return value as SystemdReport;
 }
+/** Maximum UTF-8 bytes of one workload inventory frame (well below the 64 KiB WS limit). */
+export const MAX_WORKLOAD_INVENTORY_BYTES = 16 * 1024;
+/** Maximum workload entries in one inventory report. */
+export const MAX_WORKLOADS_PER_REPORT = 64;
+/** Maximum workload rows returned by one fleet list page. */
+export const WORKLOAD_LIST_LIMIT = 200;
+/** Display freshness window for agent-collected workload inventory. */
+export const WORKLOAD_STALE_AFTER_SECONDS = 120;
+/** Highest CPU percent a workload may report (256 cores at 100%). */
+export const MAX_WORKLOAD_CPU_PERCENT = 25_600;
+
+export type WorkloadRuntime = "systemd" | "docker";
+export type WorkloadState = "running" | "stopped" | "failed" | "unknown";
+export type WorkloadCollectionStatus = "ok" | "disabled" | "unsupported" | "unavailable";
+export type WorkloadCollector = "docker" | "systemd";
+export type WorkloadUnavailableReason =
+  | "docker_cli_missing"
+  | "docker_daemon_unreachable"
+  | "systemd_manager_missing"
+  | "permission_denied"
+  | "command_failed"
+  | "command_timeout"
+  | "output_overflow";
+
+const WORKLOAD_UNAVAILABLE_REASONS: readonly string[] = [
+  "docker_cli_missing",
+  "docker_daemon_unreachable",
+  "systemd_manager_missing",
+  "permission_denied",
+  "command_failed",
+  "command_timeout",
+  "output_overflow",
+];
+const WORKLOAD_COLLECTORS: readonly string[] = ["docker", "systemd"];
+const dockerContainerNamePattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+const systemdUnitNamePattern = /^[A-Za-z0-9][A-Za-z0-9_.@-]{0,71}\.service$/;
+
+/** One measured workload inside an inventory report; resource fields are optional and nullable. */
+export type WorkloadEntry = {
+  name: string;
+  runtime: WorkloadRuntime;
+  state: WorkloadState;
+  cpuPercent?: number | null;
+  memoryBytes?: number | null;
+};
+
+type WorkloadInventoryBody =
+  | { status: "ok"; workloads: WorkloadEntry[]; skipped?: WorkloadCollector[] }
+  | { status: "disabled" }
+  | { status: "unsupported"; reason?: WorkloadUnavailableReason }
+  | { status: "unavailable"; reason: WorkloadUnavailableReason };
+
+/** Agent-initiated snapshot of the opt-in read-only Docker/systemd workload inventory. */
+export type WorkloadInventoryReport = {
+  type: "workload_inventory";
+  version: 1;
+  observedAt: string;
+} & WorkloadInventoryBody;
+
+const WORKLOAD_ENTRY_KEYS: Record<string, true> = {
+  name: true, runtime: true, state: true, cpuPercent: true, memoryBytes: true,
+};
+
+function parseWorkloadEntry(value: unknown): WorkloadEntry | null {
+  if (!requestObject(value)) return null;
+  const keys = Object.keys(value);
+  if (keys.length < 3 || keys.length > 5 || !keys.every(k => WORKLOAD_ENTRY_KEYS[k]) ||
+      !("name" in value) || !("runtime" in value) || !("state" in value)) return null;
+  const { name, runtime, state, cpuPercent, memoryBytes } = value;
+  if (typeof name !== "string" || typeof runtime !== "string" || typeof state !== "string") return null;
+  if (runtime !== "docker" && runtime !== "systemd") return null;
+  if (runtime === "docker" ? !dockerContainerNamePattern.test(name) : !systemdUnitNamePattern.test(name)) return null;
+  if (state !== "running" && state !== "stopped" && state !== "failed" && state !== "unknown") return null;
+  if (Object.hasOwn(value, "cpuPercent") && cpuPercent !== null &&
+      (typeof cpuPercent !== "number" || !Number.isFinite(cpuPercent) || cpuPercent < 0 || cpuPercent > MAX_WORKLOAD_CPU_PERCENT)) return null;
+  if (Object.hasOwn(value, "memoryBytes") && memoryBytes !== null &&
+      (typeof memoryBytes !== "number" || !Number.isSafeInteger(memoryBytes) || memoryBytes < 0)) return null;
+  return value as WorkloadEntry;
+}
+
+/** Accept only the exact v1 shape, bounded item count and a recent canonical UTC millisecond timestamp. */
+export function parseWorkloadInventory(value: unknown, now = Date.now()): WorkloadInventoryReport | null {
+  if (!requestObject(value) || value.type !== "workload_inventory" || value.version !== 1 ||
+      typeof value.observedAt !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.observedAt)) return null;
+  const time = Date.parse(value.observedAt);
+  if (!Number.isFinite(time) || new Date(time).toISOString() !== value.observedAt ||
+      time < now - 120_000 || time > now + 5_000) return null;
+
+  const size = Object.keys(value).length;
+  const { status, reason, skipped, workloads } = value;
+  const hasReason = Object.hasOwn(value, "reason");
+  const hasSkipped = Object.hasOwn(value, "skipped");
+  const hasWorkloads = Object.hasOwn(value, "workloads");
+  const validReason = typeof reason === "string" && WORKLOAD_UNAVAILABLE_REASONS.includes(reason);
+
+  switch (status) {
+    case "ok": {
+      if (!hasWorkloads || hasReason || size !== (hasSkipped ? 6 : 5)) return null;
+      if (!Array.isArray(workloads) || workloads.length > MAX_WORKLOADS_PER_REPORT) return null;
+      const seen = new Set<string>();
+      for (const entry of workloads) {
+        const parsed = parseWorkloadEntry(entry);
+        if (!parsed) return null;
+        const key = `${parsed.runtime}:${parsed.name}`;
+        if (seen.has(key)) return null;
+        seen.add(key);
+      }
+      if (hasSkipped) {
+        if (!Array.isArray(skipped) || skipped.length > 2) return null;
+        const set = new Set<string>();
+        for (const collector of skipped) {
+          if (typeof collector !== "string" || !WORKLOAD_COLLECTORS.includes(collector) || set.has(collector)) return null;
+          set.add(collector);
+        }
+      }
+      return value as WorkloadInventoryReport;
+    }
+    case "disabled":
+      if (hasReason || hasSkipped || hasWorkloads || size !== 4) return null;
+      return value as WorkloadInventoryReport;
+    case "unsupported":
+      if (hasSkipped || hasWorkloads || size !== (hasReason ? 5 : 4) || (hasReason && !validReason)) return null;
+      return value as WorkloadInventoryReport;
+    case "unavailable":
+      if (hasSkipped || hasWorkloads || size !== 5 || !hasReason || !validReason) return null;
+      return value as WorkloadInventoryReport;
+    default:
+      return null;
+  }
+}
 
 /** Hub-to-agent request to run an allowlisted read-only diagnostic tool. */
 export type DiagnosticRequest = {
@@ -518,6 +649,58 @@ export type EndpointMonitor = {
 
 export type ServicesPayload = {
   endpoints: EndpointMonitor[];
+};
+export type WorkloadStateCounts = {
+  total: number;
+  running: number;
+  stopped: number;
+  failed: number;
+  unknown: number;
+};
+
+/** Persisted per-host workload row scoped to one inventory collection source. */
+export type Workload = {
+  id: string;
+  agent_id: string;
+  name: string;
+  runtime: "systemd" | "docker" | "process";
+  state: WorkloadState;
+  source: string;
+  observed_at: string;
+  cpu_percent: number | null;
+  memory_bytes: number | null;
+};
+
+/** Latest workload-inventory collection status for one host. */
+export type WorkloadCollection = {
+  status: WorkloadCollectionStatus;
+  reason: WorkloadUnavailableReason | null;
+  skipped: WorkloadCollector[];
+  observed_at: string;
+  current: boolean;
+};
+
+/** Host-scoped workload inventory with per-workload freshness and host-scoped counts. */
+export type HostWorkloads = {
+  agent_id: string;
+  online: boolean;
+  checked_at: string;
+  collection: WorkloadCollection | null;
+  workloads: (Workload & { freshness: "fresh" | "stale" })[];
+  counts: WorkloadStateCounts;
+};
+
+/** Fleet workload listing; totals and counts cover the whole fleet, not the capped page. */
+export type WorkloadList = {
+  workloads: Workload[];
+  total: number;
+  hosts_total: number;
+  hosts_online: number;
+  hosts_collecting: number;
+  counts: WorkloadStateCounts;
+  limit: number;
+  observed_at: string;
+  stale_after_seconds: number;
 };
 
 const PRIVATE_OR_METADATA_HOSTS = new Set([

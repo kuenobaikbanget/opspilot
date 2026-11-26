@@ -8,6 +8,7 @@ import { agentSession } from "./agents";
 import { audit, db } from "./db";
 import { aiOrigin, apiError, j, jsonBody, urlUUID } from "./http";
 import { readSystemdStatus } from "./systemd";
+import { readHostWorkloads, readWorkloadList } from "./workloads";
 
 type EndpointMonitorRow = Omit<EndpointMonitor, "last_checked_at"> & {
   last_checked_at: Date | null;
@@ -32,6 +33,18 @@ export async function serviceRoutes(
     if (!urlUUID(id)) return apiError("Invalid host id", "invalid_request");
     const status = await readSystemdStatus(id, agentSession);
     return status ? j(status) : apiError("Host not found", "not_found", 404);
+  }
+
+  const workloadMatch = path.match(/^\/api\/hosts\/([^/]+)\/workloads$/);
+  if (workloadMatch && method === "GET") {
+    const id = workloadMatch[1];
+    if (!urlUUID(id)) return apiError("Invalid host id", "invalid_request");
+    const workloads = await readHostWorkloads(id, agentSession);
+    return workloads ? j(workloads) : apiError("Host not found", "not_found", 404);
+  }
+
+  if (path === "/api/workloads" && method === "GET") {
+    return j(await readWorkloadList(agentSession));
   }
 
   if (path === "/api/services" && method === "GET") {
