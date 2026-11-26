@@ -1,7 +1,7 @@
 "use client";
 
 import type { EndpointMonitor } from "@opspilot/contracts";
-import { useId, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { AsciiLoading } from "../../../components/ascii-card-reveal";
 import { Badge, Button, ButtonLink, Field, Input, Notice, Select } from "../../../components/ui";
 import { WorkspaceIcon } from "../../../components/workspace-shell";
@@ -30,20 +30,49 @@ export default function NewMonitorPage() {
   const [created, setCreated] = useState<EndpointMonitor | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState("");
+  const checkRequest = useRef<AbortController | null>(null);
+  const checkGeneration = useRef(0);
 
   const hosts = fleet?.hosts ?? [];
 
+  const abortCheck = useCallback(() => {
+    checkGeneration.current += 1;
+    checkRequest.current?.abort();
+    checkRequest.current = null;
+  }, []);
+
+  useEffect(() => () => abortCheck(), [abortCheck]);
+
   async function runCheck(endpointId: string) {
+    abortCheck();
+    const generation = checkGeneration.current;
+    const controller = new AbortController();
+    checkRequest.current = controller;
     setChecking(true);
     setCheckError("");
+    let aborted = false;
     try {
-      const result: { endpoint: EndpointMonitor } = await api(`/endpoints/${endpointId}/check`, "POST", {});
+      const result: { endpoint: EndpointMonitor } = await api(`/endpoints/${endpointId}/check`, "POST", {}, controller.signal);
+      if (controller.signal.aborted || checkGeneration.current !== generation) {
+        aborted = true;
+        return;
+      }
       setCreated(result.endpoint);
       updateEndpoint(result.endpoint);
     } catch (cause) {
+      if (controller.signal.aborted || checkGeneration.current !== generation) {
+        aborted = true;
+        return;
+      }
       setCheckError(cause instanceof Error ? cause.message : "Endpoint check failed.");
     } finally {
-      setChecking(false);
+      if (checkGeneration.current === generation) {
+        checkRequest.current = null;
+        setChecking(false);
+      }
+    }
+    if (!aborted) {
+      await refresh();
     }
   }
 
@@ -78,7 +107,6 @@ export default function NewMonitorPage() {
       });
       setCreated(result.endpoint);
       setStep(1);
-      void refresh();
       void runCheck(result.endpoint.id);
     } catch (cause) {
       setSubmitError(cause instanceof Error ? cause.message : "Could not create endpoint monitor.");
@@ -88,6 +116,7 @@ export default function NewMonitorPage() {
   }
 
   function resetForm() {
+    abortCheck();
     setStep(0);
     setName("");
     setTargetUrl("");
@@ -244,7 +273,7 @@ export default function NewMonitorPage() {
               )}
 
               <div className="onboarding-actions">
-                <Button size="sm" onClick={resetForm}>Add another endpoint</Button>
+                <Button size="sm" disabled={checking} onClick={resetForm}>Add another endpoint</Button>
                 <ButtonLink href="/services" variant="primary" size="sm">Finish</ButtonLink>
               </div>
             </div>

@@ -253,7 +253,7 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
   const selectedHost = fleet?.hosts.find(host => host.id === selectedHostId);
   // A new enrollment is a cue to verify, not proof it used this command.
   const newHostListed = installBaseline !== null && Boolean(fleet?.hosts.some(host => Date.parse(host.created_at) > installBaseline));
-  const waitingForAgent = !newHostListed && !commandExpired && !fleetError;
+  const waitingForAgent = installBaseline !== null && !newHostListed && !commandExpired && !fleetError;
   const canContinueToVerification = installBaseline !== null && !generating && newHostListed;
 
   useEffect(() => {
@@ -412,9 +412,13 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                               ? "Preparing install command"
                               : commandExpired
                                 ? "Install command expired. Regenerate the command and connect a server to continue."
-                                : fleetError
-                                  ? "Fleet unavailable. Refresh the fleet to detect a connected server."
-                                  : "Waiting for target server to connect"}
+                                : generationError
+                                  ? "Install command unavailable. Retry generating the command to continue."
+                                  : fleetError
+                                    ? "Fleet unavailable. Refresh the fleet to detect a connected server."
+                                    : waitingForAgent
+                                      ? "Waiting for target server to connect"
+                                      : "Generate an install command and connect a server to continue."}
                           </span>
                         </>
                       )}
