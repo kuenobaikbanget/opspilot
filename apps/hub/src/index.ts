@@ -366,8 +366,8 @@ const server = Bun.serve<SocketData>({
         if (req.method !== "GET") {
           return j({ error: "Method not allowed" }, 405, { Allow: "GET" });
         }
-        if (!httpsInstaller) return invalid("HTTPS agent installation is not configured", 503);
-        const agentInstaller = await httpsInstaller;
+        if (installConfig?.mode !== "https") return invalid("HTTPS agent installation is not configured", 503);
+        const agentInstaller = await (httpsInstaller ?? loadHttpsAgentInstaller(installConfig));
         if (!agentInstaller) return invalid("Agent installer is unavailable", 500);
         return new Response(agentInstaller, {
           headers: {
@@ -445,6 +445,9 @@ const server = Bun.serve<SocketData>({
 });
 
 const installConfig = readAgentInstallConfig(process.env, server.port);
-const httpsInstaller = installConfig?.mode === "https" ? loadHttpsAgentInstaller(installConfig) : null;
+const httpsInstaller =
+  installConfig?.mode === "https" && process.env.NODE_ENV === "production"
+    ? loadHttpsAgentInstaller(installConfig)
+    : null;
 
 console.log(`OpsPilot Hub listening on http://localhost:${server.port}`);
