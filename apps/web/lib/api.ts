@@ -4,12 +4,15 @@ import type {
   DriftDetailResponse,
   DriftTimelineResponse,
   EvidenceRelevance,
+  IncidentMemoryRecord,
   IncidentTimelineResponse,
+  InvestigationMemoryAttribution,
   LinkIncidentChangeRequest,
   ProviderProtocol,
 } from "@opspilot/contracts";
 
 export type { DriftDetailResponse, DriftTimelineEntry, DriftTimelineResponse, SemanticDiffChange, SemanticDiffResult } from "@opspilot/contracts";
+export type { IncidentMemoryRecord, InvestigationMemoryAttribution, MemorySourceProvenance } from "@opspilot/contracts";
 
 /** Evidence item as returned by GET /api/incidents/:id. `relevance` is deterministic (no LLM), added server-side. */
 export type IncidentEvidence = {
@@ -43,6 +46,8 @@ export type Investigation = InvestigationUsage & {
   status: string;
   result_json: InvestigationResultJson | null;
   error: string | null;
+  /** Bounded snapshot of prior memories this investigation retrieved; null for legacy/active rows. */
+  retrieved_memories?: InvestigationMemoryAttribution[] | null;
   created_at: string;
   completed_at: string | null;
 };
@@ -110,6 +115,16 @@ export async function linkIncidentChange(incidentId: string, payload: LinkIncide
 export async function deleteIncidentChangeLink(incidentId: string, linkId: string): Promise<{ ok: boolean }> {
   return api(`/incidents/${encodeURIComponent(incidentId)}/changes/${encodeURIComponent(linkId)}`, "DELETE") as Promise<{ ok: boolean }>;
 }
+
+/** Lists canonical incident memories with provenance + retrieval metadata, optionally filtered by `q`. */
+export async function listMemories(q: string, signal?: AbortSignal): Promise<IncidentMemoryRecord[]> {
+  return api(`/memory?q=${encodeURIComponent(q)}`, "GET", undefined, signal) as Promise<IncidentMemoryRecord[]>;
+}
+
+/** Merges the source canonical memory into the target canonical memory; returns the updated target. */
+export async function mergeMemories(sourceMemoryId: string, targetMemoryId: string): Promise<IncidentMemoryRecord> {
+  const result = await api("/memory/merge", "POST", { sourceMemoryId, targetMemoryId }) as { ok: boolean; memory: IncidentMemoryRecord };
+  return result.memory;
 }
 
 export class ApiError extends Error {

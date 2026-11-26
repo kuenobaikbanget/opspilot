@@ -61,10 +61,10 @@ The [Monochrome workspace](UI-UX.md#fleet-services-dashboard-contract-target) im
 
 - [x] SHA-256 config baseline / changed-hash detection
 - [x] Human resolution stored as FTS memory
-- [ ] Drift timeline and semantic diffs with controlled file reading & redaction
-- [ ] Link deployments/config changes to incident timeline without claiming causation
+- [x] Drift timeline and semantic diffs with controlled file reading & redaction
+- [x] Link deployments/config changes to incident timeline without claiming causation
 - [x] Hybrid retrieval with pgvector if recall benchmark supports it (FTS + RRF hybrid; measured Recall@5 1.0 vs FTS-only 0.375 on the repeat-incident eval set; pgvector conditional, cosine fallback on plain PG16)
-- [ ] De-dup memory and attribution/UI provenance
+- [x] De-dup memory and attribution/UI provenance
 
 **Exit gate:** repeat-incident memory useful on a measured evaluation set; drift changes observable and explainable.
 

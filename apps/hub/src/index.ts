@@ -5,9 +5,10 @@ import type {
   HostList,
   HostMetric,
   HostThresholds,
+  InvestigationMemoryAttribution,
   ProviderProtocol,
 } from "@opspilot/contracts";
-import { parseEnrollRequest, parseInvestigateRequest, parseThresholdsUpdate } from "@opspilot/contracts";
+import { parseEnrollRequest, parseInvestigateRequest, parseMergeMemoryRequest, parseThresholdsUpdate } from "@opspilot/contracts";
 import { decryptProviderKey, ProviderCredentialError, readProviderMasterKey } from "@opspilot/ai/credentials";
 import { scoreEvidenceRelevance } from "@opspilot/ai/evidence-scoring";
 import {
@@ -33,6 +34,7 @@ import { audit, db } from "./db";
 import { searchIncidentMemories } from "./memory-retrieval";
 import { createIncident, effectiveThresholds, hostThresholds } from "./incidents";
 import { driftRoutes } from "./drift";
+import { MemoryMergeError, mergeMemories, recordResolvedIncidentMemory } from "./memory-dedup";
 import { isDevLoopbackInstallEnabled, loadHttpsAgentInstaller, readAgentInstallConfig } from "./agent-install";
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
@@ -74,6 +76,20 @@ function investigationDedupeKey(incidentId: string, providerId: string, provider
 function isDedupeViolation(error: unknown): boolean {
   const pg = error as { errno?: unknown; constraint?: unknown } | null;
   return !!pg && (pg.errno === 23505 || pg.errno === "23505" || pg.constraint === "idx_investigations_dedupe_active");
+}
+
+/** Normalizes `investigations.retrieved_memories_json` (jsonb may arrive as a JSON string). */
+function parseRetrievedMemories(value: InvestigationMemoryAttribution[] | string | null): InvestigationMemoryAttribution[] | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed) ? (parsed as InvestigationMemoryAttribution[]) : null;
+    } catch {
+      return null;
+    }
+  }
+  return Array.isArray(value) ? value : null;
 }
 
 async function router(req: Request): Promise<Response> {
@@ -382,9 +398,10 @@ async function router(req: Request): Promise<Response> {
       thinking_tokens: number | null;
       total_tokens: number | null;
       estimated_cost_usd: string | null;
+      retrieved_memories_json: InvestigationMemoryAttribution[] | string | null;
       created_at: Date;
       completed_at: Date | null;
-    }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,attempts,max_attempts,next_retry_at,lease_expires_at,input_tokens,output_tokens,thinking_tokens,total_tokens,estimated_cost_usd,created_at,completed_at
+    }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,attempts,max_attempts,next_retry_at,lease_expires_at,input_tokens,output_tokens,thinking_tokens,total_tokens,estimated_cost_usd,retrieved_memories_json,created_at,completed_at
       FROM investigations WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 10`;
 
     // Cited IDs come from the latest completed investigation's diagnosis, when present.
@@ -420,6 +437,8 @@ async function router(req: Request): Promise<Response> {
       thinking_tokens: row.thinking_tokens,
       total_tokens: row.total_tokens,
       estimated_cost_usd: row.estimated_cost_usd === null ? null : Number(row.estimated_cost_usd),
+      // Bounded snapshot of which prior memories this investigation retrieved (null for legacy/active rows).
+      retrieved_memories: parseRetrievedMemories(row.retrieved_memories_json),
       created_at: row.created_at,
       completed_at: row.completed_at,
     }));
@@ -544,24 +563,52 @@ async function router(req: Request): Promise<Response> {
       return invalid("Resolution must be 8-3000 characters");
     }
     // Embeddings are strictly opt-in: only a human-confirmed resolution may be
-    // embedded, and only when the operator explicitly consented for this memory.
+    // embedded, and only when the operator explicitly consented for this memory
+    // (embeddingConsent === true; every other value defaults to false).
     const embeddingConsent = data.embeddingConsent === true;
-    const incident =
-      await db`UPDATE incidents SET status='resolved',resolution=${resolution},resolved_at=NOW() WHERE id=${match[1]} AND status='open' RETURNING id,title`;
-    if (!incident.length) {
+    // Resolve + memory dedup in one transaction: a repeat root cause merges into the
+    // existing canonical memory (occurrence_count grows) with full source provenance.
+    const result = await db.begin(async (tx) => {
+      const incident = await tx<{ id: string; title: string; agent_id: string; category: string; resolved_at: Date }[]>`
+        UPDATE incidents SET status='resolved',resolution=${resolution},resolved_at=NOW()
+        WHERE id=${match[1]} AND status='open'
+        RETURNING id,title,agent_id,category,resolved_at`;
+      if (!incident.length) return null;
+      await audit("incident.resolved", match[1], {}, tx);
+      return await recordResolvedIncidentMemory(tx, incident[0], resolution, { embeddingConsent });
+    });
+    if (!result) {
       return invalid("Not found or already resolved", 404);
     }
-    await db`INSERT INTO incident_memory(incident_id,summary,resolution,embedding_consent) VALUES(${match[1]},${incident[0].title},${resolution},${embeddingConsent}) ON CONFLICT(incident_id) DO UPDATE SET resolution=excluded.resolution, embedding_consent=incident_memory.embedding_consent OR excluded.embedding_consent`;
-    await audit("incident.resolved", match[1]);
-    return j({ ok: true });
+    return j({ ok: true, memoryId: result.memoryId, deduplicated: result.deduplicated, occurrenceCount: result.occurrenceCount });
   }
 
   if (path === "/api/memory" && method === "GET") {
     const q = new URL(req.url).searchParams.get("q")?.slice(0, 100) || "";
-    // Backwards-compatible array payload; each record additionally carries
-    // retrieval_method / fts_score / vector_score / hybrid_score / embedding_model.
+    // Backwards-compatible array payload of canonical memories only (merged
+    // duplicates are never returned); each record carries BOTH the dedup
+    // provenance (occurrence_count, last_confirmed_at, content_fingerprint,
+    // sources[]) AND the retrieval metadata (retrieval_method, fts_score,
+    // vector_score, hybrid_score, embedding_model).
     const search = await searchIncidentMemories(db, q, { limit: 20 });
     return j(search.results);
+  }
+
+  if (path === "/api/memory/merge" && method === "POST") {
+    const data = await jsonBody(req);
+    const parsed = parseMergeMemoryRequest(data);
+    if (!parsed) {
+      return apiError("sourceMemoryId and targetMemoryId must be distinct UUIDs", "invalid_request");
+    }
+    try {
+      const memory = await mergeMemories(db, parsed.sourceMemoryId, parsed.targetMemoryId);
+      return j({ ok: true, memory });
+    } catch (error) {
+      if (error instanceof MemoryMergeError) {
+        return apiError(error.message, error.code, error.status);
+      }
+      throw error;
+    }
   }
 
   return invalid("Not found", 404);

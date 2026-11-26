@@ -2,6 +2,7 @@ import type { SQL } from "bun";
 import type { MemorySearchResponse, RetrievedMemoryItem } from "@opspilot/contracts";
 import { cosineSimilarity, reciprocalRankFusion } from "@opspilot/ai";
 import { MAX_EMBEDDING_DIMENSIONS } from "@opspilot/ai/embeddings";
+import { fetchMemorySources } from "./memory-dedup";
 
 /**
  * Database-backed hybrid incident-memory retrieval.
@@ -11,7 +12,11 @@ import { MAX_EMBEDDING_DIMENSIONS } from "@opspilot/ai/embeddings";
  * supplied, vector candidates are fetched with native `<=>` cosine distance when
  * the pgvector column exists, otherwise via an exact bounded cosine-similarity
  * fallback over the persisted `embedding_values` array, and both rankings are
- * fused with Reciprocal Rank Fusion. This module takes the pool as a parameter
+ * fused with Reciprocal Rank Fusion. Only canonical memories
+ * (`canonical_memory_id IS NULL`) are ever candidates, so merged duplicates are
+ * never returned by FTS or vector/hybrid search; each result additionally carries
+ * its dedup provenance (`occurrence_count`, `last_confirmed_at`,
+ * `content_fingerprint`, `sources[]`). This module takes the pool as a parameter
  * (never imports the Hub singleton) so the Worker can reuse it safely.
  */
 
@@ -30,10 +35,19 @@ type MemoryRow = {
   resolution: string;
   created_at: string;
   embedding_model: string | null;
+  occurrence_count: number;
+  last_confirmed_at: string | Date | null;
+  content_fingerprint: string | null;
 };
 
 type FtsRow = MemoryRow & { fts_score: number | null };
 type StoredVectorRow = MemoryRow & { embedding_values: number[] | null; embedding_dimensions: number | null };
+
+function isoOrNull(value: string | Date | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
 
 const pgVectorCache = new WeakMap<SQL, Promise<boolean>>();
 
@@ -77,20 +91,24 @@ async function fetchFtsCandidates(db: SQL, query: string, candidateLimit: number
   if (!query) {
     return db<FtsRow[]>`
       SELECT id, incident_id, summary, resolution, created_at, embedding_model,
+             occurrence_count, last_confirmed_at, content_fingerprint,
              NULL::float8 AS fts_score
       FROM incident_memory
+      WHERE canonical_memory_id IS NULL
       ORDER BY created_at DESC, id ASC
       LIMIT ${candidateLimit}
     `;
   }
   return db<FtsRow[]>`
     SELECT id, incident_id, summary, resolution, created_at, embedding_model,
+           occurrence_count, last_confirmed_at, content_fingerprint,
            ts_rank_cd(
              to_tsvector('simple', summary || ' ' || resolution),
              plainto_tsquery('simple', ${query})
            ) AS fts_score
     FROM incident_memory
-    WHERE to_tsvector('simple', summary || ' ' || resolution) @@ plainto_tsquery('simple', ${query})
+    WHERE canonical_memory_id IS NULL
+      AND to_tsvector('simple', summary || ' ' || resolution) @@ plainto_tsquery('simple', ${query})
     ORDER BY fts_score DESC, created_at DESC, id ASC
     LIMIT ${candidateLimit}
   `;
@@ -107,9 +125,11 @@ async function fetchVectorCandidates(
     const literal = vectorLiteral(queryVector);
     const rows = await db<(MemoryRow & { vector_score: number })[]>`
       SELECT id, incident_id, summary, resolution, created_at, embedding_model,
+             occurrence_count, last_confirmed_at, content_fingerprint,
              1 - (embedding_vector <=> ${literal}::vector) AS vector_score
       FROM incident_memory
-      WHERE embedding_vector IS NOT NULL
+      WHERE canonical_memory_id IS NULL
+        AND embedding_vector IS NOT NULL
         AND embedding_dimensions = ${dimensions}
         AND 1 - (embedding_vector <=> ${literal}::vector) >= ${minVectorScore}
       ORDER BY embedding_vector <=> ${literal}::vector ASC, created_at DESC, id ASC
@@ -120,9 +140,11 @@ async function fetchVectorCandidates(
   // Exact bounded cosine-similarity fallback on plain PostgreSQL 16.
   const rows = await db<StoredVectorRow[]>`
     SELECT id, incident_id, summary, resolution, created_at, embedding_model,
+           occurrence_count, last_confirmed_at, content_fingerprint,
            embedding_values, embedding_dimensions
     FROM incident_memory
-    WHERE embedding_values IS NOT NULL AND embedding_dimensions = ${dimensions}
+    WHERE canonical_memory_id IS NULL
+      AND embedding_values IS NOT NULL AND embedding_dimensions = ${dimensions}
     ORDER BY embedded_at DESC NULLS LAST, id ASC
     LIMIT ${candidateLimit}
   `;
@@ -134,6 +156,9 @@ async function fetchVectorCandidates(
       resolution: row.resolution,
       created_at: row.created_at,
       embedding_model: row.embedding_model,
+      occurrence_count: row.occurrence_count,
+      last_confirmed_at: row.last_confirmed_at,
+      content_fingerprint: row.content_fingerprint,
       vector_score: cosineSimilarity(queryVector, row.embedding_values ?? []),
     }))
     .filter((row) => row.vector_score >= minVectorScore)
@@ -184,6 +209,9 @@ export async function searchIncidentMemories(
     { limit },
   );
 
+  // Hydrate dedup provenance (sources[]) for the fused canonical memories in one query.
+  const sourcesById = await fetchMemorySources(db, fused.map((item) => item.id));
+
   const results: RetrievedMemoryItem[] = fused.map((item) => ({
     id: item.id,
     incident_id: item.incident_id,
@@ -195,6 +223,10 @@ export async function searchIncidentMemories(
     vector_score: item.vector_score,
     hybrid_score: item.hybrid_score,
     embedding_model: item.embedding_model ?? null,
+    occurrence_count: item.occurrence_count ?? 1,
+    last_confirmed_at: isoOrNull(item.last_confirmed_at),
+    content_fingerprint: item.content_fingerprint ?? null,
+    sources: sourcesById.get(item.id) ?? [],
   }));
 
   return {

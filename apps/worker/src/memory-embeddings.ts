@@ -11,8 +11,9 @@ import type { ProviderProtocol } from "@opspilot/contracts";
  * - Embeddings only run when `OPSPILOT_MEMORY_EMBEDDINGS_ENABLED=true` AND a
  *   server master key exists AND an enabled `openai-compatible`/`gemini`
  *   provider is configured. Anthropic-only deployments skip cleanly (FTS-only).
- * - Only rows with `embedding_consent = TRUE` (human-confirmed resolutions that
- *   the operator explicitly opted in) are embedded; raw logs/evidence never are.
+ * - Only canonical rows (`canonical_memory_id IS NULL`) with `embedding_consent =
+ *   TRUE` (human-confirmed resolutions that the operator explicitly opted in) and
+ *   `embedded_at IS NULL` are embedded; merged duplicates and raw logs/evidence never are.
  * - The embedded text is `summary + resolution`, redacted and length-bounded by
  *   `generateEmbedding` before any outbound request, sent only through the
  *   DNS-pinned public HTTPS egress client.
@@ -108,7 +109,9 @@ export async function indexPendingMemoryEmbeddings(
     const rows = await tx<PendingMemoryRow[]>`
       SELECT id, summary, resolution
       FROM incident_memory
-      WHERE embedding_consent = TRUE AND embedded_at IS NULL
+      WHERE canonical_memory_id IS NULL
+        AND embedding_consent = TRUE
+        AND embedded_at IS NULL
       ORDER BY created_at, id
       LIMIT ${batchSize}
       FOR UPDATE SKIP LOCKED

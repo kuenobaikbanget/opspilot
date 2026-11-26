@@ -2,8 +2,9 @@ import type { SQL } from "bun";
 import { generateDiagnosis, generateDiagnosisWithUsage, supportsEmbeddings, generateEmbedding, type GeneratedEmbedding, type ProviderConnection } from "@opspilot/ai";
 import { decryptProviderKey, ProviderCredentialError } from "@opspilot/ai/credentials";
 import { ProviderError, type ProviderErrorCode } from "@opspilot/ai/provider-http";
-import type { ProviderProtocol } from "@opspilot/contracts";
+import type { InvestigationMemoryAttribution, ProviderProtocol, RetrievedMemoryItem } from "@opspilot/contracts";
 import { searchIncidentMemories } from "../../hub/src/memory-retrieval";
+import { deduplicateMemoryCandidates, MEMORY_RETRIEVAL_LIMIT } from "../../hub/src/memory-dedup";
 import { memoryEmbeddingsEnabled, type EmbedFn } from "./memory-embeddings";
 
 type FailureCode = ProviderErrorCode | "provider_unavailable" | "provider_disabled" | "provider_changed" | "credential_unavailable" | "worker_lease_expired";
@@ -204,18 +205,18 @@ async function failInvestigation(tx: SQL, job: InvestigationJob, failure: Failur
 type GenerateInvestigation = typeof generateDiagnosis | typeof generateDiagnosisWithUsage;
 
 /**
- * Gathers `prior_resolutions` for an investigation via hybrid memory retrieval.
- * The optional query embedding is attempted only when embeddings are enabled and
- * the claimed provider supports them; any embedding failure falls back cleanly to
- * FTS, and any retrieval failure yields an empty context so investigations never
- * block on memory.
+ * Gathers prior memories for an investigation via hybrid memory retrieval (FTS always,
+ * vector/RRF when enabled). Only canonical memories are returned. The optional query
+ * embedding is attempted only when embeddings are enabled and the claimed provider
+ * supports them; any embedding failure falls back cleanly to FTS, and any retrieval
+ * failure yields an empty context so investigations never block on memory.
  */
 async function fetchPriorResolutions(
   db: SQL,
   connection: ProviderConnection,
   query: string,
   memoryEmbedFn?: EmbedFn,
-): Promise<Parameters<typeof generateDiagnosis>[3]> {
+): Promise<RetrievedMemoryItem[]> {
   let queryVector: number[] | null = null;
   const embed: EmbedFn | undefined =
     memoryEmbedFn ?? (memoryEmbeddingsEnabled() && supportsEmbeddings(connection.protocol) ? generateEmbedding : undefined);
@@ -228,8 +229,10 @@ async function fetchPriorResolutions(
     }
   }
   try {
-    const search = await searchIncidentMemories(db, query, { queryVector, limit: 5 });
-    return search.results.map((item) => ({ id: item.id, summary: item.summary, resolution: item.resolution }));
+    // Canonical memories only (searchIncidentMemories filters canonical_memory_id IS
+    // NULL); each item carries dedup provenance plus retrieval metadata.
+    const search = await searchIncidentMemories(db, query, { queryVector, limit: MEMORY_RETRIEVAL_LIMIT });
+    return search.results;
   } catch {
     return [];
   }
@@ -303,7 +306,26 @@ export async function runOneInvestigation(
     }
     const evidence = await db<Parameters<typeof generateDiagnosis>[2]>`SELECT id,source,content FROM evidence
       WHERE incident_id=${job.incident_id} ORDER BY created_at DESC LIMIT 12`;
-    const memories = await fetchPriorResolutions(db, connection, incident.title, options.memoryEmbedFn);
+    // Hybrid retrieval (FTS always; vector/RRF when embeddings are enabled and the
+    // provider supports them) over canonical memories only — merged duplicates are
+    // never candidates. Any retrieval failure yields empty context so investigations
+    // never block on memory.
+    const priorMemories = await fetchPriorResolutions(db, connection, incident.title, options.memoryEmbedFn);
+    // Exact/near-duplicate canonical memories are collapsed before the LLM or the
+    // persisted attribution ever sees them.
+    const candidates = deduplicateMemoryCandidates(priorMemories, MEMORY_RETRIEVAL_LIMIT);
+    const memories = candidates.map((item) => ({ id: item.id, summary: item.summary, resolution: item.resolution }));
+    // Bounded, non-secret attribution snapshot of what this investigation retrieved.
+    const retrievedMemories: InvestigationMemoryAttribution[] = candidates.map((item) => ({
+      memory_id: item.id,
+      summary: item.summary,
+      resolution_preview: item.resolution.slice(0, 200),
+      occurrence_count: item.occurrence_count,
+      source_incident_ids: item.sources.map((source) => source.incident_id),
+      retrieval_method: item.retrieval_method,
+      score: item.retrieval_method === "hybrid_rrf" ? item.hybrid_score : item.fts_score,
+      last_confirmed_at: item.last_confirmed_at,
+    }));
     const outcome = await generate(connection, incident, evidence, memories);
     const diagnosis = "diagnosis" in outcome ? outcome.diagnosis : outcome;
     const usage = "usage" in outcome ? outcome.usage : null;
@@ -313,7 +335,8 @@ export async function runOneInvestigation(
       lease_expires_at=NULL,worker_id=NULL,
       input_tokens=${usage?.inputTokens ?? null},output_tokens=${usage?.outputTokens ?? null},
       thinking_tokens=${usage?.thinkingTokens ?? null},total_tokens=${usage?.totalTokens ?? null},
-      estimated_cost_usd=${usage?.estimatedCostUsd ?? null}
+      estimated_cost_usd=${usage?.estimatedCostUsd ?? null},
+      retrieved_memories_json=${retrievedMemories}::jsonb
       WHERE id=${job.id} AND status='running' AND worker_id=${workerId}
       RETURNING id`;
     if (completed.length) {
