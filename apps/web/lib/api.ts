@@ -63,11 +63,15 @@ export async function getIncidentDetail<TIncident>(id: string, signal?: AbortSig
   return api(`/incidents/${encodeURIComponent(id)}`, "GET", undefined, signal) as Promise<IncidentDetailResponse<TIncident>>;
 }
 
-/** Fetches the drift timeline (`GET /api/drift`), optionally filtered by host and/or path. */
-export async function getDriftTimeline(params: { agentId?: string; filePath?: string; limit?: number } = {}, signal?: AbortSignal): Promise<DriftTimelineResponse> {
+/** Fetches the drift timeline (`GET /api/drift`), optionally filtered by host, exact path, or path substring. */
+export async function getDriftTimeline(
+  params: { agentId?: string; filePath?: string; pathContains?: string; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<DriftTimelineResponse> {
   const query = new URLSearchParams();
   if (params.agentId) query.set("agentId", params.agentId);
   if (params.filePath) query.set("filePath", params.filePath);
+  if (params.pathContains) query.set("pathContains", params.pathContains);
   if (params.limit) query.set("limit", String(params.limit));
   const suffix = query.size ? `?${query.toString()}` : "";
   return api(`/drift${suffix}`, "GET", undefined, signal) as Promise<DriftTimelineResponse>;

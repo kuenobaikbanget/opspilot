@@ -152,18 +152,16 @@ export async function indexPendingMemoryEmbeddings(
       }
       const values = floatArrayLiteral(embedding.vector);
       if (useVectorColumn) {
+        const vector = vectorLiteral(embedding.vector);
         await db`
           UPDATE incident_memory SET
             embedding_values = ${values}::float8[],
+            embedding_vector = ${vector}::vector,
             embedding_dimensions = ${embedding.dimensions},
             embedding_model = ${embedding.model},
             embedding_provider_id = ${provider.id},
             embedded_at = NOW()
           WHERE id = ${row.id} AND embedded_at IS NULL
-        `;
-        await db`
-          UPDATE incident_memory SET embedding_vector = ${vectorLiteral(embedding.vector)}::vector
-          WHERE id = ${row.id} AND embedding_vector IS NULL
         `;
       } else {
         await db`

@@ -175,22 +175,37 @@ export async function checkConfigHashes(
       continue;
     }
 
-    const prior =
-      await db`SELECT checksum_sha256 FROM config_snapshots WHERE agent_id=${agentId} AND file_path=${path} ORDER BY captured_at DESC LIMIT 1`;
-    if (!prior.length || prior[0].checksum_sha256 !== checksum) {
-      const inserted =
-        await db<{ id: string }[]>`INSERT INTO config_snapshots(agent_id,file_path,checksum_sha256) VALUES(${agentId},${path},${checksum}) RETURNING id`;
-      if (prior.length) {
-        const incidentId = await createIncident(
-          agentId,
-          "config_drift",
-          `Configuration changed: ${path}`,
-          "config_hash",
-          `File ${path}: prior SHA256 ${prior[0].checksum_sha256}; current SHA256 ${checksum}. Changes are correlated, not proven causal.`,
-        );
-        // Link the incident back to the snapshot row so the drift timeline can cross-reference it.
-        await db`UPDATE config_snapshots SET incident_id=${incidentId} WHERE id=${inserted[0].id}`;
+    await db.begin(async (tx) => {
+      // Serialize per (agent, path) with storeConfigSnapshot so telemetry and config_snapshot
+      // frames racing on the same transition cannot double-insert or miss a config_drift incident.
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`${agentId}\n${path}`}, 0))`;
+      const prior = await tx<{ id: string; checksum_sha256: string; captured_at: Date }[]>`
+        SELECT id,checksum_sha256,captured_at FROM config_snapshots
+        WHERE agent_id=${agentId} AND file_path=${path}
+        ORDER BY captured_at DESC,id DESC LIMIT 1`;
+      if (!prior.length || prior[0].checksum_sha256 !== checksum) {
+        const inserted = prior.length
+          ? await tx<{ id: string }[]>`
+              INSERT INTO config_snapshots(agent_id,file_path,checksum_sha256,previous_snapshot_id,captured_at)
+              VALUES(${agentId},${path},${checksum},${prior[0].id},GREATEST(NOW(), ${prior[0].captured_at}::timestamptz + INTERVAL '1 microsecond'))
+              RETURNING id`
+          : await tx<{ id: string }[]>`
+              INSERT INTO config_snapshots(agent_id,file_path,checksum_sha256)
+              VALUES(${agentId},${path},${checksum})
+              RETURNING id`;
+        if (prior.length) {
+          const incidentId = await createIncident(
+            agentId,
+            "config_drift",
+            `Configuration changed: ${path}`,
+            "config_hash",
+            `File ${path}: prior SHA256 ${prior[0].checksum_sha256}; current SHA256 ${checksum}. Changes are correlated, not proven causal.`,
+            tx,
+          );
+          // Link the incident back to the snapshot row so the drift timeline can cross-reference it.
+          await tx`UPDATE config_snapshots SET incident_id=${incidentId} WHERE id=${inserted[0].id}`;
+        }
       }
-    }
+    });
   }
 }

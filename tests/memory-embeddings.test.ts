@@ -9,6 +9,8 @@ import {
 } from "../packages/ai/src/embeddings";
 import { ProviderError, type ProviderPost } from "../packages/ai/src/provider-http";
 import { cosineSimilarity, reciprocalRankFusion } from "../packages/ai/src/memory-retrieval";
+import { encryptProviderKey, readProviderMasterKey } from "../packages/ai/src/credentials";
+import { indexPendingMemoryEmbeddings } from "../apps/worker/src/memory-embeddings";
 import type { ProviderConnection } from "../packages/ai/src/index";
 
 const openai: ProviderConnection = {
@@ -213,6 +215,16 @@ describe("reciprocalRankFusion", () => {
       [],
     );
     expect(tie.map((item) => item.id)).toEqual(["a", "b"]);
+    // Distinct Date instances with the exact same timestamp also normalize to ISO strings and tie-break by id asc.
+    const dateTie = reciprocalRankFusion(
+      [
+        { id: "b", created_at: new Date("2025-01-01T00:00:00.000Z") as unknown as string, fts_score: 1 },
+        { id: "a", created_at: new Date("2025-01-01T00:00:00.000Z") as unknown as string, fts_score: 1 },
+      ],
+      [],
+    );
+    expect(dateTie.map((item) => item.id)).toEqual(["a", "b"]);
+    expect(dateTie.every((item) => typeof item.created_at === "string" && item.created_at === "2025-01-01T00:00:00.000Z")).toBe(true);
   });
 
   test("respects limit, k and weights", () => {
@@ -226,5 +238,57 @@ describe("reciprocalRankFusion", () => {
     expect(fused[0].hybrid_score).toBeCloseTo(1 / 3 + 10, 12);
     const kSensitive = reciprocalRankFusion([{ ...a, fts_score: 1 }], [{ ...a, vector_score: 1 }], { k: 1 });
     expect(kSensitive[0].hybrid_score).toBeCloseTo(1 / 2 + 1 / 2, 12);
+  });
+});
+
+describe("indexPendingMemoryEmbeddings atomic vector update", () => {
+  const masterKey = readProviderMasterKey({ AI_PROVIDER_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" })!;
+
+  function mockPgVectorDb(failUpdate: boolean) {
+    const updates: string[] = [];
+    const providerId = "11111111-1111-4111-8111-111111111111";
+    const ciphertext = encryptProviderKey(providerId, "sk-test-atomic-0123456789", masterKey);
+    const exec = async (strings: TemplateStringsArray) => {
+      const sql = strings.join("?");
+      if (sql.includes("FROM ai_providers")) {
+        return [{ id: providerId, protocol: "openai-compatible", base_url: "https://api.openai.com/v1", default_model: "text-embedding-3-small", api_key_ciphertext: ciphertext }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ exists: true }];
+      }
+      if (sql.includes("FROM incident_memory")) {
+        return [{ id: "22222222-2222-4222-8222-222222222222", summary: "s", resolution: "r" }];
+      }
+      if (sql.includes("UPDATE incident_memory")) {
+        updates.push(sql);
+        if (failUpdate) throw new Error("vector dimension mismatch");
+        return [];
+      }
+      return [];
+    };
+    const db = Object.assign(
+      (strings: TemplateStringsArray) => exec(strings),
+      { begin: async <T>(fn: (tx: unknown) => Promise<T>) => fn(exec) },
+    );
+    return { db: db as never, updates };
+  }
+
+  test("updates embedding_values, embedding_vector, and embedded_at in one atomic UPDATE", async () => {
+    const { db, updates } = mockPgVectorDb(false);
+    const embedFn = async () => ({ vector: [0.6, 0.8], dimensions: 2, model: "text-embedding-3-small" });
+    const count = await indexPendingMemoryEmbeddings(db, masterKey, embedFn, { enabled: true });
+    expect(count).toBe(1);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toContain("embedding_values =");
+    expect(updates[0]).toContain("embedding_vector =");
+    expect(updates[0]).toContain("embedded_at = NOW()");
+  });
+
+  test("failed vector UPDATE leaves row unprocessed without a partial embedded_at update", async () => {
+    const { db, updates } = mockPgVectorDb(true);
+    const embedFn = async () => ({ vector: [0.6, 0.8], dimensions: 2, model: "text-embedding-3-small" });
+    const count = await indexPendingMemoryEmbeddings(db, masterKey, embedFn, { enabled: true });
+    expect(count).toBe(0);
+    expect(updates).toHaveLength(1);
   });
 });

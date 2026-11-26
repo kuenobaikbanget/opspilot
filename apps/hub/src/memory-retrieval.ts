@@ -28,20 +28,31 @@ const MAX_QUERY_CHARS = 500;
 /** Minimum cosine similarity for a vector candidate to join the fusion. */
 const DEFAULT_MIN_VECTOR_SCORE = 0.2;
 
-type MemoryRow = {
+type RawMemoryRow = {
   id: string;
   incident_id: string;
   summary: string;
   resolution: string;
-  created_at: string;
+  created_at: string | Date;
   embedding_model: string | null;
   occurrence_count: number;
   last_confirmed_at: string | Date | null;
   content_fingerprint: string | null;
 };
 
+type MemoryRow = Omit<RawMemoryRow, "created_at"> & {
+  created_at: string;
+};
+
+type RawFtsRow = RawMemoryRow & { fts_score: number | null };
 type FtsRow = MemoryRow & { fts_score: number | null };
-type StoredVectorRow = MemoryRow & { embedding_values: number[] | null; embedding_dimensions: number | null };
+type StoredVectorRow = RawMemoryRow & { embedding_values: number[] | null; embedding_dimensions: number | null };
+
+function isoString(value: string | Date): string {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? "" : value.toISOString();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+}
 
 function isoOrNull(value: string | Date | null | undefined): string | null {
   if (value === null || value === undefined) return null;
@@ -88,8 +99,8 @@ function vectorLiteral(vector: readonly number[]): string {
 }
 
 async function fetchFtsCandidates(db: SQL, query: string, candidateLimit: number): Promise<FtsRow[]> {
-  if (!query) {
-    return db<FtsRow[]>`
+  const rows = !query
+    ? await db<RawFtsRow[]>`
       SELECT id, incident_id, summary, resolution, created_at, embedding_model,
              occurrence_count, last_confirmed_at, content_fingerprint,
              NULL::float8 AS fts_score
@@ -97,21 +108,21 @@ async function fetchFtsCandidates(db: SQL, query: string, candidateLimit: number
       WHERE canonical_memory_id IS NULL
       ORDER BY created_at DESC, id ASC
       LIMIT ${candidateLimit}
+    `
+    : await db<RawFtsRow[]>`
+      SELECT id, incident_id, summary, resolution, created_at, embedding_model,
+             occurrence_count, last_confirmed_at, content_fingerprint,
+             ts_rank_cd(
+               to_tsvector('simple', summary || ' ' || resolution),
+               plainto_tsquery('simple', ${query})
+             ) AS fts_score
+      FROM incident_memory
+      WHERE canonical_memory_id IS NULL
+        AND to_tsvector('simple', summary || ' ' || resolution) @@ plainto_tsquery('simple', ${query})
+      ORDER BY fts_score DESC, created_at DESC, id ASC
+      LIMIT ${candidateLimit}
     `;
-  }
-  return db<FtsRow[]>`
-    SELECT id, incident_id, summary, resolution, created_at, embedding_model,
-           occurrence_count, last_confirmed_at, content_fingerprint,
-           ts_rank_cd(
-             to_tsvector('simple', summary || ' ' || resolution),
-             plainto_tsquery('simple', ${query})
-           ) AS fts_score
-    FROM incident_memory
-    WHERE canonical_memory_id IS NULL
-      AND to_tsvector('simple', summary || ' ' || resolution) @@ plainto_tsquery('simple', ${query})
-    ORDER BY fts_score DESC, created_at DESC, id ASC
-    LIMIT ${candidateLimit}
-  `;
+  return rows.map((row) => ({ ...row, created_at: isoString(row.created_at) }));
 }
 
 async function fetchVectorCandidates(
@@ -123,7 +134,7 @@ async function fetchVectorCandidates(
   const dimensions = queryVector.length;
   if (await hasPgVector(db)) {
     const literal = vectorLiteral(queryVector);
-    const rows = await db<(MemoryRow & { vector_score: number })[]>`
+    const rows = await db<(RawMemoryRow & { vector_score: number })[]>`
       SELECT id, incident_id, summary, resolution, created_at, embedding_model,
              occurrence_count, last_confirmed_at, content_fingerprint,
              1 - (embedding_vector <=> ${literal}::vector) AS vector_score
@@ -135,7 +146,7 @@ async function fetchVectorCandidates(
       ORDER BY embedding_vector <=> ${literal}::vector ASC, created_at DESC, id ASC
       LIMIT ${candidateLimit}
     `;
-    return rows;
+    return rows.map((row) => ({ ...row, created_at: isoString(row.created_at) }));
   }
   // Exact bounded cosine-similarity fallback on plain PostgreSQL 16.
   const rows = await db<StoredVectorRow[]>`
@@ -154,7 +165,7 @@ async function fetchVectorCandidates(
       incident_id: row.incident_id,
       summary: row.summary,
       resolution: row.resolution,
-      created_at: row.created_at,
+      created_at: isoString(row.created_at),
       embedding_model: row.embedding_model,
       occurrence_count: row.occurrence_count,
       last_confirmed_at: row.last_confirmed_at,

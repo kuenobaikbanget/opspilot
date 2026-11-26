@@ -89,7 +89,15 @@ type helloAck struct {
 	Capabilities    []string `json:"capabilities"`
 }
 
-// capabilitySet tracks the negotiated capabilities; before any ack it defaults to all advertised.
+// capabilitiesRequiringAck lists opt-in capabilities that must be explicitly confirmed in
+// hello_ack before the agent emits their frames (older Hubs without hello_ack or without
+// the capability never receive them).
+var capabilitiesRequiringAck = map[string]bool{
+	"config_diffs": true,
+}
+
+// capabilitySet tracks the negotiated capabilities; before any ack it defaults to all
+// advertised base capabilities while holding back opt-in ack-gated ones like config_diffs.
 type capabilitySet struct {
 	mu         sync.Mutex
 	advertised []string
@@ -102,7 +110,9 @@ func newCapabilitySet(capabilities ...string) *capabilitySet {
 	}
 	set := map[string]bool{}
 	for _, c := range capabilities {
-		set[c] = true
+		if !capabilitiesRequiringAck[c] {
+			set[c] = true
+		}
 	}
 	return &capabilitySet{advertised: capabilities, set: set}
 }
@@ -408,21 +418,19 @@ func runConnection(ws *websocket.Conn, cfg config, sampler *cpuSampler, queue *d
 	}
 
 	// Controlled config snapshots: strictly opt-in (OPSPILOT_CONFIG_DIFFS=true) and gated on
-	// the negotiated "config_diffs" capability. Sends on connect and on hash change only.
+	// the Hub-negotiated "config_diffs" capability. The initial sync runs upon hello_ack;
+	// this ticker only polls for subsequent hash changes once negotiated.
 	drift := newDriftTracker()
 	if cfg.ConfigDiffs {
 		go func() {
 			tick := time.NewTicker(driftInterval)
 			defer tick.Stop()
 			for {
-				drift.sync(conn, cfg, caps)
-				if ctx.Err() != nil {
-					return
-				}
 				select {
 				case <-ctx.Done():
 					return
 				case <-tick.C:
+					drift.sync(conn, cfg, caps)
 				}
 			}
 		}()

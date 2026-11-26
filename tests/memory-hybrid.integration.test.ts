@@ -121,6 +121,8 @@ integration("hybrid retrieval returns paraphrased repeat memory that PostgreSQL 
     expect(hybrid.results[0].fts_score).toBeNull();
     expect(hybrid.results[0].hybrid_score).toBeGreaterThan(0);
     expect(hybrid.results[0].embedding_model).toBe("fixture-concept-embedding");
+    expect(typeof hybrid.results[0].created_at).toBe("string");
+    expect(hybrid.results[0].created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 
     // Exact-keyword repeat still works through the same path (FTS leg) and stays top-1.
     const exact = QUERY_CASES.find((entry) => entry.id === "q-exact-oom")!;
@@ -128,6 +130,7 @@ integration("hybrid retrieval returns paraphrased repeat memory that PostgreSQL 
     expect(exactSearch.results[0].id).toBe(ids.get("mem-oom-worker"));
     expect(exactSearch.results[0].retrieval_method).toBe("hybrid_rrf");
     expect(exactSearch.results[0].fts_score).toBeGreaterThan(0);
+    expect(typeof exactSearch.results[0].created_at).toBe("string");
 
     // Distractor query surfaces nothing in hybrid mode.
     const distractor = QUERY_CASES.find((entry) => entry.id === "q-distractor-printer")!;
@@ -136,6 +139,29 @@ integration("hybrid retrieval returns paraphrased repeat memory that PostgreSQL 
       limit: 5,
     });
     expect(distractorSearch.results).toEqual([]);
+
+    // Tie-breaker determinism: two rows with identical created_at and identical vector score
+    // must sort by id ASC and return ISO string created_at (never raw Date instances).
+    const tieAgentId = randomUUID();
+    await db`INSERT INTO agents(id,hostname,token_hash) VALUES (${tieAgentId},'tie-host','h')`;
+    const tieTs = "2026-01-15T12:00:00.000Z";
+    const idLow = "00000000-0000-4000-8000-000000000001";
+    const idHigh = "00000000-0000-4000-8000-000000000002";
+    const incHigh = randomUUID();
+    const incLow = randomUUID();
+    const tieVec = conceptEmbedding(["dns", "timeout"]);
+    // Insert high ID first so natural DB order is opposite of id ASC.
+    await db`INSERT INTO incidents(id,agent_id,title,category,status,resolution) VALUES (${incHigh},${tieAgentId},'tie high','repeat','resolved','fix tie high')`;
+    await db`INSERT INTO incident_memory(id,incident_id,summary,resolution,created_at,embedding_consent,embedded_at,embedding_values,embedding_dimensions,embedding_model)
+      VALUES (${idHigh},${incHigh},'tie high','fix tie high',${tieTs},TRUE,NOW(),${`{${tieVec.join(",")}}`}::float8[],${tieVec.length},'fixture')`;
+    await db`INSERT INTO incidents(id,agent_id,title,category,status,resolution) VALUES (${incLow},${tieAgentId},'tie low','repeat','resolved','fix tie low')`;
+    await db`INSERT INTO incident_memory(id,incident_id,summary,resolution,created_at,embedding_consent,embedded_at,embedding_values,embedding_dimensions,embedding_model)
+      VALUES (${idLow},${incLow},'tie low','fix tie low',${tieTs},TRUE,NOW(),${`{${tieVec.join(",")}}`}::float8[],${tieVec.length},'fixture')`;
+
+    const tieSearch = await searchIncidentMemories(db, "unmatchedlexicaltokenxyz", { queryVector: tieVec, limit: 5 });
+    const tieIds = tieSearch.results.filter((r) => r.id === idLow || r.id === idHigh);
+    expect(tieIds.map((r) => r.id)).toEqual([idLow, idHigh]);
+    expect(tieIds.every((r) => r.created_at === tieTs)).toBe(true);
   });
 }, 60000);
 

@@ -55,7 +55,7 @@ export function DriftTimeline({ hosts, onOpenIncident, onViewIncidents, onRefres
   const load = useCallback(async (signal: AbortSignal) => {
     try {
       const data = await getDriftTimeline(
-        { agentId: agentId || undefined, filePath: appliedPath || undefined, limit: 100 },
+        { agentId: agentId || undefined, pathContains: appliedPath || undefined, limit: 100 },
         signal,
       );
       if (signal.aborted) return;

@@ -18,7 +18,7 @@ import {
   type SemanticDiffResult,
 } from "@opspilot/contracts";
 import { audit, db } from "./db";
-import { addEvidence } from "./incidents";
+import { addEvidence, createIncident } from "./incidents";
 import { invalid, j, urlUUID } from "./http";
 
 /**
@@ -381,7 +381,11 @@ export function computeSemanticDiff(filePath: string, beforeContent: string, aft
 type SnapshotRow = {
   id: string;
   checksum_sha256: string;
+  previous_snapshot_id: string | null;
+  diff_status: "hash_only" | "diff_available" | "unavailable";
+  unavailable_reason: string | null;
   content_redacted: string | null;
+  incident_id: string | null;
   captured_at: Date;
 };
 
@@ -433,20 +437,49 @@ export async function storeConfigSnapshot(agentId: string, frame: ConfigSnapshot
   const redactionCount = isRedacted ? frame.redactionCount : 0;
 
   await executor.begin(async (tx) => {
-    // Order by captured_at only ties on identical transaction timestamps; scan a few rows and
-    // pick by checksum so a tie can never mis-identify the latest transition.
+    // Serialize per (agent, path) with checkConfigHashes so telemetry and config_snapshot
+    // frames arriving in either order produce one transition, one incident, and one diff evidence.
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`${agentId}\n${filePath}`}, 0))`;
     const rows = await tx<SnapshotRow[]>`
-      SELECT id,checksum_sha256,content_redacted,captured_at FROM config_snapshots
+      SELECT id,checksum_sha256,previous_snapshot_id,diff_status,unavailable_reason,content_redacted,incident_id,captured_at
+      FROM config_snapshots
       WHERE agent_id=${agentId} AND file_path=${filePath}
-      ORDER BY captured_at DESC,id DESC LIMIT 5`;
-    // When telemetry already inserted this exact hash, enrich that row instead of duplicating it.
-    const sameHash = rows.find((r) => r.checksum_sha256 === frame.checksumSha256) ?? null;
+      ORDER BY captured_at DESC,id DESC LIMIT 2`;
     const latest = rows[0] ?? null;
-    const prior = rows.find((r) => r.checksum_sha256 !== frame.checksumSha256) ?? null;
 
-    const enrich = sameHash !== null;
-    const previousId = enrich ? (prior?.id ?? null) : (latest?.id ?? null);
-    const previousContent = enrich ? (prior?.content_redacted ?? null) : (latest?.content_redacted ?? null);
+    // Enrich ONLY the latest row when its checksum matches (e.g. telemetry arrived first).
+    // Never match an older historical row (so an A -> B -> A revert records a new entry at t3),
+    // and treat an already-populated latest row (e.g. agent reconnect) as an idempotent no-op.
+    const enrich = latest !== null && latest.checksum_sha256 === frame.checksumSha256;
+    if (enrich) {
+      const alreadyPopulated =
+        latest.diff_status === "diff_available" ||
+        (isRedacted && latest.content_redacted !== null) ||
+        (!isRedacted && latest.unavailable_reason !== null);
+      if (alreadyPopulated) {
+        return;
+      }
+    }
+
+    let prior: { id: string; checksum_sha256: string; content_redacted: string | null } | null = null;
+    if (enrich) {
+      if (latest.previous_snapshot_id) {
+        if (rows[1]?.id === latest.previous_snapshot_id) {
+          prior = rows[1];
+        } else {
+          const prevRows = await tx<{ id: string; checksum_sha256: string; content_redacted: string | null }[]>`
+            SELECT id,checksum_sha256,content_redacted FROM config_snapshots WHERE id=${latest.previous_snapshot_id}`;
+          prior = prevRows[0] ?? null;
+        }
+      } else if (rows[1] && rows[1].checksum_sha256 !== frame.checksumSha256) {
+        prior = rows[1];
+      }
+    } else {
+      prior = latest;
+    }
+
+    const previousId = prior?.id ?? null;
+    const previousContent = prior?.content_redacted ?? null;
 
     let semanticDiff: SemanticDiffResult | null = null;
     if (content !== null && previousContent !== null) {
@@ -455,8 +488,10 @@ export async function storeConfigSnapshot(agentId: string, frame: ConfigSnapshot
     const diffStatus = !isRedacted ? "unavailable" : semanticDiff ? "diff_available" : "hash_only";
 
     let rowId: string;
+    let incidentId: string | null = null;
     if (enrich) {
-      rowId = sameHash.id;
+      rowId = latest.id;
+      incidentId = latest.incident_id;
       await tx`UPDATE config_snapshots SET
         previous_snapshot_id=${previousId},
         diff_status=${diffStatus},
@@ -468,36 +503,62 @@ export async function storeConfigSnapshot(agentId: string, frame: ConfigSnapshot
         semantic_diff_json=${semanticDiff ? JSON.stringify(semanticDiff) : null}::jsonb,
         diff_summary=${semanticDiff ? semanticDiff.summary : null}
         WHERE id=${rowId}`;
+      if (!incidentId && prior !== null) {
+        const incidents = await tx<{ id: string }[]>`
+          SELECT id FROM incidents
+          WHERE agent_id=${agentId} AND category='config_drift' AND status='open'
+            AND title=${`Configuration changed: ${filePath}`}
+          ORDER BY created_at DESC LIMIT 1`;
+        if (incidents.length) {
+          incidentId = incidents[0].id;
+          await tx`UPDATE config_snapshots SET incident_id=${incidentId} WHERE id=${rowId}`;
+        }
+      }
     } else {
-      const inserted = await tx<{ id: string }[]>`
-        INSERT INTO config_snapshots(agent_id,file_path,checksum_sha256,previous_snapshot_id,diff_status,
-          unavailable_reason,content_format,content_redacted,content_truncated,redaction_count,
-          semantic_diff_json,diff_summary)
-        VALUES(${agentId},${filePath},${frame.checksumSha256},${previousId},${diffStatus},${unavailableReason},
-          ${format},${content},${truncated},${redactionCount},
-          ${semanticDiff ? JSON.stringify(semanticDiff) : null}::jsonb,
-          ${semanticDiff ? semanticDiff.summary : null})
-        RETURNING id`;
+      const inserted = latest !== null
+        ? await tx<{ id: string }[]>`
+            INSERT INTO config_snapshots(agent_id,file_path,checksum_sha256,previous_snapshot_id,diff_status,
+              unavailable_reason,content_format,content_redacted,content_truncated,redaction_count,
+              semantic_diff_json,diff_summary,captured_at)
+            VALUES(${agentId},${filePath},${frame.checksumSha256},${previousId},${diffStatus},${unavailableReason},
+              ${format},${content},${truncated},${redactionCount},
+              ${semanticDiff ? JSON.stringify(semanticDiff) : null}::jsonb,
+              ${semanticDiff ? semanticDiff.summary : null},
+              GREATEST(NOW(), ${latest.captured_at}::timestamptz + INTERVAL '1 microsecond'))
+            RETURNING id`
+        : await tx<{ id: string }[]>`
+            INSERT INTO config_snapshots(agent_id,file_path,checksum_sha256,previous_snapshot_id,diff_status,
+              unavailable_reason,content_format,content_redacted,content_truncated,redaction_count,
+              semantic_diff_json,diff_summary)
+            VALUES(${agentId},${filePath},${frame.checksumSha256},${previousId},${diffStatus},${unavailableReason},
+              ${format},${content},${truncated},${redactionCount},
+              ${semanticDiff ? JSON.stringify(semanticDiff) : null}::jsonb,
+              ${semanticDiff ? semanticDiff.summary : null})
+            RETURNING id`;
       rowId = inserted[0].id;
-    }
-
-    // Link the open config_drift incident created for this exact change, if any.
-    const incidents = await tx<{ id: string }[]>`
-      SELECT id FROM incidents
-      WHERE agent_id=${agentId} AND category='config_drift' AND status='open'
-        AND title=${`Configuration changed: ${filePath}`}
-      ORDER BY created_at DESC LIMIT 1`;
-    if (incidents.length) {
-      const incidentId = incidents[0].id;
-      await tx`UPDATE config_snapshots SET incident_id=${incidentId} WHERE id=${rowId}`;
-      if (semanticDiff) {
-        await addEvidence(
-          incidentId,
-          "config_diff",
-          `Redacted semantic diff for ${filePath}: ${semanticDiff.summary}. Changes: ${JSON.stringify(semanticDiff.changes).slice(0, 3000)}. Correlation is not causation — this config change is correlated with the incident, not proven causal.`,
+      // When config_snapshot detects a hash transition before telemetry arrives, open and link
+      // the config_drift incident here so the subsequent telemetry frame sees the latest hash
+      // without dropping the incident.
+      if (latest !== null) {
+        incidentId = await createIncident(
+          agentId,
+          "config_drift",
+          `Configuration changed: ${filePath}`,
+          "config_hash",
+          `File ${filePath}: prior SHA256 ${latest.checksum_sha256}; current SHA256 ${frame.checksumSha256}. Changes are correlated, not proven causal.`,
           tx,
         );
+        await tx`UPDATE config_snapshots SET incident_id=${incidentId} WHERE id=${rowId}`;
       }
+    }
+
+    if (incidentId && semanticDiff) {
+      await addEvidence(
+        incidentId,
+        "config_diff",
+        `Redacted semantic diff for ${filePath}: ${semanticDiff.summary}. Changes: ${JSON.stringify(semanticDiff.changes).slice(0, 3000)}. Correlation is not causation — this config change is correlated with the incident, not proven causal.`,
+        tx,
+      );
     }
     await audit("config.snapshot.stored", rowId, { agentId, filePath, status: frame.status, diffStatus, redactionCount }, tx);
   });
@@ -559,6 +620,11 @@ function toTimelineEntry(row: TimelineRow): DriftTimelineEntry {
   };
 }
 
+/** Escapes LIKE/ILIKE metacharacters so user substrings match literally. */
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 /** `GET /api/drift` and `GET /api/drift/:id`; returns null when the path is not a drift route. */
 export async function driftRoutes(req: Request, path: string, method: string): Promise<Response | null> {
   if (path === "/api/drift" && method === "GET") {
@@ -569,6 +635,13 @@ export async function driftRoutes(req: Request, path: string, method: string): P
     if (filePath !== null && (filePath.length === 0 || filePath.length > 256 || !filePath.startsWith("/"))) {
       return invalid("filePath must be an absolute path of at most 256 characters");
     }
+    const pathContains = params.get("pathContains");
+    if (
+      pathContains !== null &&
+      (pathContains.length === 0 || pathContains.length > 256 || /[\u0000-\u001f\u007f]/.test(pathContains))
+    ) {
+      return invalid("pathContains must be a non-empty substring of at most 256 printable characters");
+    }
     let limit = 100;
     const limitParam = params.get("limit");
     if (limitParam !== null) {
@@ -578,18 +651,15 @@ export async function driftRoutes(req: Request, path: string, method: string): P
       }
       limit = parsed;
     }
-    // Filters are strictly validated above; each branch keeps parameters bound.
+    // Filters are strictly validated above; every value stays bound as a SQL parameter.
+    const pathPattern = pathContains !== null ? `%${escapeLikePattern(pathContains)}%` : null;
     const order = `ORDER BY s.captured_at DESC,s.id DESC LIMIT ${limit}`;
-    let rows: TimelineRow[];
-    if (agentId !== null && filePath !== null) {
-      rows = await db<TimelineRow[]>`SELECT ${db.unsafe(TIMELINE_COLUMNS)} ${db.unsafe(TIMELINE_FROM)} WHERE s.agent_id=${agentId} AND s.file_path=${filePath} ${db.unsafe(order)}`;
-    } else if (agentId !== null) {
-      rows = await db<TimelineRow[]>`SELECT ${db.unsafe(TIMELINE_COLUMNS)} ${db.unsafe(TIMELINE_FROM)} WHERE s.agent_id=${agentId} ${db.unsafe(order)}`;
-    } else if (filePath !== null) {
-      rows = await db<TimelineRow[]>`SELECT ${db.unsafe(TIMELINE_COLUMNS)} ${db.unsafe(TIMELINE_FROM)} WHERE s.file_path=${filePath} ${db.unsafe(order)}`;
-    } else {
-      rows = await db<TimelineRow[]>`SELECT ${db.unsafe(TIMELINE_COLUMNS)} ${db.unsafe(TIMELINE_FROM)} ${db.unsafe(order)}`;
-    }
+    const rows = await db<TimelineRow[]>`
+      SELECT ${db.unsafe(TIMELINE_COLUMNS)} ${db.unsafe(TIMELINE_FROM)}
+      WHERE (${agentId}::uuid IS NULL OR s.agent_id = ${agentId}::uuid)
+        AND (${filePath}::text IS NULL OR s.file_path = ${filePath}::text)
+        AND (${pathPattern}::text IS NULL OR s.file_path ILIKE ${pathPattern}::text ESCAPE '\\')
+      ${db.unsafe(order)}`;
     const response: DriftTimelineResponse = {
       entries: rows.map(toTimelineEntry),
       limit,

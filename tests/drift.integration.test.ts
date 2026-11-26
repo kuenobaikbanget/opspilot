@@ -112,6 +112,9 @@ integration("config_snapshot WS ingestion produces a redacted drift timeline, se
       expect((await api("/api/drift?limit=0")).status).toBe(400);
       expect((await api("/api/drift?limit=101")).status).toBe(400);
       expect((await api("/api/drift?filePath=relative/path")).status).toBe(400);
+      expect((await api("/api/drift?pathContains=")).status).toBe(400);
+      expect((await api(`/api/drift?pathContains=${"a".repeat(257)}`)).status).toBe(400);
+      expect((await api("/api/drift?pathContains=%00bad")).status).toBe(400);
 
       // --- WS: hello negotiates config_diffs; telemetry + config_snapshot drive the timeline ---
       const socket = await openConnection(socketUrl, identity);
@@ -224,6 +227,21 @@ integration("config_snapshot WS ingestion produces a redacted drift timeline, se
         const hostFiltered = await api(`/api/drift?agentId=${agentId}`);
         expect((await hostFiltered.json() as { entries: unknown[] }).entries.length).toBe(3); // includes the legacy row
 
+        // --- Substring pathContains filter (case-insensitive, LIKE wildcards escaped) ---
+        const bySubstr = await api("/api/drift?pathContains=SETTINGS.env");
+        expect(bySubstr.status).toBe(200);
+        const substrEntries = (await bySubstr.json() as { entries: { file_path: string }[] }).entries;
+        expect(substrEntries).toHaveLength(2);
+        expect(substrEntries.every((e) => e.file_path === path)).toBe(true);
+
+        // `%` and `_` must match literally, not as SQL LIKE wildcards.
+        const wildcardPct = await api("/api/drift?pathContains=%25");
+        expect(wildcardPct.status).toBe(200);
+        expect((await wildcardPct.json() as { entries: unknown[] }).entries).toHaveLength(0);
+        const wildcardUnder = await api("/api/drift?pathContains=settings_env");
+        expect(wildcardUnder.status).toBe(200);
+        expect((await wildcardUnder.json() as { entries: unknown[] }).entries).toHaveLength(0);
+
         const detailResponse = await api(`/api/drift/${latest.id}`);
         expect(detailResponse.status).toBe(200);
         const detail = await detailResponse.json() as {
@@ -248,9 +266,90 @@ integration("config_snapshot WS ingestion produces a redacted drift timeline, se
         expect(incidentResponse.status).toBe(200);
         const incidentDetail = await incidentResponse.json() as { evidence: { source: string; content: string }[] };
         const configDiffEvidence = incidentDetail.evidence.filter((e) => e.source === "config_diff");
-        expect(configDiffEvidence.length).toBeGreaterThanOrEqual(1);
+        expect(configDiffEvidence).toHaveLength(1);
         expect(configDiffEvidence[0].content).toContain("orrelation is not causation");
         expect(JSON.stringify(configDiffEvidence)).not.toContain("hunter3");
+
+        // --- Reconnect resend of unchanged hash must NOT duplicate config_diff evidence ---
+        socket.send(snapshot(hash2, v2));
+        await Bun.sleep(250);
+        const afterReconnect = await (await api(`/api/incidents/${incident.id}`)).json() as { evidence: { source: string }[] };
+        expect(afterReconnect.evidence.filter((e) => e.source === "config_diff")).toHaveLength(1);
+
+        // --- Revert (A -> B -> A) arriving as config_snapshot BEFORE telemetry ---
+        // Must insert a NEW t3 row pointing to t2 (B), leave historical t1 (A) untouched,
+        // create a new config_drift incident with config_diff evidence, and not duplicate on telemetry.
+        socket.send(snapshot(hash1, v1));
+        const revertRows = await eventually(async () => {
+          return db<{ id: string; checksum_sha256: string; previous_snapshot_id: string | null; diff_status: string; incident_id: string | null }[]>`
+            SELECT id,checksum_sha256,previous_snapshot_id,diff_status,incident_id
+            FROM config_snapshots WHERE agent_id=${agentId} AND file_path=${path}
+            ORDER BY captured_at DESC,id DESC`;
+        }, (rows) => rows.length === 3 && rows[0].diff_status === "diff_available", "revert snapshot row");
+        const [t3, t2, t1] = revertRows;
+        expect(t3.checksum_sha256).toBe(hash1);
+        expect(t3.previous_snapshot_id).toBe(t2.id);
+        expect(t2.checksum_sha256).toBe(hash2);
+        expect(t2.previous_snapshot_id).toBe(t1.id);
+        expect(t1.checksum_sha256).toBe(hash1);
+        expect(t1.previous_snapshot_id).toBeNull();
+        expect(t3.incident_id).not.toBeNull();
+        expect(t3.incident_id).not.toBe(incident.id);
+
+        // Subsequent telemetry carrying the reverted hash must NOT add a duplicate row or incident.
+        socket.send(telemetry(hash1));
+        await Bun.sleep(250);
+        const afterRevertTelemetry = await db<{ id: string }[]>`
+          SELECT id FROM config_snapshots WHERE agent_id=${agentId} AND file_path=${path}`;
+        expect(afterRevertTelemetry).toHaveLength(3);
+        const revertIncidents = await db<{ id: string }[]>`
+          SELECT id FROM incidents WHERE agent_id=${agentId} AND category='config_drift' AND title=${`Configuration changed: ${path}`}`;
+        expect(revertIncidents).toHaveLength(2);
+        const revertIncidentDetail = await (await api(`/api/incidents/${t3.incident_id}`)).json() as { evidence: { source: string }[] };
+        expect(revertIncidentDetail.evidence.filter((e) => e.source === "config_diff")).toHaveLength(1);
+
+        // --- Snapshot-first race on a brand-new change (A -> C before telemetry) ---
+        const racePath = "/etc/app/race.env";
+        const r1 = "MODE=v1\n";
+        const r2 = "MODE=v2\n";
+        const rHash1 = sha(r1);
+        const rHash2 = sha(r2);
+        const raceSnapshot = (checksum: string, content: string) => JSON.stringify({
+          type: "config_snapshot", version: 1, observedAt: new Date().toISOString(),
+          filePath: racePath, checksumSha256: checksum, status: "redacted_snapshot",
+          format: "dotenv", contentRedacted: content, truncated: false, redactionCount: 0,
+        });
+        const raceTelemetry = (checksum: string) => JSON.stringify({
+          type: "telemetry", timestamp: new Date().toISOString(),
+          cpuPercent: 10, memoryPercent: 20, diskPercent: 30,
+          networkRxBytes: 0, networkTxBytes: 0, uptimeSeconds: 6,
+          configHashes: { [racePath]: checksum },
+        });
+
+        // Baseline via snapshot first (no incident should be created for initial baseline).
+        socket.send(raceSnapshot(rHash1, r1));
+        await eventually(async () => {
+          return db<{ id: string }[]>`SELECT id FROM config_snapshots WHERE agent_id=${agentId} AND file_path=${racePath}`;
+        }, (rows) => rows.length === 1, "race baseline snapshot");
+        expect(await db`SELECT id FROM incidents WHERE agent_id=${agentId} AND title=${`Configuration changed: ${racePath}`}`).toHaveLength(0);
+
+        // Change r1 -> r2 arrives as config_snapshot BEFORE telemetry: must open incident & attach diff.
+        socket.send(raceSnapshot(rHash2, r2));
+        const raceRow = await eventually(async () => {
+          const rows = await db<{ id: string; diff_status: string; incident_id: string | null }[]>`
+            SELECT id,diff_status,incident_id FROM config_snapshots
+            WHERE agent_id=${agentId} AND file_path=${racePath} AND checksum_sha256=${rHash2}`;
+          return rows[0] ?? null;
+        }, (row) => row !== null && row.diff_status === "diff_available" && row.incident_id !== null, "snapshot-first config_drift incident");
+
+        // Telemetry arrives afterwards with rHash2: must not duplicate row or incident.
+        socket.send(raceTelemetry(rHash2));
+        await Bun.sleep(250);
+        expect(await db`SELECT id FROM config_snapshots WHERE agent_id=${agentId} AND file_path=${racePath}`).toHaveLength(2);
+        expect(await db`SELECT id FROM incidents WHERE agent_id=${agentId} AND title=${`Configuration changed: ${racePath}`}`).toHaveLength(1);
+        const raceIncident = await (await api(`/api/incidents/${raceRow.incident_id}`)).json() as { evidence: { source: string }[] };
+        expect(raceIncident.evidence.filter((e) => e.source === "config_hash")).toHaveLength(1);
+        expect(raceIncident.evidence.filter((e) => e.source === "config_diff")).toHaveLength(1);
       } finally {
         socket.close();
       }

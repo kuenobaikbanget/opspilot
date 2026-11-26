@@ -77,11 +77,14 @@ export function reciprocalRankFusion<T extends { id: string; created_at: string 
     ? options.limit
     : DEFAULT_LIMIT;
 
+  const normalizeTimestamp = (value: string | Date): string =>
+    value instanceof Date ? (Number.isNaN(value.getTime()) ? "" : value.toISOString()) : value;
+
   const byId = new Map<string, FusedItem<T>>();
-  const ensure = (id: string, created_at: string, base: T): FusedItem<T> => {
+  const ensure = (id: string, created_at: string | Date, base: T): FusedItem<T> => {
     let item = byId.get(id);
     if (!item) {
-      item = { ...base, id, created_at, retrieval_method: "hybrid_rrf", fts_score: null, vector_score: null, hybrid_score: 0 };
+      item = { ...base, id, created_at: normalizeTimestamp(created_at), retrieval_method: "hybrid_rrf", fts_score: null, vector_score: null, hybrid_score: 0 };
       byId.set(id, item);
     }
     return item;

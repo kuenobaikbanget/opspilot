@@ -5,10 +5,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func writeFile(t *testing.T, dir, name, content string) string {
@@ -245,11 +250,17 @@ func keysOf(m map[string]any) []string {
 	return out
 }
 
+func negotiatedCaps(names ...string) *capabilitySet {
+	caps := newCapabilitySet(names...)
+	caps.applyAck(helloAck{Type: "hello_ack", ProtocolVersion: protocolVersion, Capabilities: names})
+	return caps
+}
+
 func TestDriftTrackerSendsOnConnectThenOnlyOnChange(t *testing.T) {
 	dir := t.TempDir()
 	p := writeFile(t, dir, "app.env", "A=1\n")
 	cfg := config{ConfigDiffs: true, ConfigFiles: []string{p, "relative.env", p}} // dup + relative must be ignored
-	caps := newCapabilitySet("telemetry", "config_diffs")
+	caps := negotiatedCaps("telemetry", "config_diffs")
 	sender := &recordingSender{}
 	d := newDriftTracker()
 
@@ -275,15 +286,164 @@ func TestDriftTrackerGatedOnFlagAndCapability(t *testing.T) {
 	d := newDriftTracker()
 
 	// Flag off: nothing is sent even with the capability negotiated.
-	d.sync(sender, config{ConfigDiffs: false, ConfigFiles: []string{p}}, newCapabilitySet("config_diffs"))
+	d.sync(sender, config{ConfigDiffs: false, ConfigFiles: []string{p}}, negotiatedCaps("config_diffs"))
 	if len(sender.frames) != 0 {
 		t.Fatal("OPSPILOT_CONFIG_DIFFS=false must disable snapshots entirely")
 	}
 	// Capability not negotiated: nothing is sent even with the flag on.
-	d.sync(sender, config{ConfigDiffs: true, ConfigFiles: []string{p}}, newCapabilitySet("telemetry"))
+	d.sync(sender, config{ConfigDiffs: true, ConfigFiles: []string{p}}, negotiatedCaps("telemetry"))
 	if len(sender.frames) != 0 {
 		t.Fatal("snapshots require the negotiated config_diffs capability")
 	}
+	// Advertised but not yet acked: nothing is sent until hello_ack confirms config_diffs.
+	unacked := newCapabilitySet("telemetry", "config_diffs")
+	if unacked.has("config_diffs") {
+		t.Fatal("config_diffs must remain disabled until hello_ack confirms it")
+	}
+	if !unacked.has("telemetry") {
+		t.Fatal("base capabilities should remain enabled prior to hello_ack")
+	}
+	d.sync(sender, config{ConfigDiffs: true, ConfigFiles: []string{p}}, unacked)
+	if len(sender.frames) != 0 {
+		t.Fatal("snapshots must not be sent before hello_ack")
+	}
+	// Ack omitting config_diffs keeps it disabled.
+	unacked.applyAck(helloAck{Type: "hello_ack", ProtocolVersion: protocolVersion, Capabilities: []string{"telemetry"}})
+	d.sync(sender, config{ConfigDiffs: true, ConfigFiles: []string{p}}, unacked)
+	if len(sender.frames) != 0 {
+		t.Fatal("snapshots must not be sent when hello_ack omits config_diffs")
+	}
+	// Ack including config_diffs enables snapshot sync.
+	unacked.applyAck(helloAck{Type: "hello_ack", ProtocolVersion: protocolVersion, Capabilities: []string{"telemetry", "config_diffs"}})
+	d.sync(sender, config{ConfigDiffs: true, ConfigFiles: []string{p}}, unacked)
+	if len(sender.frames) != 1 {
+		t.Fatalf("expected 1 snapshot after hello_ack negotiated config_diffs, got %d", len(sender.frames))
+	}
+}
+
+func TestRunConnectionWaitsForHelloAckBeforeConfigSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "app.env", "WORKERS=4\n")
+	cfg := config{
+		Interval:    time.Hour,
+		ConfigDiffs: true,
+		ConfigFiles: []string{p},
+		ProcRoot:    "/nonexistent-proc",
+		DiskPath:    dir,
+	}
+
+	runCase := func(t *testing.T, ackCaps []string, expectSnapshot bool) {
+		t.Helper()
+		received := make(chan string, 32)
+		sendAck := make(chan struct{}, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer ws.Close()
+			go func() {
+				<-sendAck
+				_ = ws.WriteJSON(helloAck{
+					Type:            "hello_ack",
+					ProtocolVersion: protocolVersion,
+					Capabilities:    ackCaps,
+				})
+			}()
+			for {
+				var msg map[string]any
+				if err := ws.ReadJSON(&msg); err != nil {
+					return
+				}
+				if typ, ok := msg["type"].(string); ok {
+					received <- typ
+				}
+			}
+		}))
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runConnection(ws, cfg, newCPUSampler(cfg.ProcRoot), nil, nil)
+		}()
+		defer func() {
+			ws.Close()
+			<-done
+		}()
+
+		// Wait for hello and ensure no config_snapshot arrives before hello_ack is sent.
+		sawHello := false
+		deadline := time.After(2 * time.Second)
+		for !sawHello {
+			select {
+			case typ := <-received:
+				if typ == "config_snapshot" {
+					t.Fatal("config_snapshot sent before hello_ack")
+				}
+				if typ == "hello" {
+					sawHello = true
+				}
+			case <-deadline:
+				t.Fatal("timed out waiting for hello")
+			}
+		}
+
+		// Hold hello_ack briefly and verify no config_snapshot slips through.
+		preAck := time.After(80 * time.Millisecond)
+	preAckLoop:
+		for {
+			select {
+			case typ := <-received:
+				if typ == "config_snapshot" {
+					t.Fatal("config_snapshot sent before hello_ack was delivered")
+				}
+			case <-preAck:
+				break preAckLoop
+			}
+		}
+
+		sendAck <- struct{}{}
+
+		if expectSnapshot {
+			postAck := time.After(2 * time.Second)
+			for {
+				select {
+				case typ := <-received:
+					if typ == "config_snapshot" {
+						return
+					}
+				case <-postAck:
+					t.Fatal("expected config_snapshot after hello_ack negotiated config_diffs")
+				}
+			}
+		}
+
+		postAck := time.After(120 * time.Millisecond)
+		for {
+			select {
+			case typ := <-received:
+				if typ == "config_snapshot" {
+					t.Fatal("config_snapshot sent even though hello_ack omitted config_diffs")
+				}
+			case <-postAck:
+				return
+			}
+		}
+	}
+
+	t.Run("omitted from hello_ack", func(t *testing.T) {
+		runCase(t, []string{"telemetry"}, false)
+	})
+	t.Run("negotiated in hello_ack", func(t *testing.T) {
+		runCase(t, []string{"telemetry", "config_diffs"}, true)
+	})
 }
 
 func TestDriftTrackerCapsAt20Files(t *testing.T) {
@@ -293,7 +453,7 @@ func TestDriftTrackerCapsAt20Files(t *testing.T) {
 		paths = append(paths, writeFile(t, dir, fmt.Sprintf("file%02d.env", i), "A=1\n"))
 	}
 	cfg := config{ConfigDiffs: true, ConfigFiles: paths}
-	caps := newCapabilitySet("config_diffs")
+	caps := negotiatedCaps("config_diffs")
 	sender := &recordingSender{}
 	newDriftTracker().sync(sender, cfg, caps)
 	if len(sender.frames) != maxSnapshotFiles {
