@@ -205,7 +205,7 @@ function NetworkColumns({ rows, top, latestLabel }: {
 
 const hasReading = (value: number | null): value is number => value != null && Number.isFinite(value);
 
-function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resource: HistoryMode }) {
+function ResourceHistory({ samples, resource, now, staleAfterSeconds }: { samples: HostMetric[]; resource: HistoryMode; now: number; staleAfterSeconds: number }) {
   const instructionsId = useId();
   const marks = useRef<SVGGElement>(null);
   const [cursorTime, setCursorTime] = useState<string | null>(null);
@@ -259,6 +259,14 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
     const gap = rows[i].timestamp - rows[i - 1].timestamp;
     if (gap > 0) interval = Math.min(interval, gap);
   }
+  // Median sampling interval drives gap detection: a missing stretch well beyond the
+  // usual cadence is rendered as an explicit gap instead of silently stretched bars.
+  const positiveGaps = rows.slice(1).map((row, i) => row.timestamp - rows[i].timestamp).filter(gap => gap > 0).sort((a, b) => a - b);
+  const medianInterval = positiveGaps.length ? positiveGaps[Math.floor(positiveGaps.length / 2)] : interval;
+  const gapThreshold = Math.max(medianInterval * 3, 60_000);
+  const gaps = rows.slice(1).map((row, i) => ({ row, index: i + 1 })).filter(({ row, index }) => row.timestamp - rows[index - 1].timestamp > gapThreshold);
+  const staleBefore = now - staleAfterSeconds * 1000;
+  const lastStale = last.timestamp < staleBefore;
   const barWidth = Math.min(24, duration ? (width * interval) / duration * 0.72 : 24);
   const measuredSamples = rows.filter(({ sample }) => series.some(({ key }) => hasReading(sample[key]))).length;
   const time = (s: string) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -308,7 +316,11 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
     <figure className="resource-history">
       <figcaption>
         <h3>{title}</h3>
-        <span>{duration ? `${Math.round(duration / 60000)} min` : "Single sample"} · Raw samples</span>
+        <span>
+          {duration ? `${Math.round(duration / 60000)} min` : "Single sample"}
+          {" · "}{lastStale ? `Latest sample ${age(last.sample.sampled_at, now)} (historical)` : "Live"}
+          {gaps.length ? ` · ${gaps.length} gap${gaps.length === 1 ? "" : "s"} marked` : ""}
+        </span>
       </figcaption>
       <p className="history-instructions tiny" id={instructionsId}>
         {rows.length > 1 ? "Hover or tap a bar, or use arrow keys on the chart." : "Hover or tap the bar to inspect its sample."}
@@ -337,7 +349,7 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
         <svg
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
           role="img"
-          aria-label={`${title}, 0 to ${max} ${stacked ? "percentage points" : "percent"}. ${measuredSamples} samples with measurements from ${stamp(first.sample.sampled_at)} to ${stamp(last.sample.sampled_at)}. Each column is one observation; missing intervals remain empty.`}
+          aria-label={`${title}, 0 to ${max} ${stacked ? "percentage points" : "percent"}. ${measuredSamples} samples with measurements from ${stamp(first.sample.sampled_at)} to ${stamp(last.sample.sampled_at)}. Each column is one observation; missing intervals remain empty.${gaps.length ? ` ${gaps.length} collection gap${gaps.length === 1 ? "" : "s"} beyond the usual interval are marked with dividers.` : ""}${lastStale ? " The latest sample is older than the freshness window and historical." : " The latest sample is within the freshness window."}`}
           onPointerMove={event => {
             if (event.pointerType === "mouse") inspectPoint(event.currentTarget, event.clientX, event.clientY, true);
           }}
@@ -379,7 +391,7 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
                     width={barWidth}
                     height={height * value / max}
                     rx={stacked ? undefined : 1.5}
-                    className="chart-bar"
+                    className={timestamp < staleBefore ? "chart-bar chart-bar--stale" : "chart-bar"}
                     data-series={key}
                   />
                 );
@@ -402,6 +414,10 @@ function ResourceHistory({ samples, resource }: { samples: HostMetric[]; resourc
                   )}
                 </g>
               );
+            })}
+            {gaps.map(({ row, index: rowIndex }) => {
+              const gapX = (x(rows[rowIndex - 1].timestamp) + x(row.timestamp)) / 2;
+              return <line key={`gap-${rowIndex}`} x1={gapX} x2={gapX} y1={top} y2={baseline} className="chart-gap" aria-hidden="true" />;
             })}
           </g>
           {measured === 0 && <line x1={columnX} x2={columnX} y1={top} y2={baseline} className="chart-cursor" />}
@@ -833,7 +849,7 @@ export function HostWorkspace({
                   <div id="host-history-chart">
                     {history?.id === host.id ? (
                       historyMode === "resource" ? (
-                        <ResourceHistory key={host.id} samples={history.samples} resource={resource} />
+                        <ResourceHistory key={host.id} samples={history.samples} resource={resource} now={now} staleAfterSeconds={fleet?.stale_after_seconds ?? 60} />
                       ) : (
                         <NetworkHistory
                           key={host.id}
@@ -880,7 +896,9 @@ export function HostWorkspace({
                     <dt>Host ID</dt>
                     <dd>{host.id}</dd>
                     <dt>Agent version</dt>
-                    <dd>{host.version || "Unavailable"}</dd>
+                    <dd>{host.version || "Unavailable"}{host.protocol_version ? ` · protocol v${host.protocol_version}` : " · legacy (no hello)"}</dd>
+                    <dt>Negotiated capabilities</dt>
+                    <dd>{host.capabilities.length ? host.capabilities.join(", ") : "None reported"}</dd>
                     <dt>Last agent contact</dt>
                     <dd>
                       {stamp(host.last_seen_at)} · {age(host.last_seen_at, now)}

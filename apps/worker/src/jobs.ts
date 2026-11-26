@@ -1,6 +1,5 @@
 import type { SQL } from "bun";
 import { generateDiagnosis, type ProviderConnection } from "@opspilot/ai";
-import { probeEndpointTarget } from "@opspilot/ai/endpoint-probe";
 import { decryptProviderKey, ProviderCredentialError } from "@opspilot/ai/credentials";
 import { ProviderError, type ProviderErrorCode } from "@opspilot/ai/provider-http";
 import type { ProviderProtocol } from "@opspilot/contracts";
@@ -251,23 +250,57 @@ export async function runOneProviderTest(
   return true;
 }
 
-/** Probes at most one due endpoint monitor outside any DB transaction. */
-export async function runOneEndpointProbe(db: SQL): Promise<boolean> {
-  const rows = await db<{ id: string; target_url: string; expected_status: number }[]>`
-    SELECT id,target_url,expected_status
-    FROM endpoint_monitors
-    WHERE last_checked_at IS NULL OR last_checked_at <= NOW() - INTERVAL '15 seconds'
-    ORDER BY last_checked_at NULLS FIRST, created_at
-    LIMIT 1`;
-  const monitor = rows[0];
-  if (!monitor) return false;
-  const result = await probeEndpointTarget(monitor.target_url, monitor.expected_status);
-  await db`UPDATE endpoint_monitors SET
-      last_status=${result.status},
-      last_http_status=${result.httpStatus},
-      last_latency_ms=${result.latencyMs},
-      last_error=${result.error},
-      last_checked_at=NOW()
-    WHERE id=${monitor.id}`;
+const HOUR_MS = 3_600_000;
+const RETENTION_WINDOW_MS = 6 * HOUR_MS;
+
+function retentionConfig() {
+  const raw = Number(process.env.METRIC_RAW_RETENTION_HOURS || 168);
+  const rollup = Number(process.env.METRIC_ROLLUP_RETENTION_DAYS || 90);
+  return {
+    rawHours: Number.isFinite(raw) && raw >= 1 && raw <= 8760 ? Math.trunc(raw) : 168,
+    rollupDays: Number.isFinite(rollup) && rollup >= 1 && rollup <= 3650 ? Math.trunc(rollup) : 90,
+  };
+}
+
+/**
+ * Bounded retention pass: expires old hourly rollups and spent enrollment tokens, then
+ * rolls up and deletes one 6-hour window of raw samples that left the raw retention
+ * window. Each call does at most one window so the poll loop stays bounded.
+ */
+export async function runMetricRetention(db: SQL, now: Date = new Date()): Promise<boolean> {
+  const { rawHours, rollupDays } = retentionConfig();
+
+  await db`DELETE FROM metric_samples_hourly WHERE hour < NOW() - make_interval(days => ${rollupDays})`;
+  await db`DELETE FROM enrollment_tokens
+    WHERE (used_at IS NOT NULL AND used_at < NOW() - INTERVAL '24 hours')
+       OR (used_at IS NULL AND expires_at < NOW() - INTERVAL '24 hours')`;
+
+  // Truncate to a full hour boundary so only complete hours are rolled up and deleted.
+  const horizon = new Date(Math.floor((now.getTime() - rawHours * HOUR_MS) / HOUR_MS) * HOUR_MS);
+  const [oldest] =
+    await db<{ min: Date | null }[]>`SELECT MIN(sampled_at) AS min FROM metric_samples WHERE sampled_at < ${horizon}`;
+  const min = oldest?.min;
+  if (!min) return false;
+
+  const windowStart = new Date(Math.floor(min.getTime() / RETENTION_WINDOW_MS) * RETENTION_WINDOW_MS);
+  const windowEnd = new Date(Math.min(windowStart.getTime() + RETENTION_WINDOW_MS, horizon.getTime()));
+  await db.begin(async (tx) => {
+    await tx`INSERT INTO metric_samples_hourly(
+        agent_id,hour,sample_count,
+        cpu_min,cpu_max,cpu_avg,memory_min,memory_max,memory_avg,disk_min,disk_max,disk_avg,
+        network_rx_bytes,network_tx_bytes)
+      SELECT agent_id, date_trunc('hour', sampled_at), COUNT(*)::int,
+        MIN(cpu_percent), MAX(cpu_percent), AVG(cpu_percent),
+        MIN(memory_percent), MAX(memory_percent), AVG(memory_percent),
+        MIN(disk_percent), MAX(disk_percent), AVG(disk_percent),
+        (array_agg(network_rx_bytes ORDER BY sampled_at DESC, id DESC))[1],
+        (array_agg(network_tx_bytes ORDER BY sampled_at DESC, id DESC))[1]
+      FROM metric_samples
+      WHERE sampled_at >= ${windowStart} AND sampled_at < ${windowEnd} AND sampled_at < ${horizon}
+      GROUP BY agent_id, date_trunc('hour', sampled_at)
+      ON CONFLICT (agent_id, hour) DO NOTHING`;
+    await tx`DELETE FROM metric_samples
+      WHERE sampled_at >= ${windowStart} AND sampled_at < ${windowEnd} AND sampled_at < ${horizon}`;
+  });
   return true;
 }

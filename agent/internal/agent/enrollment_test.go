@@ -16,12 +16,13 @@ func TestEnrollmentPersistsAndReusesIdentity(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		var payload map[string]string
+		var payload map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Error(err)
 		}
-		if r.Method != "POST" || r.URL.Path != "/api/agents/enroll" || len(payload) != 3 || payload["token"] != "fixture-token" || payload["hostname"] == "" || payload["version"] == "" {
-			t.Errorf("incompatible enrollment payload")
+		caps, _ := payload["capabilities"].([]any)
+		if r.Method != "POST" || r.URL.Path != "/api/agents/enroll" || len(payload) != 5 || payload["token"] != "fixture-token" || payload["hostname"] == "" || payload["version"] == "" || payload["protocolVersion"] != float64(protocolVersion) || len(caps) != len(advertisedCapabilities) {
+			t.Errorf("incompatible enrollment payload: %v", payload)
 		}
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(testIdentity)

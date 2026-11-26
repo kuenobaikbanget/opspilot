@@ -5,6 +5,8 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 
 import { AsciiLoading } from "../../../components/ascii-card-reveal";
 import { Badge, Button, ButtonLink, Field, Input, Notice, Select } from "../../../components/ui";
 import { WorkspaceIcon } from "../../../components/workspace-shell";
+import { endpointBadgeText, endpointBadgeTone, endpointOutcome, endpointStatus, formatTimestamp } from "../../../lib/endpoint-status";
+import { targetUrlProblem } from "../../../lib/endpoint-target";
 import { api } from "../../../lib/api";
 import { useWorkspace } from "../workspace";
 import { WorkspaceNotices } from "../workspace-header";
@@ -32,6 +34,7 @@ export default function NewMonitorPage() {
   const [checkError, setCheckError] = useState("");
   const checkRequest = useRef<AbortController | null>(null);
   const checkGeneration = useRef(0);
+  const createdStatus = created ? endpointStatus(created, Date.now()) : null;
 
   const hosts = fleet?.hosts ?? [];
 
@@ -88,6 +91,11 @@ export default function NewMonitorPage() {
     }
     if (!trimmedUrl) {
       setSubmitError("Target URL is required.");
+      return;
+    }
+    const urlProblem = targetUrlProblem(trimmedUrl);
+    if (urlProblem) {
+      setSubmitError(urlProblem);
       return;
     }
     if (!Number.isInteger(parsedStatus) || parsedStatus < 100 || parsedStatus > 599) {
@@ -232,6 +240,10 @@ export default function NewMonitorPage() {
                     maxLength={80}
                   />
                 </Field>
+
+                <Field id={`${id}-probe`} label="Probe location" hint="Probes run server-side from the Hub. Choosing other probe locations is not available yet.">
+                  <Input id={`${id}-probe`} value="hub-local" readOnly aria-readonly="true" />
+                </Field>
               </div>
 
               <div className="onboarding-actions">
@@ -259,6 +271,14 @@ export default function NewMonitorPage() {
                 <div><dt>Target URL</dt><dd>{created.target_url}</dd></div>
                 <div><dt>Expected HTTP</dt><dd>{created.expected_status}</dd></div>
                 <div><dt>Probe location</dt><dd>{created.probe_location}</dd></div>
+                <div><dt>Observed response</dt><dd>{created.last_status === "unknown" ? "No check result yet" : endpointOutcome(created)}</dd></div>
+                <div>
+                  <dt>Last checked</dt>
+                  <dd>
+                    {created.last_checked_at ? <time dateTime={created.last_checked_at}>{formatTimestamp(created.last_checked_at)}</time> : "Not checked yet"}
+                    {createdStatus === "stale" ? " · stale" : createdStatus === "pending" ? " · no usable result" : " · fresh"}
+                  </dd>
+                </div>
               </dl>
 
               {checkError && <Notice tone="danger" role="alert">{checkError}</Notice>}
@@ -267,12 +287,8 @@ export default function NewMonitorPage() {
                 <AsciiLoading label="Running initial endpoint check…" lines={2} widths={["68%", "44%"]} />
               ) : (
                 <div className="onboarding-inline-actions" role="status">
-                  <Badge tone={created.last_status === "up" ? "success" : created.last_status === "down" ? "danger" : "neutral"} dot>
-                    {created.last_status === "up"
-                      ? `Up · HTTP ${created.last_http_status ?? created.expected_status}${created.last_latency_ms !== null ? ` · ${created.last_latency_ms} ms` : ""}`
-                      : created.last_status === "down"
-                        ? `Down · ${created.last_http_status !== null ? `HTTP ${created.last_http_status}` : created.last_error ?? "unreachable"}`
-                        : "Pending"}
+                  <Badge tone={endpointBadgeTone(createdStatus ?? "pending")} dot>
+                    {endpointBadgeText(created, createdStatus ?? "pending")}
                   </Badge>
                   <Button size="sm" onClick={() => void runCheck(created.id)}>Check again</Button>
                 </div>

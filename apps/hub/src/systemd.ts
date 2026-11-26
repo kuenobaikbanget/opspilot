@@ -20,8 +20,8 @@ export async function storeSystemdReport(agentId: string, sessionId: string, rep
     if (report.status === "observed") {
       await tx`INSERT INTO host_services(agent_id,name,runtime,state,source,observed_at)
         VALUES(${agentId},${report.unit},'systemd',${report.state},${source},${report.observedAt})
-        ON CONFLICT (agent_id,name) DO UPDATE SET runtime=excluded.runtime,state=excluded.state,
-          source=excluded.source,observed_at=excluded.observed_at`;
+        ON CONFLICT (agent_id,source,runtime,name) DO UPDATE SET state=excluded.state,
+          observed_at=excluded.observed_at`;
     }
   });
 }
@@ -52,7 +52,7 @@ export async function readSystemdStatus(agentId: string, getSession: (id: string
   const report = row.status && row.reported_at ? {
     status: row.status,
     observed_at: row.reported_at.toISOString(),
-    current: row.session_id === session && now.getTime() - row.reported_at.getTime() <= SYSTEMD_STALE_AFTER_SECONDS * 1000,
+    current: reportIsCurrent(row.session_id, session, row.reported_at, SYSTEMD_STALE_AFTER_SECONDS, now),
   } : null;
   return {
     agent_id: row.agent_id,
@@ -70,4 +70,16 @@ export async function readSystemdStatus(agentId: string, getSession: (id: string
       freshness: report?.current && report.status === "observed" ? "fresh" : "stale",
     } : null,
   };
+}
+
+/** True when a stored report came from the agent's current socket and is inside the stale window. */
+export function reportIsCurrent(
+  sessionId: string | null,
+  currentSession: string | undefined,
+  observedAt: Date,
+  staleAfterSeconds: number,
+  now = new Date(),
+): boolean {
+  return sessionId !== null && sessionId === currentSession &&
+    now.getTime() - observedAt.getTime() <= staleAfterSeconds * 1000;
 }

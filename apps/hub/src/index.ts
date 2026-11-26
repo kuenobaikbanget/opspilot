@@ -1,11 +1,13 @@
 import type {
+  AlertCondition,
   DiagnosticTool,
   Host,
   HostList,
   HostMetric,
+  HostThresholds,
   ProviderProtocol,
 } from "@opspilot/contracts";
-import { parseInvestigateRequest } from "@opspilot/contracts";
+import { parseEnrollRequest, parseInvestigateRequest, parseThresholdsUpdate } from "@opspilot/contracts";
 import { decryptProviderKey, ProviderCredentialError, readProviderMasterKey } from "@opspilot/ai/credentials";
 import {
   agentOnline,
@@ -27,7 +29,7 @@ import {
   sessionCookie,
 } from "./auth";
 import { audit, db } from "./db";
-import { createIncident, hostThresholds } from "./incidents";
+import { createIncident, effectiveThresholds, hostThresholds } from "./incidents";
 import { isDevLoopbackInstallEnabled, loadHttpsAgentInstaller, readAgentInstallConfig } from "./agent-install";
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
@@ -123,7 +125,7 @@ async function router(req: Request): Promise<Response> {
     const limit = 100;
     const [fleet, rows] = await Promise.all([
       db<{ id: string }[]>`SELECT id FROM agents`,
-      db<HostRow[]>`SELECT a.id,a.hostname,a.version,a.last_seen_at,a.created_at, m.cpu_percent,m.memory_percent,m.disk_percent, m.sampled_at
+      db<HostRow[]>`SELECT a.id,a.hostname,a.version,a.protocol_version,a.capabilities,a.last_seen_at,a.created_at, m.cpu_percent,m.memory_percent,m.disk_percent, m.sampled_at
         FROM agents a LEFT JOIN LATERAL (SELECT cpu_percent,memory_percent,disk_percent,sampled_at FROM metric_samples WHERE agent_id=a.id ORDER BY sampled_at DESC LIMIT 1) m ON true ORDER BY a.created_at DESC,a.id LIMIT ${limit}`,
     ]);
     const hosts: Host[] = rows.map((row) => ({
@@ -158,13 +160,141 @@ async function router(req: Request): Promise<Response> {
     if (!host.length) {
       return invalid("Host not found", 404);
     }
-    const rows =
-      await db<HostMetricRow[]>`SELECT sampled_at,cpu_percent,memory_percent,disk_percent,network_rx_bytes::double precision AS network_rx_bytes,network_tx_bytes::double precision AS network_tx_bytes FROM metric_samples WHERE agent_id=${match[1]} ORDER BY sampled_at DESC LIMIT 120`;
+    const params = new URL(req.url).searchParams;
+    const resolutionParam = params.get("resolution") ?? "auto";
+    if (!["auto", "raw", "hourly"].includes(resolutionParam)) {
+      return invalid("resolution must be auto, raw or hourly");
+    }
+    let limit = 120;
+    const limitParam = params.get("limit");
+    if (limitParam !== null) {
+      const parsed = Number(limitParam);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 2000) {
+        return invalid("limit must be an integer between 1 and 2000");
+      }
+      limit = parsed;
+    }
+    const fromParam = params.get("from");
+    const toParam = params.get("to");
+    let from: Date | null = null;
+    let to: Date | null = null;
+    if (fromParam !== null || toParam !== null) {
+      const fromMs = fromParam === null ? NaN : Date.parse(fromParam);
+      const toMs = toParam === null ? NaN : Date.parse(toParam);
+      if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) {
+        return invalid("from and to must be ISO timestamps with from before to");
+      }
+      if (toMs - fromMs > 366 * 86_400_000) {
+        return invalid("range too large (max 366 days)");
+      }
+      from = new Date(fromMs);
+      to = new Date(toMs);
+    }
+    // auto uses hourly rollups once the requested span leaves the raw retention window.
+    const rawRetentionHours = (() => {
+      const value = Number(process.env.METRIC_RAW_RETENTION_HOURS || 168);
+      return Number.isFinite(value) && value >= 1 && value <= 8760 ? value : 168;
+    })();
+    const resolution =
+      resolutionParam === "auto"
+        ? from && to && to.getTime() - from.getTime() > rawRetentionHours * 3_600_000
+          ? "hourly"
+          : "raw"
+        : resolutionParam;
+
+    let rows: HostMetricRow[];
+    if (resolution === "hourly" && from && to) {
+      rows =
+        await db<HostMetricRow[]>`SELECT hour AS sampled_at,
+          cpu_avg AS cpu_percent, memory_avg AS memory_percent, disk_avg AS disk_percent,
+          network_rx_bytes::double precision AS network_rx_bytes, network_tx_bytes::double precision AS network_tx_bytes
+          FROM metric_samples_hourly
+          WHERE agent_id=${match[1]} AND hour >= date_trunc('hour', ${from}::timestamptz) AND hour < ${to}::timestamptz
+          ORDER BY hour DESC LIMIT ${limit}`;
+    } else if (resolution === "hourly") {
+      rows =
+        await db<HostMetricRow[]>`SELECT hour AS sampled_at,
+          cpu_avg AS cpu_percent, memory_avg AS memory_percent, disk_avg AS disk_percent,
+          network_rx_bytes::double precision AS network_rx_bytes, network_tx_bytes::double precision AS network_tx_bytes
+          FROM metric_samples_hourly
+          WHERE agent_id=${match[1]}
+          ORDER BY hour DESC LIMIT ${limit}`;
+    } else if (from && to) {
+      rows =
+        await db<HostMetricRow[]>`SELECT sampled_at,cpu_percent,memory_percent,disk_percent,network_rx_bytes::double precision AS network_rx_bytes,network_tx_bytes::double precision AS network_tx_bytes
+          FROM metric_samples WHERE agent_id=${match[1]} AND sampled_at >= ${from}::timestamptz AND sampled_at < ${to}::timestamptz
+          ORDER BY sampled_at DESC LIMIT ${limit}`;
+    } else {
+      rows =
+        await db<HostMetricRow[]>`SELECT sampled_at,cpu_percent,memory_percent,disk_percent,network_rx_bytes::double precision AS network_rx_bytes,network_tx_bytes::double precision AS network_tx_bytes FROM metric_samples WHERE agent_id=${match[1]} ORDER BY sampled_at DESC LIMIT ${limit}`;
+    }
     const metrics: HostMetric[] = rows.map((row) => ({
       ...row,
       sampled_at: row.sampled_at.toISOString(),
     }));
     return j(metrics);
+  }
+
+  match = path.match(/^\/api\/hosts\/([^/]+)\/thresholds$/);
+  if (match) {
+    const hostId = match[1];
+    if (!urlUUID(hostId)) {
+      return invalid("Invalid host id");
+    }
+    const host =
+      await db<{ id: string }[]>`SELECT id FROM agents WHERE id=${hostId}`;
+    if (!host.length) {
+      return invalid("Host not found", 404);
+    }
+
+    if (method === "GET") {
+      const thresholds = await effectiveThresholds(hostId);
+      const conditions =
+        await db<(Omit<AlertCondition, "cooldown_until" | "updated_at"> & {
+          cooldown_until: Date | null;
+          updated_at: Date;
+        })[]>`SELECT agent_id,metric,state,consecutive,cooldown_until,incident_id,updated_at FROM alert_conditions WHERE agent_id=${hostId} ORDER BY metric`;
+      const payload: { thresholds: HostThresholds; conditions: AlertCondition[] } = {
+        thresholds,
+        conditions: conditions.map((row) => ({
+          ...row,
+          cooldown_until: row.cooldown_until?.toISOString() ?? null,
+          updated_at: row.updated_at.toISOString(),
+        })),
+      };
+      return j(payload);
+    }
+
+    if (method === "PUT") {
+      const data = await jsonBody(req);
+      const update = parseThresholdsUpdate(data);
+      if (!update) {
+        return apiError("Thresholds must be null or finite numbers in 0-100", "invalid_request");
+      }
+      const thresholds = await effectiveThresholds(hostId);
+      const next: HostThresholds = {
+        cpu_percent: "cpu_percent" in update ? update.cpu_percent! : thresholds.cpu_percent,
+        memory_percent: "memory_percent" in update ? update.memory_percent! : thresholds.memory_percent,
+        disk_percent: "disk_percent" in update ? update.disk_percent! : thresholds.disk_percent,
+      };
+      await db`INSERT INTO alert_thresholds(agent_id,cpu_percent,memory_percent,disk_percent,updated_at)
+        VALUES(${hostId},${next.cpu_percent},${next.memory_percent},${next.disk_percent},NOW())
+        ON CONFLICT (agent_id) DO UPDATE SET
+          cpu_percent=excluded.cpu_percent,memory_percent=excluded.memory_percent,
+          disk_percent=excluded.disk_percent,updated_at=NOW()`;
+      await db`UPDATE alert_conditions SET state='ok',consecutive=0,cooldown_until=NULL,incident_id=NULL,updated_at=NOW() WHERE agent_id=${hostId}`;
+      await audit("thresholds.updated", hostId, { thresholds: next });
+      return j({ thresholds: next });
+    }
+
+    if (method === "DELETE") {
+      await db`DELETE FROM alert_thresholds WHERE agent_id=${hostId}`;
+      await db`UPDATE alert_conditions SET state='ok',consecutive=0,cooldown_until=NULL,incident_id=NULL,updated_at=NOW() WHERE agent_id=${hostId}`;
+      await audit("thresholds.reset", hostId);
+      return j({ thresholds: await effectiveThresholds(hostId) });
+    }
+
+    return invalid("Method not allowed", 405);
   }
 
   if (path === "/api/incidents" && method === "GET") {
@@ -383,18 +513,16 @@ const server = Bun.serve<SocketData>({
           return invalid("Agent requests must not have browser origin", 403);
         }
         const data = await body(req);
-        if (
-          typeof data.token !== "string" ||
-          typeof data.hostname !== "string" ||
-          data.hostname.length > 100 ||
-          !data.hostname.length
-        ) {
+        const enrollment = parseEnrollRequest(data);
+        if (!enrollment) {
           return invalid("Bad enrollment request");
         }
         const result = await enrollAgent(
-          data.token,
-          data.hostname,
-          String(data.version || "dev"),
+          enrollment.token,
+          enrollment.hostname,
+          enrollment.version,
+          enrollment.protocolVersion,
+          enrollment.capabilities,
         );
         return result ? j(result, 201) : invalid("Invalid/expired token", 401);
       }

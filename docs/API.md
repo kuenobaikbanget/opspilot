@@ -11,10 +11,20 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | GET | `/api/auth/me` | none | role, auth status, and `authDisabled` flag |
 | POST | `/api/agents/enrollment-token` | `{}` | `{token, expiresInSeconds}`; show once |
 | GET | `/api/agents/install-config` | none | `AgentInstallConfig` or `503 {"error":"Agent installation is not configured"}` |
-| GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}` |
-| GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; 400 invalid ID, 404 unknown host |
+| GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}`; each host includes `protocol_version` and negotiated `capabilities` |
+| GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; optional `from`/`to` (ISO, ≤366d span), `resolution=auto|raw|hourly` (auto uses hourly rollups beyond the raw retention window), `limit=1..2000`; 400 invalid params/ID, 404 unknown host |
+| GET | `/api/hosts/:id/thresholds` | none | `{thresholds,conditions}` — effective per-host limits and persisted alert condition state; 400/404 as above |
+| PUT | `/api/hosts/:id/thresholds` | `{cpu_percent?,memory_percent?,disk_percent?}` each null or 0-100 | `200 {thresholds}`; resets that host's condition state; audited |
+| DELETE | `/api/hosts/:id/thresholds` | none | `200 {thresholds}` back to environment defaults; audited |
 | GET | `/api/hosts/:id/services` | none | selected-host `HostSystemdStatus`; 400 invalid ID, 404 unknown host |
-| GET | `/api/services` | none | `{endpoints}` (existing independent endpoint records) |
+| GET | `/api/hosts/:id/workloads` | none | host-scoped `HostWorkloads`; 400 invalid ID, 404 unknown host |
+| GET | `/api/workloads` | none | fleet `WorkloadList`; totals/counts cover the whole fleet, not the capped page |
+| GET | `/api/services` | none | `{endpoints: EndpointMonitor[]}` with per-monitor `run_counts` |
+| POST | `/api/endpoints` | `{name,targetUrl,expectedStatus?,agentId?,serviceName?,checkIntervalSeconds?,enabled?}` | `201 {endpoint}`; `400 invalid_request`/`invalid_target` (SSRF policy), 404 unknown host |
+| PATCH | `/api/endpoints/:id` | subset of create fields, at least one | `200 {endpoint}`; same validation; audits `endpoint.updated` |
+| DELETE | `/api/endpoints/:id` | none | `200 {ok:true}`; run history cascades; audits `endpoint.deleted` |
+| POST | `/api/endpoints/:id/check` | none | `200 {endpoint}` after a bounded server-side probe; persists a run; audits `endpoint.probe` |
+| GET | `/api/endpoints/:id/runs` | none | `{runs: EndpointMonitorRun[], limit: 50}` newest first |
 | GET | `/api/ai/providers` | none | `{providers: AiProvider[], encryptionConfigured: boolean}` |
 | POST | `/api/ai/providers` | `{name,protocol,baseUrl,apiKey,defaultModel,enabled}` | `201 {provider}` |
 | PATCH | `/api/ai/providers/:id` | subset of create fields, at least one | `200 {provider}` |
@@ -59,15 +69,19 @@ Token issuance remains an authenticated, Origin-protected POST with `{token,expi
 
 `Host`, `HostList` and `HostMetric` live in `packages/contracts`. The host list contains at most 100 newest enrolled hosts; `total` and `online` cover the entire enrolled fleet, not the visible page or client search. Connectivity comes from this Hub's current WebSocket connections, not persisted status. These counts are not application-health verdicts.
 
-Each host includes `id`, `hostname`, `version`, `status`, `created_at`, `last_seen_at`, `sampled_at` and nullable `cpu_percent`, `memory_percent`, `disk_percent`. Timestamps are ISO strings; sample timestamps are Hub receipt times. Missing samples remain null. `observed_at` dates the list response; it does not refresh old measurements.
+Each host includes `id`, `hostname`, `version`, `protocol_version` (null until the agent reports a hello), negotiated `capabilities`, `status`, `created_at`, `last_seen_at`, `sampled_at` and nullable `cpu_percent`, `memory_percent`, `disk_percent`. Timestamps are ISO strings; sample timestamps are Hub receipt times. Missing samples remain null. `observed_at` dates the list response; it does not refresh old measurements.
 
 The current display freshness policy is `stale_after_seconds: 60`. An online connection with an older sample has stale telemetry; a disconnected agent's retained samples are historical even when recent. Agents configured with intervals above 60 seconds will intentionally show stale between samples; interval negotiation is not implemented.
 
-`thresholds` contains the Hub's effective CPU, memory and disk alert limits as percent values under `cpu_percent`, `memory_percent`, and `disk_percent`. Invalid limits are `null` and do not produce a threshold alert. The Overview uses the same configured limits to compare individual fresh online samples; its near-limit band is a display rule, not an incident trigger.
+`thresholds` in the list contains the Hub's global environment limits as percent values under `cpu_percent`, `memory_percent`, and `disk_percent`. Invalid limits are `null` and do not produce a threshold alert. The Overview uses the same configured limits to compare individual fresh online samples; its near-limit band is a display rule, not an incident trigger. Per-host overrides are managed with the thresholds API below and survive Hub restarts in `alert_thresholds`; `GET /api/hosts/:id/thresholds` also returns the persisted `alert_conditions` state (`ok`/`breaching`/`breached`/`cooldown` per metric with breach streak, cooldown deadline and incident link). Changing or resetting thresholds resets that host's condition state.
 
-History returns `sampled_at`, host CPU/memory/disk percentages and cumulative `network_rx_bytes`/`network_tx_bytes`; counters are not network rates. Samples are neither aggregated nor interpolated.
+History returns `sampled_at`, host CPU/memory/disk percentages and cumulative `network_rx_bytes`/`network_tx_bytes`; counters are not network rates. Without query parameters samples are neither aggregated nor interpolated. With `from`/`to`, `resolution=raw` returns raw rows in the range; `resolution=hourly` returns one row per hour from `metric_samples_hourly` (percentages are hour averages, network counters are the last sample in the hour) — `auto` selects hourly once the span exceeds the raw retention window (`METRIC_RAW_RETENTION_HOURS`, default 168h).
 
 `HostSystemdStatus` returns `{agent_id,online,checked_at,report,service}`. `report` is null until an accepted v1 report; otherwise it has `{status,observed_at,current}`. `service` is null until there is an actual observation, or a `HostService` with `runtime:"systemd"`, `source:"agent_systemd"` and `freshness:"fresh"|"stale"`. `fresh` requires a measured report from the current authenticated socket and an observation at most 60 seconds old. `checked_at` is the read time, not the observation time. Disconnect/replacement or a current collection error can make a previous sample stale without changing its observed state/time. An explicit disabled report or change of configured unit removes the previous unit from the selected-host view. Synthetic `host_services` rows are excluded.
+
+`HostWorkloads` returns `{agent_id,online,checked_at,collection,workloads,counts}`. `collection` is null until an accepted v1 inventory report; otherwise `{status,reason,skipped,observed_at,current}` where `status` is `ok`/`disabled`/`unsupported`/`unavailable`, `reason` is a fixed enum present only on `unavailable` (optional on `unsupported`), `skipped` lists enabled collectors that failed during an otherwise ok report, and `current` means the report came from the current authenticated socket and is at most 120 seconds old. `workloads` are `Workload` rows with `source:"agent_workloads"`, nullable `cpu_percent`/`memory_bytes` and `freshness:"fresh"|"stale"` (fresh only when the collection is current and `ok`). `counts` covers only that host's workloads. `checked_at` is the read time.
+
+`GET /api/workloads` returns `WorkloadList`: at most 200 newest `Workload` rows fleet-wide, with `total` and `counts` computed over all fleet workload rows (not the capped page), `hosts_total`/`hosts_online` over the entire enrolled fleet, `hosts_collecting` counting hosts whose latest report is `ok`, fresh and from their current socket, plus `limit`, `observed_at` and `stale_after_seconds: 120`. A successful empty scan (`ok` with `workloads: []`) removes the host's rows; `disabled`/`unsupported`/`unavailable` also remove them and keep only the collection status, so a failure is never presented as a measured empty fleet. Workload state is a process/container observation, not endpoint availability.
 
 Example agent install / Hub interaction:
 
@@ -82,9 +96,9 @@ curl -X POST http://localhost:3001/api/agents/enroll \
 
 ## Agent HTTP and WebSocket
 
-**Enrollment:** `POST /api/agents/enroll` requires short-lived one-use token, browser `Origin` disallowed. Returns `agentId`, `agentSecret` (random secret stored only as hash in DB).
+**Enrollment:** `POST /api/agents/enroll` requires short-lived one-use token, browser `Origin` disallowed. Body is `{token,hostname,version,protocolVersion?,capabilities?}`; `protocolVersion` must be an integer 1..2 (default 1) and `capabilities` a deduplicated subset of `telemetry`, `systemd_status`, `diagnostics` — unknown names reject the whole request with 400. Returns `agentId`, `agentSecret` (random secret stored only as hash in DB).
 
-`opspilot-agent enroll` is a finite local command using the same `{token,hostname,version}` / `{agentId,agentSecret}` contract, not a new HTTP operation. It requires an HTTPS origin, refuses redirects, validates returned credentials and atomically saves a 0600 identity. A valid existing identity avoids enrollment; a corrupt identity fails unchanged. No arguments retains the reconnecting monitor and local HTTP development compatibility.
+`opspilot-agent enroll` is a finite local command using the same `{token,hostname,version,protocolVersion,capabilities}` / `{agentId,agentSecret}` contract, not a new HTTP operation. It requires an HTTPS origin, refuses redirects, validates returned credentials and atomically saves a 0600 identity. A valid existing identity avoids enrollment; a corrupt identity fails unchanged. No arguments retains the reconnecting monitor and local HTTP development compatibility. The running agent buffers telemetry durably in a bounded on-disk queue (`OPSPILOT_QUEUE_PATH`, default beside the identity file; caps `OPSPILOT_QUEUE_MAX_ENTRIES` default 2000 and `OPSPILOT_QUEUE_MAX_AGE_SECONDS` default 86400) and flushes it in order on reconnect.
 
 **WebSocket handshake:** `GET /api/agents/connect` with headers:
 
@@ -95,6 +109,20 @@ X-OpsPilot-Agent-ID: <uuid>
 
 The Hub verifies the hashed secret before upgrading. Use WSS behind TLS in remote deployment. Avoid HTTP on an untrusted network.
 
+**Hello / capability negotiation:** immediately after connecting, an agent sends one hello frame:
+
+```json
+{"type":"hello","protocolVersion":2,"agentVersion":"0.1.0","capabilities":["telemetry","systemd_status","diagnostics"]}
+```
+
+The Hub rejects a `protocolVersion` above its own `PROTOCOL_VERSION` (2) with close code `4000`. Otherwise it records the agent version, protocol version and the negotiated intersection on the `agents` row and replies:
+
+```json
+{"type":"hello_ack","protocolVersion":2,"capabilities":["telemetry","systemd_status","diagnostics"]}
+```
+
+Agents treat a missing ack (older Hub) as "all advertised capabilities supported". The agent only sends collectors the ack included. Hello is optional for legacy agents; their `protocol_version` stays at the enrollment value and `capabilities` at the enrollment set.
+
 ### Agent → Hub telemetry
 
 ```json
@@ -104,7 +132,9 @@ The Hub verifies the hashed secret before upgrading. Use WSS behind TLS in remot
   "networkRxBytes": 123456, "networkTxBytes": 56789, "uptimeSeconds": 93450,
   "configHashes": {"/etc/nginx/nginx.conf":"<64 lowercase hex characters>"}
 }
-```
+
+The Hub accepts only this exact shape (`parseTelemetry` in `packages/contracts`): `timestamp` must be canonical UTC RFC 3339 (`Z`, optional 1-3 digit fraction) at most 120 seconds old and 5 seconds ahead of Hub time; `cpuPercent`/`memoryPercent`/`diskPercent` must be finite numbers in [0, 100] (NaN/Inf rejected); `networkRxBytes`/`networkTxBytes`/`uptimeSeconds` must be non-negative safe integers; `configHashes` is an object of at most 20 entries mapping absolute paths (≤256 chars) to 64 lowercase hex characters. Any extra or missing key, or an out-of-bounds value, drops the whole frame silently. Queued agent samples are re-stamped at send time so reconnect flushes stay within the window.
+
 
 ### Agent → Hub systemd status v1
 
@@ -125,6 +155,25 @@ Maximum 512 UTF-8 bytes; no extra keys or unit arrays. Unit names are case-sensi
 
 `observed` requires `LoadState=loaded`. `ActiveState=active`, `reloading` and `refreshing` map to `running` (systemd's active unit status, not a guarantee of a running PID); `inactive` maps to `stopped`, and `failed` maps to `failed`. Known transition states map to `unknown`. Missing units, denied/failed queries and unrecognized properties are unavailable, not `stopped`. The Hub admits at most one in-flight status write per host; periodic reports do not queue or block metrics.
 
+### Agent → Hub workload inventory v1
+
+Separate optional frame on the same authenticated socket at connection and every 60 seconds. The collectors are opt-in per agent (`OPSPILOT_WORKLOADS_DOCKER`, `OPSPILOT_WORKLOADS_SYSTEMD`, both default false); no Hub message configures, triggers or names inventory targets. Older agents may send telemetry only; older Hubs can ignore the new message. This frame is not derived from `docker_status` diagnostic output.
+
+```json
+{"type":"workload_inventory","version":1,"observedAt":"2026-11-26T12:00:00.123Z","status":"ok","workloads":[{"name":"web","runtime":"docker","state":"running","cpuPercent":1.5,"memoryBytes":67108864},{"name":"nginx.service","runtime":"systemd","state":"stopped"}],"skipped":["systemd"]}
+```
+
+| `status` | Fields beyond `type`, `version`, `observedAt`, `status` |
+|---|---|
+| `ok` | Exactly `workloads` (array of 0–64 entries) plus optional `skipped`; at least one enabled collector measured |
+| `disabled` | None; no collector was opted in — an explicit capability statement, not a zero count |
+| `unsupported` | Optional `reason`; the enabled runtime is absent on the host (no docker CLI / no systemd manager) |
+| `unavailable` | Required `reason`; every enabled collector failed. Never a process state |
+
+Each entry has exactly `name`, `runtime` (`docker`|`systemd`), `state` (`running`|`stopped`|`failed`|`unknown`) and optional nullable `cpuPercent` (finite, 0–25600) and `memoryBytes` (safe integer ≥ 0); resource fields are docker stats only and are null/absent for systemd units. Docker names are 1–128 chars starting alphanumeric with `[A-Za-z0-9_.-]`; systemd names are literal `.service` units per the systemd v1 rules. `(runtime,name)` pairs must be unique. `reason` is one of `docker_cli_missing`, `docker_daemon_unreachable`, `systemd_manager_missing`, `permission_denied`, `command_failed`, `command_timeout`, `output_overflow`. `skipped` lists at most the two collector names that failed during an ok report.
+
+Maximum 16 KiB UTF-8 per frame (well below the 64 KiB WS limit); no extra keys. `observedAt` follows the same canonical UTC millisecond rule and ±120s/+5s clock window as systemd v1. Equal/older timestamps are ignored; the Hub admits at most one in-flight inventory write per host and identity comes only from the current authenticated socket. A `disabled`/`unsupported`/`unavailable` report removes the host's persisted `agent_workloads` rows; only `ok` (including an empty array) writes rows.
+
 ### Hub → Agent diagnostic request
 
 ```json
@@ -143,7 +192,7 @@ Hub stores server-generated evidence ID; response correlated to an outstanding r
 
 ## Versioning policy
 
-Starter wire version is implicit 0.1; add `protocolVersion` on enrollment and every message before broad distribution. Refuse incompatible versions rather than silently misinterpreting metrics. Add explicit error codes, pagination and documented JSON Schema/OpenAPI in future.
+Wire protocol is versioned with `PROTOCOL_VERSION` (currently 2) in `packages/contracts`. Agents report it with `protocolVersion` on enrollment and in the `hello` frame; the Hub refuses newer agents with close code `4000` rather than silently misinterpreting frames, and negotiates capabilities as the intersection of advertised and supported sets. `systemd_status` frames carry their own `version: 1`. Future incompatible changes bump `PROTOCOL_VERSION` and refuse older/newer peers explicitly; error codes, pagination and JSON Schema/OpenAPI remain future work.
 
 ## API failure semantics
 
@@ -153,10 +202,14 @@ Starter wire version is implicit 0.1; add `protocolVersion` on enrollment and ev
 
 ## Fleet & services contract boundary (planned)
 
-The current host list provides typed host observations and full-fleet enrolled/connected counts. The host-scoped systemd read adds one opted-in process observation; broader runtime inventory, per-workload resources, OS/capacity metadata, scheduled probe results, endpoint aggregate totals and configurable alert-policy metadata are outside this slice.
+The current host list provides typed host observations and full-fleet enrolled/connected counts. The host-scoped systemd read adds one opted-in process observation, and the opt-in workload inventory above adds bounded typed Docker/systemd rows with source timestamps, capability/unavailable reasons, a 120-second stale policy and fleet-scoped aggregate counts. Endpoint monitors are implemented as described below. OS/capacity metadata and broader alert-policy metadata remain outside this slice.
 
-Before implementing those surfaces, define validated read/write schemas for the [planned read models](BACKEND-DESIGN.md#fleet-services-data-boundary-planned), including stable host/workload/endpoint associations, source and collection/check timestamps, stale/unknown/unavailable reasons, units and list/aggregate coverage. Independently fresh probe results must survive an agent disconnect without becoming a fabricated host-health verdict.
+### Endpoint monitors (implemented)
 
-Endpoint creation/editing must require admin authorization, same-origin mutation protection, bounded validated HTTP(S) target/expected-response/schedule inputs and audit. Probe execution is server-side and subject to the [SSRF/egress policy](SECURITY.md#planned-inventory-and-endpoint-monitoring), not a browser fetch, an arbitrary shell command or an LLM-selected URL.
+`EndpointMonitor` (in `packages/contracts`) carries `id`, `agent_id`, `service_name`, `name`, `target_url`, `expected_status`, `probe_location`, `enabled`, `check_interval_seconds`, `run_counts: {total,up,down}`, and `last_status` (`up|down|unknown`), `last_http_status`, `last_latency_ms`, `last_error`, `last_checked_at` (ISO). `run_counts` are aggregate run counts scoped to that one monitor via `monitor_id`, never fleet-wide. `probe_location` is the server-side named probe origin (`OPSPILOT_PROBE_LOCATION`, default `hub-local`), never client-supplied.
+
+Create/patch payloads are structurally validated (`parseCreateEndpointMonitorRequest` / `parseUpdateEndpointMonitorRequest`): `name` 1–80 chars, `targetUrl` ≤2048, `expectedStatus` integer 100–599 (default 200), `agentId` UUID or null, `serviceName` ≤80 or null, `checkIntervalSeconds` integer 15–86400 (default 60), `enabled` boolean (default true). The target URL additionally passes `validateEndpointTargetUrl` SSRF/egress validation (http/https only, no credentials/fragment; private, loopback, link-local, CGNAT, multicast, reserved, metadata and IPv4-mapped/NAT64 IPv6 destinations rejected), returning `400 {error, code:"invalid_target"}` otherwise. Non-production `OPSPILOT_ALLOW_LOOPBACK_PROBES=true` permits loopback targets for local development only.
+
+Probe execution is server-side only (`packages/ai/src/endpoint-probe.ts`): DNS answers are all validated and the socket pinned to one approved address (DNS-rebinding defense), redirects are followed manually up to 5 hops with full re-validation per hop, total timeout 5 s / connect 3 s, headers ≤16 KiB, body read ≤256 KiB and never stored, TLS verification cannot be disabled. Run outcomes use fixed error codes: `blocked_target`, `dns_blocked`, `redirect_blocked`, `redirect_limit`, `timeout`, `connection_failed`, `http_<status>`, `tls_verification_disabled`. Each execution is persisted as an `EndpointMonitorRun` (`id`, `monitor_id`, `probe_location`, `status`, `http_status`, `latency_ms`, `error`, `started_at`, `finished_at`, `created_at` ISO timestamps), bounded to 200 rows per monitor; `last_*` on the monitor mirrors the newest run. The Worker scheduler claims at most 8 due enabled monitors per tick (`FOR UPDATE SKIP LOCKED`, per-monitor interval). All routes require the admin cookie; mutations also require exact `ALLOWED_ORIGIN` and are audited as `endpoint.created`/`endpoint.updated`/`endpoint.deleted`/`endpoint.probe` with no target URL in audit data. Probe execution is subject to the [SSRF/egress policy](SECURITY.md#planned-inventory-and-implemented-endpoint-monitoring), not a browser fetch, an arbitrary shell command, a generic URL-fetch tool or an LLM-selected URL. Independently fresh probe results survive an agent disconnect without becoming a fabricated host-health verdict.
 
 Any agent wire change must update `packages/contracts`, the Go agent, this document and interoperability/negative tests together; unsupported capabilities must render unavailable rather than silently inventing inventory.
