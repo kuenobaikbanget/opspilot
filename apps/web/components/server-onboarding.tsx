@@ -3,7 +3,7 @@
 import type { AgentInstallConfig, HostList } from "@opspilot/contracts";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { buildAgentInstallCommand } from "../lib/agent-install";
-import { AsciiLoading, usePrefersReducedMotion } from "./ascii-card-reveal";
+import { AsciiCardSkeleton, AsciiLoading, usePrefersReducedMotion } from "./ascii-card-reveal";
 import { Button, ButtonLink, Field, Notice, Select } from "./ui";
 
 type Props = {
@@ -252,7 +252,15 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
     && (verifyAfter === null || observedAt > verifyAfter);
   const selectedHost = fleet?.hosts.find(host => host.id === selectedHostId);
   // A new enrollment is a cue to verify, not proof it used this command.
-  const newHostListed = installBaseline !== null && fleet?.hosts.some(host => Date.parse(host.created_at) > installBaseline);
+  const newHostListed = installBaseline !== null && Boolean(fleet?.hosts.some(host => Date.parse(host.created_at) > installBaseline));
+  const waitingForAgent = !newHostListed && !commandExpired && !fleetError;
+  const canContinueToVerification = installBaseline !== null && !generating && newHostListed;
+
+  useEffect(() => {
+    if (step !== 1 || installBaseline === null || newHostListed || commandExpired || fleetError) return;
+    const timer = window.setInterval(() => onRefresh(), 3000);
+    return () => window.clearInterval(timer);
+  }, [step, installBaseline, newHostListed, commandExpired, fleetError, onRefresh]);
   const sampledAt = Date.parse(selectedHost?.sampled_at ?? "");
   const verificationReason = fleetError ? "Fleet data is unavailable. Refresh the fleet to continue."
     : !fleetCurrent ? "Waiting for a current fleet observation."
@@ -368,15 +376,49 @@ export function ServerOnboarding({ onBack, onUnauthorized, fleet, fleetError, on
                   {installBaseline !== null && (
                     <div className="onboarding-contact-status" id={`${id}-contact-status`} role="status">
                       {!fleetError && !newHostListed && !commandExpired && <BrailleSpinner />}
-                      <span>{fleetError ? "Can’t check for new agents. Continue to verification to refresh the fleet."
+                      <span>{fleetError ? "Can’t check for new agents. Refresh the fleet to keep waiting."
                         : newHostListed ? "A new host appeared in the fleet. Verify its hostname in the next step."
                         : commandExpired ? "No new host observed. Check the installation or regenerate the command."
                         : "Waiting for an agent to contact the Hub…"}</span>
+                      {fleetError && <Button size="sm" onClick={onRefresh}>Refresh fleet</Button>}
                     </div>
                   )}
                   <div className="onboarding-actions">
                     <Button size="sm" onClick={() => goTo(0)}><Icon name="left" /> Back</Button>
-                    <Button variant="primary" size="sm" disabled={installBaseline === null || generating} aria-describedby={installBaseline !== null ? `${id}-contact-status` : undefined} onClick={() => goTo(2)}>Continue to verification <Icon name="right" /></Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      className={!canContinueToVerification ? "onboarding-verify-button onboarding-verify-button--waiting" : "onboarding-verify-button"}
+                      loading={waitingForAgent || generating}
+                      disabled={!canContinueToVerification}
+                      aria-describedby={installBaseline !== null ? `${id}-contact-status` : undefined}
+                      onClick={() => goTo(2)}
+                    >
+                      {canContinueToVerification ? (
+                        <>Continue to verification <Icon name="right" /></>
+                      ) : (
+                        <>
+                          <AsciiCardSkeleton
+                            as="span"
+                            variant="terminal"
+                            lines={1}
+                            widths={["18ch"]}
+                            animate={waitingForAgent || generating}
+                            className="onboarding-button-matrix"
+                            aria-hidden="true"
+                          />
+                          <span className="sr-only">
+                            {generating
+                              ? "Preparing install command"
+                              : commandExpired
+                                ? "Install command expired. Regenerate the command and connect a server to continue."
+                                : fleetError
+                                  ? "Fleet unavailable. Refresh the fleet to detect a connected server."
+                                  : "Waiting for target server to connect"}
+                          </span>
+                        </>
+                      )}
+                    </Button>
                   </div>
                 </div>
               )}

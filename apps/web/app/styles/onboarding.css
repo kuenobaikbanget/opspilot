@@ -39,6 +39,10 @@
   border-bottom: 1px solid var(--color-border);
 }
 
+.onboarding-progress[data-steps="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .onboarding-progress-item {
   display: flex;
   min-width: 0;
@@ -262,6 +266,31 @@
   justify-content: space-between;
   padding-top: var(--space-5);
   border-top: 1px solid var(--color-border);
+}
+
+.onboarding-verify-button {
+  min-width: 12.5rem;
+}
+
+.onboarding-verify-button--waiting:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.onboarding-button-matrix {
+  display: inline-block;
+  width: 18ch;
+  color: var(--color-on-accent);
+  --ars-color: var(--color-on-accent);
+  --ars-accent: var(--color-on-accent);
+  --ars-base: 0.65;
+  line-height: 1.2;
+}
+
+.onboarding-form-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
 }
 
 .onboarding-host-picker {
