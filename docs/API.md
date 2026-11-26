@@ -32,11 +32,32 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | POST | `/api/ai/providers/:id/test` | `{}` | `202 {id,providerId,status:"queued"}` |
 | GET | `/api/incidents` | none | last 100 incidents |
 | POST | `/api/incidents` | `{"agentId":"uuid","title":"..."}` | `201 {id}` |
-| GET | `/api/incidents/:id` | none | `{incident,evidence,investigations}`; each investigation also exposes `attempts,max_attempts,next_retry_at,lease_expires_at` |
+| GET | `/api/incidents/:id` | none | `{incident,evidence,investigations}`; each investigation also exposes `attempts,max_attempts,next_retry_at,lease_expires_at` and `retrieved_memories` (bounded `InvestigationMemoryAttribution[]` snapshot persisted by the Worker, `null` for legacy/active rows) |
 | POST | `/api/incidents/:id/investigate` | `{"providerId":"uuid","providerRevision":1,"model":"explicit-model"}` | `202 {id,status,deduplicated,liveAgent}`; an active (queued/running) investigation with the same incident+provider+revision+model returns that row with `deduplicated:true` |
-| POST | `/api/incidents/:id/resolve` | `{"resolution":"..."}` | `200 {ok:true}` |
-| GET | `/api/memory?q=text` | none | searchable resolved incidents |
+| POST | `/api/incidents/:id/resolve` | `{"resolution":"...","embeddingConsent"?:boolean}` | `200 {ok:true,memoryId,deduplicated,occurrenceCount}`; the resolution is redacted, fingerprinted and deduplicated against canonical memories inside one transaction; `embeddingConsent: true` is the strict opt-in that sets `embedding_consent = TRUE` on the canonical memory row (any other value keeps the default `false`) |
+| GET | `/api/drift` | none | `{entries,limit,observed_at}` drift timeline (newest first); optional `agentId` (uuid), `filePath` (exact absolute path ≤256 chars), `pathContains` (case-insensitive literal substring ≤256 printable chars), `limit` 1..100 (default 100); 400 invalid params |
+| GET | `/api/drift/:id` | none | `DriftDetailResponse` with redacted semantic diff; 400 invalid id, 404 unknown id |
+| GET | `/api/changes?agentId=&kind=&limit=` | none | `{changes: ChangeEvent[], limit}` newest first, `limit` 1-100 (default 50), `kind` one of `deployment|config_change|service_restart|maintenance`; each row includes the host `hostname` |
+| POST | `/api/changes` | `{"agentId":"uuid","kind":"deployment","title":"...","serviceName"?,"version"?,"summary"?,"source"?,"occurredAt"?}` | `201 {change}`; `title`/`summary` redacted server-side before storing; `occurredAt` ISO bounded to ≤5m future / ≤365d past (default NOW()); audited as `change.recorded` with non-secret fields only; 404 unknown host |
+| GET | `/api/incidents/:id/timeline?beforeMinutes=&afterMinutes=` | none | `IncidentTimelineResponse` (see below); window defaults 120m before to 30m after `incident.created_at`, `beforeMinutes` 5-1440, `afterMinutes` 0-720 |
+| POST | `/api/incidents/:id/changes` | `{"targetType":"change_event|config_snapshot","targetId":"uuid","action":"link|dismiss","note"?}` | `201` new link / `200` upsert `{link}`; target must belong to the same host as the incident (`409 cross_host` otherwise); audited as `incident.change_linked` / `incident.change_dismissed` |
+| DELETE | `/api/incidents/:id/changes/:linkId` | none | `200 {ok:true}`; removes a manual link/dismissal; audited as `incident.change_unlinked`; 404 unknown link |
+| GET | `/api/memory?q=text` | none | canonical memories only (`canonical_memory_id IS NULL`; merged duplicates are never returned), max 20; each record carries BOTH the dedup provenance (`occurrence_count`, `last_confirmed_at`, `content_fingerprint`, `sources[]` from `incident_memory_sources`) AND the hybrid retrieval metadata (`retrieval_method`, `fts_score`, `vector_score`, `hybrid_score`, `embedding_model`); optional `q` full-text search (vector leg fused via RRF when an embedding is available) |
 | GET | `/healthz` | none | `{ok,db}` |
+
+### Change events and the unified incident timeline (implemented)
+
+`GET /api/incidents/:id/timeline` merges, newest first, the incident lifecycle (`incident_opened`, `incident_resolved`), the incident's evidence (preview redacted and capped at 240 chars), its investigations, and same-host change context: `config_snapshots` inside the window that are an initial observation or a checksum change (with `previous_checksum_sha256` from the prior snapshot of the same file), plus `change_events` inside the window — each also included when manually linked, even outside the window, and hidden when dismissed. Every change entry carries `offset_seconds` relative to `incident.created_at`, `relation` (`observed_nearby` or `operator_linked`), `link_id`, and `causation_claimed: false`; the response includes `causation_notice` ("Nearby deployments and configuration changes are temporal context only. Correlation does not establish root cause.") and `dismissed_count`. Only rows belonging to the incident's `agent_id` are ever included. All five routes sit behind the admin cookie; mutations additionally require the exact `ALLOWED_ORIGIN` and write non-secret `audit_events`.
+| POST | `/api/memory/merge` | `{"sourceMemoryId":"uuid","targetMemoryId":"uuid"}` | `200 {ok:true,memory}`; merges source into target, preserving all `incident_memory_sources`, recomputing `occurrence_count`; `400` invalid/self-merge, `404` unknown id, `409` non-canonical; audited as `memory.merged` |
+| GET | `/healthz` | none | `{ok,db}` |
+
+### Incident memory deduplication, hybrid retrieval and provenance
+
+Resolving an incident stores one canonical `incident_memory` row per distinct root cause/fix, not one per incident. `POST /api/incidents/:id/resolve` redacts the title/resolution, computes a SHA-256 `content_fingerprint` over the normalized text, and matches against recent canonical memories (`canonical_memory_id IS NULL`): an exact fingerprint match or a near-duplicate (normalized token Jaccard similarity on the resolution ≥ 0.85) increments `occurrence_count`, refreshes `last_confirmed_at` and appends the incident to `incident_memory_sources` — contributing incidents are never dropped. Otherwise a new canonical memory is created. Audits `memory.created` / `memory.deduplicated` carry only non-secret IDs and counts.
+
+`POST /api/memory/merge` moves all source-provenance rows from the source memory into the target (`ON CONFLICT DO NOTHING`), marks the source non-canonical (`canonical_memory_id = target`), recomputes the target's `occurrence_count` from distinct source incidents and its `last_confirmed_at` via `GREATEST(...)`, and audits `memory.merged`. Both memory routes sit behind the admin cookie; mutating requests additionally require `Origin` exactly equal to `ALLOWED_ORIGIN` (`403 forbidden_origin` otherwise, `401` unauthenticated).
+
+Retrieval is hybrid and canonical-only: `GET /api/memory` (and the Worker's prior-memory lookup via `searchIncidentMemories`) always runs bounded FTS and additionally fuses vector candidates with RRF when a query embedding is available, but only over rows with `canonical_memory_id IS NULL`, so merged duplicates are never returned by FTS or vector/hybrid search. The Worker deduplicates exact/near-duplicate candidates before the LLM call, and persists the bounded attribution snapshot (`memory_id`, summary, resolution preview, occurrence count, source incident IDs, retrieval method, score, last confirmed) as `investigations.retrieved_memories_json` when the investigation completes; `GET /api/incidents/:id` returns it as `retrieved_memories` on each investigation. Prior memory is fallible human-confirmed context, displayed separately from measured signals and AI hypotheses in the UI.
 
 ### Stored AI connections
 
@@ -96,7 +117,7 @@ curl -X POST http://localhost:3001/api/agents/enroll \
 
 ## Agent HTTP and WebSocket
 
-**Enrollment:** `POST /api/agents/enroll` requires short-lived one-use token, browser `Origin` disallowed. Body is `{token,hostname,version,protocolVersion?,capabilities?}`; `protocolVersion` must be an integer 1..2 (default 1) and `capabilities` a deduplicated subset of `telemetry`, `systemd_status`, `diagnostics` — unknown names reject the whole request with 400. Returns `agentId`, `agentSecret` (random secret stored only as hash in DB).
+**Enrollment:** `POST /api/agents/enroll` requires short-lived one-use token, browser `Origin` disallowed. Body is `{token,hostname,version,protocolVersion?,capabilities?}`; `protocolVersion` must be an integer 1..2 (default 1) and `capabilities` a deduplicated subset of `telemetry`, `systemd_status`, `diagnostics`, `config_diffs` — unknown names reject the whole request with 400. Returns `agentId`, `agentSecret` (random secret stored only as hash in DB).
 
 `opspilot-agent enroll` is a finite local command using the same `{token,hostname,version,protocolVersion,capabilities}` / `{agentId,agentSecret}` contract, not a new HTTP operation. It requires an HTTPS origin, refuses redirects, validates returned credentials and atomically saves a 0600 identity. A valid existing identity avoids enrollment; a corrupt identity fails unchanged. No arguments retains the reconnecting monitor and local HTTP development compatibility. The running agent buffers telemetry durably in a bounded on-disk queue (`OPSPILOT_QUEUE_PATH`, default beside the identity file; caps `OPSPILOT_QUEUE_MAX_ENTRIES` default 2000 and `OPSPILOT_QUEUE_MAX_AGE_SECONDS` default 86400) and flushes it in order on reconnect.
 
@@ -173,6 +194,33 @@ Separate optional frame on the same authenticated socket at connection and every
 Each entry has exactly `name`, `runtime` (`docker`|`systemd`), `state` (`running`|`stopped`|`failed`|`unknown`) and optional nullable `cpuPercent` (finite, 0–25600) and `memoryBytes` (safe integer ≥ 0); resource fields are docker stats only and are null/absent for systemd units. Docker names are 1–128 chars starting alphanumeric with `[A-Za-z0-9_.-]`; systemd names are literal `.service` units per the systemd v1 rules. `(runtime,name)` pairs must be unique. `reason` is one of `docker_cli_missing`, `docker_daemon_unreachable`, `systemd_manager_missing`, `permission_denied`, `command_failed`, `command_timeout`, `output_overflow`. `skipped` lists at most the two collector names that failed during an ok report.
 
 Maximum 16 KiB UTF-8 per frame (well below the 64 KiB WS limit); no extra keys. `observedAt` follows the same canonical UTC millisecond rule and ±120s/+5s clock window as systemd v1. Equal/older timestamps are ignored; the Hub admits at most one in-flight inventory write per host and identity comes only from the current authenticated socket. A `disabled`/`unsupported`/`unavailable` report removes the host's persisted `agent_workloads` rows; only `ok` (including an empty array) writes rows.
+
+### Agent → Hub config snapshot v1
+
+Optional, strictly opt-in frame on the same authenticated socket. The agent advertises the `config_diffs` capability only when the local operator sets `OPSPILOT_CONFIG_DIFFS=true` (default `false`); the Hub negotiates it like any other capability, and agents that never advertise it keep hash-only drift tracking. The agent sends a `config_snapshot` frame on connect and whenever the SHA-256 of an allowlisted file changes (checked every 15 s), only for absolute paths already listed in the agent-local `OPSPILOT_CONFIG_FILES` allowlist (max 20 files). The Hub never requests file paths; there is no generic file-read or shell tool.
+
+```json
+{"type":"config_snapshot","version":1,"observedAt":"2026-11-26T12:00:00.123Z","filePath":"/etc/app/settings.env","checksumSha256":"<64 lowercase hex>","status":"redacted_snapshot","format":"dotenv","contentRedacted":"WORKERS=4\nPASSWORD=[REDACTED]\n","truncated":false,"redactionCount":1}
+```
+
+```json
+{"type":"config_snapshot","version":1,"observedAt":"2026-11-26T12:00:00.123Z","filePath":"/etc/app/blob.bin","checksumSha256":"<64 lowercase hex>","status":"hash_only","unavailableReason":"binary_or_unreadable"}
+```
+
+| `status` | Fields beyond `type`, `version`, `observedAt`, `filePath`, `checksumSha256`, `status` |
+|---|---|
+| `redacted_snapshot` | Exactly `format` (`dotenv`\|`ini`\|`json`\|`yaml`\|`nginx`\|`text`), `contentRedacted` (≤16 KiB UTF-8), `truncated`, `redactionCount` (safe integer 0..100000) |
+| `hash_only` | Exactly `unavailableReason` (`disabled`, `not_allowlisted`, `not_regular_file`, `too_large`, `binary_or_unreadable`, `unreadable`) |
+
+The Hub accepts only this exact shape (`parseConfigSnapshot` in `packages/contracts`): whole frame ≤32 KiB (`MAX_CONFIG_SNAPSHOT_BYTES`, below the 64 KiB WS limit), no unknown keys, absolute `filePath` ≤256 chars without control characters, 64 lowercase hex checksum, canonical UTC millisecond `observedAt` within ±120 s/+5 s, and the active authenticated socket identity. Malformed frames are dropped silently; telemetry remains independent.
+
+Agent-side local validation before reading: `os.Lstat` must confirm a regular file (symlinks, directories, devices and FIFOs are rejected and never followed), files >64 KiB are hash-only (`too_large`; hash-only tracking up to 1 MiB continues unchanged), and binary files (NUL bytes or invalid UTF-8) are `binary_or_unreadable` — raw binary is never transmitted. Secrets are redacted **on the agent before sending** (Bearer/Basic/Digest tokens; `password`/`passwd`/`pwd`/`api_key`/`token`/`secret` assignments; `*_PASSWORD`/`*_SECRET`/`*_KEY`/`*_TOKEN` env/INI keys; AWS `AKIA`/`ASIA`; GitHub `gh[pousr]_`/`github_pat_`; PEM private key blocks; Slack `xox*`; `sk-` keys; JWTs; URL userinfo `scheme://user:pass@host`), content is truncated cleanly at 16 KiB, and `redactionCount` reports how many secrets were replaced.
+
+The Hub re-runs `redact()` on all received content before storing or diffing (agent redaction is never trusted alone), deduplicates against the telemetry-inserted row with the identical latest checksum, links `previous_snapshot_id`, computes a bounded redacted semantic diff when a prior redacted snapshot exists, and attaches a redacted `config_diff` evidence item to a matching open `config_drift` incident. All drift output states that config changes are **correlated, not proven causal**.
+
+### Drift timeline HTTP reads
+
+`GET /api/drift` returns `{entries,limit,observed_at}` where each entry has `id`, `agent_id`, `hostname`, `file_path`, `previous_snapshot_id`, `previous_checksum_sha256`, `checksum_sha256`, `diff_status` (`hash_only`|`diff_available`|`unavailable`), `unavailable_reason`, `diff_summary`, `redaction_count`, `content_format`, `content_truncated`, `change_counts` (`{added,removed,modified}`), `incident_id` and `captured_at`. `GET /api/drift/:id` adds `observed_at`, `content_redacted` and `semantic_diff_json` (`{format,summary,changes[],unifiedDiff,addedLines,removedLines,truncated}`); it never exposes unredacted content. Both routes require the admin session (401 unauthenticated, 400 invalid UUID, 404 unknown id).
 
 ### Hub → Agent diagnostic request
 
