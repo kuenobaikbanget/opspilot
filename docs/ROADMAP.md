@@ -50,10 +50,10 @@ The [Monochrome workspace](UI-UX.md#fleet-services-dashboard-contract-target) im
 - [x] OpenAI/Anthropic/Gemini BYOK adapters
 - [x] Server-side JSON schema checks + evidence IDs
 - [x] Encrypted stored provider connections, manual protocol/model routing, revision snapshots and bounded asynchronous connection tests
-- [ ] Deterministic evidence-relevance scoring / citations UI
-- [ ] Worker lease recovery, retry budget, deduplication
-- [ ] Prompt-injection test fixtures and provider-cost tracking
-- [ ] 10–20 reproducible incident fixtures
+- [x] Deterministic evidence-relevance scoring / citations UI
+- [x] Worker lease recovery, retry budget, deduplication
+- [x] Prompt-injection test fixtures and provider-cost tracking
+- [x] 10–20 reproducible incident fixtures
 
 **Exit gate:** measured useful diagnosis rate and 0 hallucinated evidence IDs in fixtures.
 

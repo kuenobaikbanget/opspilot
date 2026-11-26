@@ -9,7 +9,7 @@ import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/pro
 
 const root = new URL("../", import.meta.url).pathname;
 const master = Buffer.alloc(32).toString("base64");
-const migrationNames = ["001_init.sql", "002_ai_providers.sql", "003_services_endpoints.sql", "004_systemd_reports.sql", "005_alert_state.sql", "006_metric_retention.sql", "007_workload_inventory.sql", "008_endpoint_monitor_runs.sql", "009_host_services_unique_key.sql", "010_investigation_reliability.sql"];
+const migrationNames = ["001_init.sql", "002_ai_providers.sql", "003_services_endpoints.sql", "004_systemd_reports.sql", "005_alert_state.sql", "006_metric_retention.sql", "007_workload_inventory.sql", "008_endpoint_monitor_runs.sql", "009_host_services_unique_key.sql", "010_investigation_reliability.sql", "011_investigation_usage_cost.sql"];
 const ids = [1, 2, 3].map((n) => `d0000000-0000-4000-8000-${String(n).padStart(12, "0")}`);
 const presets = [AI_PROVIDER_PRESETS.openai, AI_PROVIDER_PRESETS.anthropic, AI_PROVIDER_PRESETS.gemini];
 const keys = ["dummy-openai-secret", "dummy-anthropic-secret", "dummy-gemini-secret"];

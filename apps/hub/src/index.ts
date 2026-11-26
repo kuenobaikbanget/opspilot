@@ -370,9 +370,14 @@ async function router(req: Request): Promise<Response> {
       max_attempts: number;
       next_retry_at: Date | null;
       lease_expires_at: Date | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      thinking_tokens: number | null;
+      total_tokens: number | null;
+      estimated_cost_usd: string | null;
       created_at: Date;
       completed_at: Date | null;
-    }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,attempts,max_attempts,next_retry_at,lease_expires_at,created_at,completed_at
+    }[]>`SELECT id,provider_id,provider_name,provider_protocol,provider_base_url,provider_model,status,result_json,error,attempts,max_attempts,next_retry_at,lease_expires_at,input_tokens,output_tokens,thinking_tokens,total_tokens,estimated_cost_usd,created_at,completed_at
       FROM investigations WHERE incident_id=${match[1]} ORDER BY created_at DESC LIMIT 10`;
 
     // Cited IDs come from the latest completed investigation's diagnosis, when present.
@@ -403,6 +408,11 @@ async function router(req: Request): Promise<Response> {
       max_attempts: row.max_attempts,
       next_retry_at: row.next_retry_at,
       lease_expires_at: row.lease_expires_at,
+      input_tokens: row.input_tokens,
+      output_tokens: row.output_tokens,
+      thinking_tokens: row.thinking_tokens,
+      total_tokens: row.total_tokens,
+      estimated_cost_usd: row.estimated_cost_usd === null ? null : Number(row.estimated_cost_usd),
       created_at: row.created_at,
       completed_at: row.completed_at,
     }));
