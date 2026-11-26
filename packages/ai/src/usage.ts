@@ -24,8 +24,9 @@ export type DiagnosisWithUsage = {
 
 /**
  * Static reference pricing in USD per 1M tokens, for common known models only.
- * Thinking/reasoning tokens are billed at the output rate (Gemini bills thoughts as
- * output; OpenAI reports them under completion_tokens_details.reasoning_tokens).
+ * Thinking/reasoning tokens are billed at the output rate (Gemini bills thoughts
+ * separately from candidatesTokenCount, while OpenAI already includes
+ * completion_tokens_details.reasoning_tokens inside completion_tokens).
  * These are vendor list prices at documentation time, not quotes; they exist only to
  * give operators an order-of-magnitude estimate. Unknown or custom models always
  * return `estimatedCostUsd: null`.
@@ -61,9 +62,17 @@ export function estimateCostUsd(model: string, inputTokens: number | null, outpu
   return { estimatedCostUsd: Math.round(cost * 1_000_000) / 1_000_000, pricingSource: "catalog" };
 }
 
-function finish(model: string, inputTokens: number | null, outputTokens: number | null, thinkingTokens: number, totalTokens: number | null): ProviderUsage {
-  const total = totalTokens ?? (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens + thinkingTokens : 0);
-  const { estimatedCostUsd, pricingSource } = estimateCostUsd(model, inputTokens, outputTokens, thinkingTokens);
+function finish(
+  model: string,
+  inputTokens: number | null,
+  outputTokens: number | null,
+  thinkingTokens: number,
+  totalTokens: number | null,
+  thinkingIncludedInOutput = false,
+): ProviderUsage {
+  const extraThinking = thinkingIncludedInOutput ? 0 : thinkingTokens;
+  const total = totalTokens ?? (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens + extraThinking : 0);
+  const { estimatedCostUsd, pricingSource } = estimateCostUsd(model, inputTokens, outputTokens, extraThinking);
   return {
     inputTokens: inputTokens ?? 0,
     outputTokens: outputTokens ?? 0,
@@ -74,7 +83,7 @@ function finish(model: string, inputTokens: number | null, outputTokens: number 
   };
 }
 
-/** OpenAI-compatible: usage.prompt_tokens / completion_tokens / total_tokens, optional completion_tokens_details.reasoning_tokens. */
+/** OpenAI-compatible: usage.prompt_tokens / completion_tokens / total_tokens, optional completion_tokens_details.reasoning_tokens (already included in completion_tokens). */
 export function usageFromOpenAICompatible(model: string, response: unknown): ProviderUsage {
   const usage = object(object(response).usage);
   const details = object(usage.completion_tokens_details);
@@ -84,6 +93,7 @@ export function usageFromOpenAICompatible(model: string, response: unknown): Pro
     nonNegativeInt(usage.completion_tokens),
     nonNegativeInt(details.reasoning_tokens) ?? 0,
     nonNegativeInt(usage.total_tokens),
+    true,
   );
 }
 

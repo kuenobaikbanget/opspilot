@@ -9,15 +9,16 @@ export type IncidentEvidence = {
   relevance?: EvidenceRelevance;
 };
 
-/** Optional token/cost metadata an investigation result may carry; all fields optional and nullable. */
+/** Optional token/cost metadata an investigation may carry; all fields optional and nullable. */
 export type InvestigationUsage = {
-  input_tokens?: number;
-  output_tokens?: number;
-  total_tokens?: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  thinking_tokens?: number | null;
+  total_tokens?: number | null;
   estimated_cost_usd?: number | null;
 };
 
-export type InvestigationResultJson = InvestigationUsage & {
+export type InvestigationResultJson = {
   probable_cause?: string;
   confidence?: number | string;
   evidence_ids?: string[];
@@ -25,7 +26,7 @@ export type InvestigationResultJson = InvestigationUsage & {
   recommended_checks?: string[];
 };
 
-export type Investigation = {
+export type Investigation = InvestigationUsage & {
   id: string;
   provider: { id: string | null; name: string; protocol: ProviderProtocol; baseUrl: string | null; model: string | null };
   status: string;

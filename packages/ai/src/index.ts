@@ -43,7 +43,7 @@ const UNTRUSTED_EPILOGUE = "END UNTRUSTED INPUT";
 export function redact(text: string): string {
   return text
     .replace(/(authorization\s*[:=]\s*(?:bearer|basic|digest|token)\s+)[^\s]+/gi, "$1[REDACTED]")
-    .replace(/((?:password|api[_-]?key|token|secret|passwd|pwd)\s*[:=]\s*)[^\s,;"']+/gi, "$1[REDACTED]")
+    .replace(/((?:password|api[_-]?key|token|secret|passwd|pwd)\s*[:=]\s*["']?)[^\s,;"']+/gi, "$1[REDACTED]")
     .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[REDACTED_AWS_KEY]")
     .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]")
     .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]")
@@ -82,13 +82,13 @@ function parseDiagnosis(raw: string, evidenceIds: Set<string>): Diagnosis {
       ? value
           .filter((item): item is string => typeof item === "string")
           .slice(0, limit)
-          .map((item) => redact(item.slice(0, 300)))
+          .map((item) => redact(item).slice(0, 300))
       : [];
 
   // Only evidence IDs minted by the database survive; hallucinated or injected IDs are dropped.
   const ids = strings("evidence_ids" in parsed ? parsed.evidence_ids : [], 20).filter((id) => evidenceIds.has(id));
   return {
-    probable_cause: redact(parsed.probable_cause.slice(0, 2000)),
+    probable_cause: redact(parsed.probable_cause).slice(0, 2000),
     confidence: ids.length ? parsed.confidence : "low",
     evidence_ids: ids,
     missing_evidence: strings("missing_evidence" in parsed ? parsed.missing_evidence : [], 10),

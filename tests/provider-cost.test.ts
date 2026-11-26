@@ -34,12 +34,12 @@ function respondingWith(usage: unknown, perProtocol: "usage" | "usageMetadata"):
   };
 }
 
-test("openai-compatible usage extraction: prompt/completion/total plus reasoning tokens", () => {
+test("openai-compatible usage extraction: prompt/completion/total plus reasoning tokens (no double-count)", () => {
   const usage = usageFromOpenAICompatible("gpt-4.1-mini", {
     usage: {
       prompt_tokens: 1000,
       completion_tokens: 500,
-      total_tokens: 1600,
+      total_tokens: 1500,
       completion_tokens_details: { reasoning_tokens: 100 },
     },
   });
@@ -47,21 +47,21 @@ test("openai-compatible usage extraction: prompt/completion/total plus reasoning
     inputTokens: 1000,
     outputTokens: 500,
     thinkingTokens: 100,
-    totalTokens: 1600,
-    estimatedCostUsd: 0.00136,
+    totalTokens: 1500,
+    estimatedCostUsd: 0.0012,
     pricingSource: "catalog",
   });
 });
 
-test("openai-compatible usage computes total when omitted and tolerates partial details", () => {
+test("openai-compatible usage computes total when omitted without double-counting reasoning tokens", () => {
   const usage = usageFromOpenAICompatible("gpt-4o-mini", {
     usage: { prompt_tokens: 10, completion_tokens: 5, completion_tokens_details: { reasoning_tokens: 3 } },
   });
   expect(usage.inputTokens).toBe(10);
   expect(usage.outputTokens).toBe(5);
   expect(usage.thinkingTokens).toBe(3);
-  expect(usage.totalTokens).toBe(18);
-  expect(usage.estimatedCostUsd).toBe(0.000006); // rounded to 6 decimals like NUMERIC(12,6)
+  expect(usage.totalTokens).toBe(15);
+  expect(usage.estimatedCostUsd).toBe(0.000005); // rounded to 6 decimals like NUMERIC(12,6)
   expect(usage.pricingSource).toBe("catalog");
 });
 
@@ -130,8 +130,8 @@ const protocols: { protocol: ProviderProtocol; model: string; usage: unknown; ex
   {
     protocol: "openai-compatible",
     model: "gpt-4.1-mini",
-    usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1600, completion_tokens_details: { reasoning_tokens: 100 } },
-    expected: { inputTokens: 1000, outputTokens: 500, thinkingTokens: 100, totalTokens: 1600, estimatedCostUsd: 0.00136, pricingSource: "catalog" },
+    usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500, completion_tokens_details: { reasoning_tokens: 100 } },
+    expected: { inputTokens: 1000, outputTokens: 500, thinkingTokens: 100, totalTokens: 1500, estimatedCostUsd: 0.0012, pricingSource: "catalog" },
   },
   {
     protocol: "anthropic",

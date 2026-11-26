@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { AsciiLoading } from "../../../components/ascii-card-reveal";
 import { Badge, Button, Field, Input, Notice, Panel, Select, Textarea } from "../../../components/ui";
 import { WorkspaceIcon } from "../../../components/workspace-shell";
-import { api, ApiError, getIncidentDetail, type IncidentDetailResponse, type IncidentEvidence, type InvestigationResultJson } from "../../../lib/api";
+import { api, ApiError, getIncidentDetail, type IncidentDetailResponse, type IncidentEvidence, type InvestigationUsage } from "../../../lib/api";
 import { percent, resources } from "../../../lib/host-pressure";
 import { useWorkspace, type Incident } from "../workspace";
 import { WorkspaceHeader } from "../workspace-header";
@@ -47,15 +47,16 @@ function sortEvidence(items: IncidentEvidence[], mode: EvidenceSort): IncidentEv
 }
 
 /** Compact truthful usage line; returns null when no token metadata is present. */
-function usageLine(result: InvestigationResultJson): string | null {
-  const total = typeof result.total_tokens === "number" && Number.isFinite(result.total_tokens)
-    ? result.total_tokens
-    : typeof result.input_tokens === "number" && typeof result.output_tokens === "number"
-      ? result.input_tokens + result.output_tokens
+function usageLine(investigation: InvestigationUsage): string | null {
+  const total = typeof investigation.total_tokens === "number" && Number.isFinite(investigation.total_tokens)
+    ? investigation.total_tokens
+    : typeof investigation.input_tokens === "number" && Number.isFinite(investigation.input_tokens)
+      && typeof investigation.output_tokens === "number" && Number.isFinite(investigation.output_tokens)
+      ? investigation.input_tokens + investigation.output_tokens
       : null;
   if (total === null) return null;
-  const cost = typeof result.estimated_cost_usd === "number" && Number.isFinite(result.estimated_cost_usd)
-    ? `est. $${result.estimated_cost_usd.toFixed(4)}`
+  const cost = typeof investigation.estimated_cost_usd === "number" && Number.isFinite(investigation.estimated_cost_usd)
+    ? `est. $${investigation.estimated_cost_usd.toFixed(4)}`
     : "cost unknown";
   return `${Math.round(total).toLocaleString("en-US")} tokens · ${cost}`;
 }
@@ -331,7 +332,7 @@ export function IncidentWorkspace({ drift = false }: { drift?: boolean }) {
                 const result = x.result_json;
                 const citedIds = (result?.evidence_ids ?? []).filter(id => evidenceById.has(id));
                 const invalidCitations = (result?.evidence_ids ?? []).length - citedIds.length;
-                const usage = result ? usageLine(result) : null;
+                const usage = usageLine(x);
                 return (
                 <div className="finding" key={x.id}>
                   <div className="finding-head"><div><strong>{x.provider.name}</strong><span className="finding-provider-meta">{x.provider.protocol} · {x.provider.model ?? "Model not recorded (legacy)"}</span>{x.provider.baseUrl && <span className="finding-provider-meta">{x.provider.baseUrl}</span>}</div><Badge tone={x.status === "failed" ? "danger" : x.status === "completed" ? "info" : "warning"}>{x.status}</Badge></div>

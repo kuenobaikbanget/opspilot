@@ -32,6 +32,7 @@ test("redact strips every common credential pattern", () => {
   }
   expect(redact("Authorization: Bearer abc123")).not.toContain("abc123");
   expect(redact("token=secret password=abc")).not.toContain("token=secret");
+  expect(redact('password="supersecret123" api_key=\'rahasia\'')).toBe('password="[REDACTED]" api_key=\'[REDACTED]\'');
   // Non-secret text is preserved.
   expect(redact("upstream connection refused on port 443")).toBe("upstream connection refused on port 443");
 });
@@ -172,5 +173,25 @@ test("log lines attempting instruction override never reach the system message",
     expect(userMessage.content).toContain("BEGIN UNTRUSTED INPUT");
     expect(userMessage.content).toContain(INJECTION_LINE);
     expect(userMessage.content).toContain("END UNTRUSTED INPUT");
+  } finally { await fixture.close(); }
+});
+
+test("model output redacts PEM private keys before slicing long fields", async () => {
+  const pem = `-----BEGIN RSA PRIVATE KEY-----\n${"MIIEpAIBAAKCAQEA".repeat(40)}\n-----END RSA PRIVATE KEY-----`;
+  const fixture = await startProviderFixture({
+    handler: echoHandler({
+      probable_cause: `${"x".repeat(1950)} ${pem}`,
+      recommended_checks: [`${"y".repeat(260)} ${pem}`],
+    }),
+  });
+  try {
+    const result = await generateDiagnosis({
+      id: "d0000000-0000-4000-8000-000000000011", protocol: "openai-compatible",
+      baseUrl: fixture.baseUrl, apiKey: FIXTURE_DUMMY_KEY, model: "fixture-model",
+    }, incident, maliciousEvidence(), [], fixture.post);
+    expect(result.probable_cause).not.toContain("MIIEpAIBAAKCAQEA");
+    expect(result.probable_cause).toContain("[REDACTED_PRIVATE_KEY]");
+    expect(result.recommended_checks[0]).not.toContain("MIIEpAIBAAKCAQEA");
+    expect(result.recommended_checks[0]).toContain("[REDACTED_PRIVATE_KEY]");
   } finally { await fixture.close(); }
 });
