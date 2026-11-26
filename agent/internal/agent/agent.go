@@ -54,6 +54,71 @@ type telemetry struct {
 	ConfigHashes   map[string]string `json:"configHashes"`
 }
 
+// protocolVersion is the agent wire protocol version reported on enrollment and hello.
+const protocolVersion = 2
+
+// agentVersion identifies the running binary; overridable at build time via -ldflags.
+var agentVersion = "0.1.0"
+
+// advertisedCapabilities lists what this agent can do; the Hub negotiates the intersection.
+var advertisedCapabilities = []string{"telemetry", "systemd_status", "diagnostics"}
+
+type helloMessage struct {
+	Type            string   `json:"type"`
+	ProtocolVersion int      `json:"protocolVersion"`
+	AgentVersion    string   `json:"agentVersion"`
+	Capabilities    []string `json:"capabilities"`
+}
+
+type helloAck struct {
+	Type            string   `json:"type"`
+	ProtocolVersion int      `json:"protocolVersion"`
+	Capabilities    []string `json:"capabilities"`
+}
+
+// capabilitySet tracks the negotiated capabilities; before any ack it defaults to all advertised.
+type capabilitySet struct {
+	mu  sync.Mutex
+	set map[string]bool
+}
+
+func newCapabilitySet() *capabilitySet {
+	set := map[string]bool{}
+	for _, c := range advertisedCapabilities {
+		set[c] = true
+	}
+	return &capabilitySet{set: set}
+}
+
+func (c *capabilitySet) has(name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.set[name]
+}
+
+// applyAck restricts the set to the Hub-negotiated intersection of advertised capabilities.
+func (c *capabilitySet) applyAck(ack helloAck) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := map[string]bool{}
+	for _, advertised := range advertisedCapabilities {
+		for _, negotiated := range ack.Capabilities {
+			if negotiated == advertised {
+				next[advertised] = true
+			}
+		}
+	}
+	c.set = next
+}
+
+type enrollRequest struct {
+	Token           string   `json:"token"`
+	Hostname        string   `json:"hostname"`
+	Version         string   `json:"version"`
+	ProtocolVersion int      `json:"protocolVersion"`
+	Capabilities    []string `json:"capabilities"`
+}
+
 type config struct {
 	HubURL, StatePath, ProcRoot, DiskPath string
 	Interval                              time.Duration
