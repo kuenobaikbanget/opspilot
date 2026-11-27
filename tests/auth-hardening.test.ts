@@ -47,6 +47,13 @@ test("rateLimitKey ignores X-Forwarded-For unless remoteAddress is a trusted pro
   expect(rateLimitKey(req, "login", { remoteAddress: "203.0.113.5" }, "")).toBe("login:203.0.113.5");
   // Untrusted peer even when TRUSTED_PROXY_IPS is set -> header still ignored.
   expect(rateLimitKey(req, "login", { remoteAddress: "203.0.113.5" }, "127.0.0.1,172.16.0.0/12")).toBe("login:203.0.113.5");
+  // Malformed CIDR entries (trailing slash, whitespace, non-digits, /0) must not match all IPs.
+  expect(
+    rateLimitKey(req, "login", { remoteAddress: "203.0.113.5" }, "172.16.0.0/,fe80::/,10.0.0.0/0,::/0,172.16.0.0/ 12,172.16.0.0/abc"),
+  ).toBe("login:203.0.113.5");
+  expect(
+    rateLimitKey(req, "login", { remoteAddress: "2001:db8::1" }, "fe80::/,::/0"),
+  ).toBe("login:2001:db8::1");
 });
 
 test("resolveClientIp walks X-Forwarded-For right-to-left across trusted proxies and normalizes IPv4-mapped IPv6", () => {

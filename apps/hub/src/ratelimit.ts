@@ -152,18 +152,20 @@ function compileTrustedProxyEntry(entry: string): IpMatcher | null {
   }
 
   const base = normalizeIp(trimmed.slice(0, slash));
-  const prefix = Number(trimmed.slice(slash + 1));
+  const prefixRaw = trimmed.slice(slash + 1);
+  if (!/^\d+$/.test(prefixRaw)) return null;
+  const prefix = Number(prefixRaw);
   const kind = isIP(base);
-  if (kind === 4 && Number.isInteger(prefix) && prefix >= 0 && prefix <= 32) {
-    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  if (kind === 4 && Number.isInteger(prefix) && prefix >= 1 && prefix <= 32) {
+    const mask = (0xffffffff << (32 - prefix)) >>> 0;
     const net = (ipv4ToUint32(base) & mask) >>> 0;
     return (ip) => isIP(ip) === 4 && ((ipv4ToUint32(ip) & mask) >>> 0) === net;
   }
-  if (kind === 6 && Number.isInteger(prefix) && prefix >= 0 && prefix <= 128) {
+  if (kind === 6 && Number.isInteger(prefix) && prefix >= 1 && prefix <= 128) {
     const baseVal = ipv6ToBigInt(base);
     if (baseVal === null) return null;
     const shift = BigInt(128 - prefix);
-    const mask = prefix === 0 ? 0n : ((1n << 128n) - 1n) ^ ((1n << shift) - 1n);
+    const mask = ((1n << 128n) - 1n) ^ ((1n << shift) - 1n);
     const net = baseVal & mask;
     return (ip) => {
       if (isIP(ip) !== 6) return false;
