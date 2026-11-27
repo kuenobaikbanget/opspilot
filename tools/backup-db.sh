@@ -7,8 +7,12 @@
 # Environment:
 #   DATABASE_URL   (required) PostgreSQL connection URL for the source database.
 #   BACKUP_DIR     Output directory (default: ./backups). Created if missing.
-#   PG_DUMP_BIN    pg_dump binary (default: pg_dump). Point at a version >= the server
-#                  major version, or a wrapper (e.g. `docker exec <pg-container> pg_dump`).
+#   PG_DUMP_BIN    pg_dump binary (default: pg_dump). Use the same major version as the
+#                  server when possible: pg_dump >= 17 embeds `SET transaction_timeout = 0;`
+#                  in the archive, which servers < 17 reject at restore time (restore-db.sh
+#                  tolerates exactly that one error). A wrapper (e.g. `docker exec <pg-container>
+#                  pg_dump`) must handle the -f path itself (stream to stdout and redirect),
+#                  because the path is not shared with the container.
 #
 # Output: <BACKUP_DIR>/opspilot-<UTC timestamp>.dump plus opspilot-<UTC timestamp>.dump.sha256
 # The sidecar uses the standard `sha256sum -c` format and is verified by restore-db.sh

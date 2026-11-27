@@ -81,14 +81,36 @@ if [[ "$clean" -eq 0 ]]; then
   fi
 fi
 
+# Server major version, used to recognize the one known cross-version pg_dump artifact:
+# pg_dump >= 17 embeds `SET transaction_timeout = 0;` in every archive, and PostgreSQL
+# servers < 17 reject that GUC (pg_restore then exits 1 although the restore completed).
+server_version_num="$("$psql_bin" "$target_url" -tAXc "SHOW server_version_num")"
+server_major=$((server_version_num / 10000))
+
 restore_flags=(--no-owner --no-privileges)
 if [[ "$clean" -eq 1 ]]; then
   restore_flags+=(--clean --if-exists)
   echo "warning: --clean drops existing objects in the target database" >&2
 fi
 
-if ! "$pg_restore_bin" -Fc "${restore_flags[@]}" -d "$target_url" "$dump_file"; then
-  echo "error: pg_restore failed" >&2
-  exit 1
+restore_log="$(mktemp)"
+if ! "$pg_restore_bin" -Fc "${restore_flags[@]}" -d "$target_url" "$dump_file" 2> "$restore_log"; then
+  # Tolerate ONLY the pre-17 `transaction_timeout` error described above, and only
+  # against a pre-17 server; every other pg_restore error still fails the restore.
+  tolerated=0
+  if [[ "$server_major" -lt 17 ]]; then
+    remaining="$(grep -vE '^pg_restore: error: .*unrecognized configuration parameter "transaction_timeout"$|^Command was: SET transaction_timeout = 0;$|^pg_restore: warning: errors ignored on restore: [0-9]+$|^$' "$restore_log" || true)"
+    if [[ -z "$remaining" ]]; then
+      tolerated=1
+    fi
+  fi
+  if [[ "$tolerated" -ne 1 ]]; then
+    cat "$restore_log" >&2
+    rm -f "$restore_log"
+    echo "error: pg_restore failed" >&2
+    exit 1
+  fi
+  echo "warning: pg_restore reported only the pre-17-incompatible 'SET transaction_timeout = 0' (ignored); restore completed" >&2
 fi
+rm -f "$restore_log"
 echo "restore complete into $target_url"

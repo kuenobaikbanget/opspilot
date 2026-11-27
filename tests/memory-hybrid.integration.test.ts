@@ -6,6 +6,7 @@ import { encryptProviderKey, readProviderMasterKey } from "../packages/ai/src/cr
 import { hasPgVector, searchIncidentMemories } from "../apps/hub/src/memory-retrieval";
 import { indexPendingMemoryEmbeddings, memoryEmbeddingsEnabled } from "../apps/worker/src/memory-embeddings";
 import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
+import { grantAiEgressConsent } from "./helpers/privacy-consent";
 import { conceptEmbedding, ftsRank } from "./memory-retrieval-fixtures/harness";
 import { MEMORY_RECORDS, QUERY_CASES } from "./memory-retrieval-fixtures/corpus";
 
@@ -187,6 +188,14 @@ integration("embedding indexer is opt-in and consent-gated", async () => {
     const providerId = randomUUID();
     await db`INSERT INTO ai_providers(id,name,protocol,base_url,default_model,enabled,api_key_ciphertext)
       VALUES (${providerId},'embed','openai-compatible','https://embeddings.example/v1','text-embedding-3-small',TRUE,${encryptProviderKey(providerId, "sk-test-indexer-key-0123456789", masterKey)})`;
+
+    // Workspace-level AI egress consent is deny-by-default after migration 017: with an
+    // embedding-capable provider configured, a row-consented memory is still not embedded.
+    await db`UPDATE incident_memory SET embedding_consent=TRUE WHERE id=${memoryId}`;
+    expect(await indexPendingMemoryEmbeddings(db, masterKey, embedFn as never, { enabled: true })).toBe(0);
+    expect(embedCalls.length).toBe(0);
+    await db`UPDATE incident_memory SET embedding_consent=FALSE WHERE id=${memoryId}`;
+    await grantAiEgressConsent(db);
     expect(await indexPendingMemoryEmbeddings(db, masterKey, embedFn as never, { enabled: false })).toBe(0);
     // No master key -> no-op.
     expect(await indexPendingMemoryEmbeddings(db, null, embedFn as never, { enabled: true })).toBe(0);
