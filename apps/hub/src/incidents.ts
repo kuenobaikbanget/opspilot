@@ -1,6 +1,7 @@
 import type { SQL } from "bun";
 import { db, audit } from "./db";
-import { redact } from "@opspilot/ai";
+import { getPrivacySettings } from "./privacy";
+import { redactText } from "@opspilot/ai";
 import type { HostThresholds } from "@opspilot/contracts";
 
 /** Creates a new incident, optionally records initial evidence, and writes an audit event. */
@@ -22,15 +23,25 @@ export async function createIncident(
   return id;
 }
 
-/** Redacts, truncates, and stores an evidence entry for an incident. */
+/**
+ * Redacts (multi-layer pipeline), truncates, and stores an evidence entry for an incident.
+ * The structured redaction summary (per-category counts, never raw matched values) is
+ * persisted in `evidence.redaction_summary` (migration 017).
+ */
 export async function addEvidence(
   incidentId: string,
   source: string,
   content: string,
   executor: SQL = db,
 ) {
-  const cleaned = redact(content).slice(0, 6000);
-  await executor`INSERT INTO evidence(incident_id,source,content) VALUES(${incidentId},${source.slice(0, 100)},${cleaned})`;
+  const privacy = await getPrivacySettings(executor);
+  const result = redactText(content, {
+    redactEmail: privacy.redactPii,
+    redactIp: privacy.redactPii,
+  });
+  const cleaned = result.text.slice(0, 6000);
+  await executor`INSERT INTO evidence(incident_id,source,content,redaction_summary)
+    VALUES(${incidentId},${source.slice(0, 100)},${cleaned},${JSON.stringify(result.summary)}::jsonb)`;
 }
 
 function envLimit(configured: string | undefined, fallback: number): number | null {

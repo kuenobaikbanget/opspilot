@@ -2,14 +2,26 @@
 
 Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` rewrite. JSON endpoints require **admin HttpOnly cookie** (unless `DISABLE_AUTH=true` in non-production; refused at startup in production, with `ALLOWED_ORIGIN` still enforced), except agent enrollment, WebSocket agent connect, and `/healthz`.
 
+## Request hardening (rate limits, Origin, CSRF)
+
+- **Rate limits** (per client IP, in-memory sliding window; `429 {"error":"Too many requests","code":"rate_limited"}` with a `Retry-After` header when exhausted): `POST /api/auth/login` (default 5 / 5 min), `POST /api/agents/enroll` and `POST /api/agents/enrollment-token` (default 10 / 10 min), all other state-changing admin routes (default 600 / min). Tunable via `RATE_LIMIT_LOGIN_MAX`, `RATE_LIMIT_LOGIN_WINDOW_MS`, `RATE_LIMIT_ENROLL_MAX`, `RATE_LIMIT_ENROLL_WINDOW_MS`, `RATE_LIMIT_ADMIN_MAX`, `RATE_LIMIT_ADMIN_WINDOW_MS`.
+- **Origin check**: every `POST`/`PUT`/`PATCH`/`DELETE` with an `Origin` header must match `ALLOWED_ORIGIN` exactly, else `403 forbidden_origin`. Agent enrollment and agent WebSocket connect additionally reject any `Origin` header outright.
+- **CSRF**: every state-changing cookie-authenticated admin request must echo the session-bound CSRF token in the `x-opspilot-csrf` header, else `403 csrf_required`. Login sets two cookies: `opspilot_session` (HttpOnly, SameSite=Strict) and `opspilot_csrf` (JS-readable double-submit cookie, SameSite=Strict). The hub stores only SHA-256 hashes of both and compares the header hash to the session row in constant time. Bearer-authenticated agent endpoints and `POST /api/auth/login` are exempt from the token check (login is still Origin-checked).
+- **Session lifecycle**: sessions are tracked server-side in PostgreSQL (`sessions` table keyed by hashed token). Absolute expiry defaults to 8h (`SESSION_MAX_AGE_SECONDS`), idle timeout to 1h (`SESSION_IDLE_TIMEOUT_SECONDS`, enforced via `last_seen_at`). Logout, revocation, or expiry immediately rejects a replayed cookie with `401`, even when its signature and `exp` claim are still valid.
+
 ## Admin HTTP routes
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| POST | `/api/auth/login` | `{"password":"..."}` | `200` sets signed cookie |
-| POST | `/api/auth/logout` | none | `200` clears cookie |
+| POST | `/api/auth/login` | `{"password":"..."}` | `200` sets `opspilot_session` + `opspilot_csrf` cookies and creates a `sessions` row |
+| POST | `/api/auth/logout` | none | `200` revokes the current session server-side and clears both cookies |
+| POST | `/api/auth/logout-all` | none | `200 {ok,revoked}`; revokes every other live session |
 | GET | `/api/auth/me` | none | role, auth status, and `authDisabled` flag |
+| GET | `/api/auth/sessions` | none | `{sessions:[{id,created_at,last_seen_at,expires_at,revoked_at,user_agent,ip,current}]}` newest first, max 100; session hashes are never returned |
+| DELETE | `/api/auth/sessions/:id` | none | `200 {ok:true}` revokes that session (its cookie is rejected immediately); `400` invalid id, `404` unknown/already revoked; audited as `session.revoked` |
 | POST | `/api/agents/enrollment-token` | `{}` | `{token, expiresInSeconds}`; show once |
+| POST | `/api/agents/:id/revoke` | none | `200 {ok,agentId,revoked:true}`; marks the agent revoked, closes its active WebSocket (close code `4003`), rejects all future HTTP/WS auth from it, audits `agent.revoked`; `400` invalid id, `404` unknown/already revoked |
+| POST | `/api/agents/:id/rotate` | none | `200 {ok,agentId,agentSecret}` — new secret returned **once**; immediate swap (`token_hash` replaced, `last_rotated_at` set), stale WebSocket closed (close code `4002`), audited as `agent.rotated`; a revoked agent stays revoked; `400` invalid id, `404` unknown |
 | GET | `/api/agents/install-config` | none | `AgentInstallConfig` or `503 {"error":"Agent installation is not configured"}` |
 | GET | `/api/hosts` | none | `{hosts,total,online,limit,observed_at,stale_after_seconds,thresholds}`; each host includes `protocol_version` and negotiated `capabilities` |
 | GET | `/api/hosts/:id/metrics` | none | last ≤120 raw samples descending; optional `from`/`to` (ISO, ≤366d span), `resolution=auto|raw|hourly` (auto uses hourly rollups beyond the raw retention window), `limit=1..2000`; 400 invalid params/ID, 404 unknown host |
@@ -29,11 +41,13 @@ Hub API root: `http://localhost:3001` in local dev; Web uses the Next.js `/api` 
 | POST | `/api/ai/providers` | `{name,protocol,baseUrl,apiKey,defaultModel,enabled}` | `201 {provider}` |
 | PATCH | `/api/ai/providers/:id` | subset of create fields, at least one | `200 {provider}` |
 | DELETE | `/api/ai/providers/:id` | none | `200 {ok:true}`; reports preserved |
-| POST | `/api/ai/providers/:id/test` | `{}` | `202 {id,providerId,status:"queued"}` |
+| POST | `/api/ai/providers/:id/test` | `{}` | `202 {id,providerId,status:"queued"}`; `403 {code:"privacy_consent_required"}` without egress consent |
 | GET | `/api/incidents` | none | last 100 incidents |
 | POST | `/api/incidents` | `{"agentId":"uuid","title":"..."}` | `201 {id}` |
 | GET | `/api/incidents/:id` | none | `{incident,evidence,investigations}`; each investigation also exposes `attempts,max_attempts,next_retry_at,lease_expires_at` and `retrieved_memories` (bounded `InvestigationMemoryAttribution[]` snapshot persisted by the Worker, `null` for legacy/active rows) |
-| POST | `/api/incidents/:id/investigate` | `{"providerId":"uuid","providerRevision":1,"model":"explicit-model"}` | `202 {id,status,deduplicated,liveAgent}`; an active (queued/running) investigation with the same incident+provider+revision+model returns that row with `deduplicated:true` |
+| POST | `/api/incidents/:id/investigate` | `{"providerId":"uuid","providerRevision":1,"model":"explicit-model"}` | `202 {id,status,deduplicated,liveAgent}`; an active (queued/running) investigation with the same incident+provider+revision+model returns that row with `deduplicated:true`; `403 {code:"privacy_consent_required"}` when workspace egress consent is absent/revoked (nothing is queued, attempt audited) |
+| GET | `/api/privacy/consent` | none | `200 {consent: PrivacyConsentSettings}` — `{aiEgressConsentGranted,consentVersion,consentedAt,consentedBy,redactPii,updatedAt}`; absent row reports deny-by-default |
+| PUT | `/api/privacy/consent` | `{aiEgressConsentGranted?,redactPii?,consentedBy?}` (at least one; booleans; `consentedBy` 1-120 chars) | `200 {consent}`; audited as `privacy.consent_granted` / `privacy.consent_revoked` / `privacy.settings_updated`; `400 invalid_request`, `403 forbidden_origin` on cross-origin |
 | POST | `/api/incidents/:id/resolve` | `{"resolution":"...","embeddingConsent"?:boolean}` | `200 {ok:true,memoryId,deduplicated,occurrenceCount}`; the resolution is redacted, fingerprinted and deduplicated against canonical memories inside one transaction; `embeddingConsent: true` is the strict opt-in that sets `embedding_consent = TRUE` on the canonical memory row (any other value keeps the default `false`) |
 | GET | `/api/drift` | none | `{entries,limit,observed_at}` drift timeline (newest first); optional `agentId` (uuid), `filePath` (exact absolute path ≤256 chars), `pathContains` (case-insensitive literal substring ≤256 printable chars), `limit` 1..100 (default 100); 400 invalid params |
 | GET | `/api/drift/:id` | none | `DriftDetailResponse` with redacted semantic diff; 400 invalid id, 404 unknown id |
@@ -71,7 +85,7 @@ Names trim to 1–80 characters, models 1–200, URLs at most 2048, and API keys
 
 `lastTest` is null or `{id,revision,model,status,errorCode,httpStatus,requestedAt,startedAt,completedAt,expiresAt}`. Status is queued/running/completed/failed. A single 90-second slot includes Worker queue time; expired active slots project as failed/provider_timeout on GET without mutation. Only an explicit test sends a synthetic generation prompt; no incident evidence is used. Completed means that model/configuration passed then, not perpetual health. A revision mismatch is not tested for the current configuration.
 
-AI errors use `{error,code}` with fixed messages and no input/upstream content. State codes: `invalid_request`, `provider_unavailable` (404), `provider_disabled`, `provider_changed`, `test_in_progress`, `provider_limit` (409), and `credential_unavailable` (503). Transport codes: `invalid_endpoint`, `endpoint_not_public`, `dns_failed`, `provider_timeout`, `provider_response_too_large`, `provider_invalid_response`, `provider_network`, `provider_redirect`, `provider_http`, `provider_configuration`. HTTP failures expose only status. Missing/malformed master disables AI mutations/execution but metadata, monitoring and health remain available.
+AI errors use `{error,code}` with fixed messages and no input/upstream content. State codes: `invalid_request`, `provider_unavailable` (404), `provider_disabled`, `provider_changed`, `test_in_progress`, `provider_limit` (409), `credential_unavailable` (503), and `privacy_consent_required` (403 — external AI egress attempted without persisted consent; the Hub refuses to queue investigate/test and the Worker terminalizes the job with the same code; both audit `privacy.egress_blocked`). Transport codes: `invalid_endpoint`, `endpoint_not_public`, `dns_failed`, `provider_timeout`, `provider_response_too_large`, `provider_invalid_response`, `provider_network`, `provider_redirect`, `provider_http`, `provider_configuration`. HTTP failures expose only status. Missing/malformed master disables AI mutations/execution but metadata, monitoring and health remain available.
 
 Investigations validate the browser revision before diagnostics and recheck under a row lock before queueing. Worker rejects changed/disabled/deleted connections rather than silently using another destination. Incident detail reports `provider:{id:string|null,name,protocol,baseUrl:string|null,model:string|null}` from an immutable non-secret snapshot, never current connection metadata. Legacy model/base URL remain null. Deleting a connection removes credentials, not historical reports; unstarted jobs fail safely.
 
@@ -128,7 +142,9 @@ Authorization: Bearer <agentSecret>
 X-OpsPilot-Agent-ID: <uuid>
 ```
 
-The Hub verifies the hashed secret before upgrading. Use WSS behind TLS in remote deployment. Avoid HTTP on an untrusted network.
+The Hub verifies the hashed secret in constant time against the stored SHA-256 hash and rejects revoked agents (`revoked_at IS NOT NULL`) with `401` before upgrading. Use WSS behind TLS in remote deployment. Avoid HTTP on an untrusted network.
+
+**Credential lifecycle:** admins can revoke or rotate an agent credential via `POST /api/agents/:id/revoke` / `POST /api/agents/:id/rotate` (see the routes table). Revocation immediately closes the active WebSocket with close code `4003` and rejects all future HTTP/WS auth. Rotation is an immediate swap: the old secret stops working at once, the stale WebSocket is closed with close code `4002`, and the new `agentSecret` is returned to the admin exactly once — deliver it to the host out of band (the agent re-enrolls or is reconfigured with the new secret; a `401` on connect means the credential is invalid, rotated, or revoked). A revoked agent stays revoked after rotation until it is explicitly re-enrolled. No agent wire-protocol change is required for revoke/rotate; the shared close codes `4001`/`4002`/`4003` are exported from `@opspilot/contracts` as `WS_CLOSE_SUPERSEDED`/`WS_CLOSE_CREDENTIAL_ROTATED`/`WS_CLOSE_AGENT_REVOKED`.
 
 **Hello / capability negotiation:** immediately after connecting, an agent sends one hello frame:
 

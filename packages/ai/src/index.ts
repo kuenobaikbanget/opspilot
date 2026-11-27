@@ -1,10 +1,11 @@
 import type { Diagnosis, ProviderProtocol } from "@opspilot/contracts";
 import { normalizeProviderBaseUrl, postProviderJson, ProviderError, type ProviderPost } from "./provider-http";
-import { redact } from "./redaction";
+import { redact, redactText } from "./redaction";
 import { sortScoredEvidence, scoreEvidenceRelevance, type EvidenceLike, type IncidentLike, type SortOptions } from "./evidence-scoring";
 import { usageFromProviderResponse, type DiagnosisWithUsage, type ProviderUsage } from "./usage";
 
-export { redact } from "./redaction";
+export { redact, redactText, redactValue, emptyRedactionSummary, mergeRedactionSummaries, REDACTION_CATEGORIES } from "./redaction";
+export type { RedactionCategory, RedactionOptions, RedactionResult, RedactionSummary } from "./redaction";
 export { supportsEmbeddings, generateEmbedding, EmbeddingError, type EmbeddingErrorCode, type GeneratedEmbedding, MAX_EMBEDDING_INPUT_CHARS, MAX_EMBEDDING_DIMENSIONS } from "./embeddings";
 export { cosineSimilarity, reciprocalRankFusion, type FtsRankedItem, type VectorRankedItem, type FusedItem, type RrfOptions } from "./memory-retrieval";
 
@@ -86,6 +87,12 @@ function parseDiagnosis(raw: string, evidenceIds: Set<string>): Diagnosis {
   };
 }
 
+/** Optional egress redaction controls; PII layers stay off unless explicitly enabled. */
+export type DiagnosisRedactionOptions = {
+  /** Also redact email addresses and IP addresses (opt-in PII redaction). */
+  redactPii?: boolean;
+};
+
 /** Generates a structured, evidence-grounded diagnosis hypothesis using the selected provider. */
 export async function generateDiagnosis(
   connection: ProviderConnection,
@@ -93,8 +100,9 @@ export async function generateDiagnosis(
   evidence: { id: string; source: string; content: string }[],
   memory: { id: string; summary: string; resolution: string }[],
   post: ProviderPost = postProviderJson,
+  redaction: DiagnosisRedactionOptions = {},
 ): Promise<Diagnosis> {
-  return (await generateDiagnosisWithUsage(connection, incident, evidence, memory, post)).diagnosis;
+  return (await generateDiagnosisWithUsage(connection, incident, evidence, memory, post, redaction)).diagnosis;
 }
 
 /** Like {@link generateDiagnosis}, but also returns the provider-reported token usage and cost estimate. */
@@ -104,18 +112,22 @@ export async function generateDiagnosisWithUsage(
   evidence: { id: string; source: string; content: string }[],
   memory: { id: string; summary: string; resolution: string }[],
   post: ProviderPost = postProviderJson,
+  redaction: DiagnosisRedactionOptions = {},
 ): Promise<DiagnosisWithUsage> {
   const baseUrl = normalizeProviderBaseUrl(connection.baseUrl);
   const ids = new Set(evidence.map((item) => item.id));
+  // Defense in depth: every string headed for the provider passes the multi-layer
+  // redaction pipeline (with optional PII layers) before serialization.
+  const pii = { redactEmail: redaction.redactPii === true, redactIp: redaction.redactPii === true };
   const payload = JSON.stringify({
     incident,
     evidence: evidence
-      .map((item) => ({ ...item, content: redact(item.content).slice(0, 2500) }))
+      .map((item) => ({ ...item, content: redactText(item.content, pii).text.slice(0, 2500) }))
       .slice(0, 12),
     prior_resolutions: memory.slice(0, 5).map((item) => ({
       ...item,
-      summary: redact(item.summary).slice(0, 400),
-      resolution: redact(item.resolution).slice(0, 600),
+      summary: redactText(item.summary, pii).text.slice(0, 400),
+      resolution: redactText(item.resolution, pii).text.slice(0, 600),
     })),
   }).slice(0, 18000);
 

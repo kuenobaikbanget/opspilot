@@ -6,6 +6,8 @@ import { decryptProviderKey, readProviderMasterKey } from "../packages/ai/src/cr
 import { runOneInvestigation, runOneProviderTest } from "../apps/worker/src/jobs";
 import { fixtureInput, startProviderFixture } from "./helpers/provider-https-fixture";
 import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
+import { csrfFromLogin, withCsrf } from "./helpers/csrf";
+import { grantAiEgressConsent } from "./helpers/privacy-consent";
 
 const integration = providerTestDatabaseAvailable ? test : test.skip;
 const origin = "http://localhost:3100";
@@ -117,12 +119,14 @@ async function startHub(databaseUrl: string, encryptionKey: string | null = mast
   const baseUrl = `http://127.0.0.1:${port}`;
   const responses: string[] = [];
   let cookie = "";
+  let csrf = "";
   async function request(path: string, method = "GET", data?: unknown, overrides: RequestOptions = {}): Promise<Response> {
     const headers = new Headers();
     if (overrides.authenticated !== false && cookie) headers.set("cookie", cookie);
     if (method !== "GET") {
       if (overrides.origin !== null) headers.set("origin", overrides.origin ?? origin);
       if (overrides.contentType !== null) headers.set("content-type", overrides.contentType ?? "application/json");
+      withCsrf(headers, method, csrf);
     }
     const response = await fetch(`${baseUrl}${path}`, {
       method, headers, body: overrides.raw ?? (data === undefined ? undefined : JSON.stringify(data)),
@@ -140,6 +144,7 @@ async function startHub(databaseUrl: string, encryptionKey: string | null = mast
     const login = await request("/api/auth/login", "POST", { password });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    csrf = csrfFromLogin(login);
     return { request, responses, stop: process.stop };
   } catch (error) {
     await process.stop();
@@ -150,6 +155,7 @@ async function startHub(databaseUrl: string, encryptionKey: string | null = mast
 async function withHubDb(work: (db: SQL, hub: Hub, databaseUrl: string) => Promise<void>): Promise<void> {
   await withProviderTestDb(async (db, databaseUrl) => {
     await migrate(databaseUrl);
+    await grantAiEgressConsent(db);
     const hub = await startHub(databaseUrl);
     try { await work(db, hub, databaseUrl); }
     finally {
@@ -343,6 +349,7 @@ integration("provider CRUD preserves encrypted keys, revisions, snapshots and au
 integration("missing or malformed master leaves monitoring and metadata available but rejects AI mutations", async () => {
   await withProviderTestDb(async (db, databaseUrl) => {
     await migrate(databaseUrl);
+    await grantAiEgressConsent(db);
     const configured = await startHub(databaseUrl);
     let provider: AiProvider;
     const { incidentId } = await seedIncident(db);

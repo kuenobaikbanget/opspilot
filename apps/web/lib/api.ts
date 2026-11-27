@@ -8,7 +8,9 @@ import type {
   IncidentTimelineResponse,
   InvestigationMemoryAttribution,
   LinkIncidentChangeRequest,
+  PrivacyConsentSettings,
   ProviderProtocol,
+  UpdatePrivacyConsentRequest,
 } from "@opspilot/contracts";
 
 export type { DriftDetailResponse, DriftTimelineEntry, DriftTimelineResponse, SemanticDiffChange, SemanticDiffResult } from "@opspilot/contracts";
@@ -131,6 +133,18 @@ export async function mergeMemories(sourceMemoryId: string, targetMemoryId: stri
   return result.memory;
 }
 
+/** Reads the workspace privacy consent settings (`GET /api/privacy/consent`). */
+export async function getPrivacyConsent(signal?: AbortSignal): Promise<PrivacyConsentSettings> {
+  const data = await api("/privacy/consent", "GET", undefined, signal) as { consent: PrivacyConsentSettings };
+  return data.consent;
+}
+
+/** Updates the workspace privacy consent settings (`PUT /api/privacy/consent`). */
+export async function updatePrivacyConsent(update: UpdatePrivacyConsentRequest): Promise<PrivacyConsentSettings> {
+  const data = await api("/privacy/consent", "PUT", update) as { consent: PrivacyConsentSettings };
+  return data.consent;
+}
+
 export class ApiError extends Error {
   constructor(message: string, readonly code: string | null, readonly status: number) {
     super(message);
@@ -138,11 +152,28 @@ export class ApiError extends Error {
   }
 }
 
+/** Reads the JS-readable CSRF double-submit cookie set by the hub at login. */
+export function csrfTokenFromCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = "opspilot_csrf=";
+  const entry = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+  return entry ? entry.slice(prefix.length) : null;
+}
+
 export async function api(path: string, method = "GET", payload?: unknown, signal?: AbortSignal) {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  // State-changing requests must echo the session-bound CSRF token (double-submit).
+  if (method !== "GET" && method !== "HEAD") {
+    const csrf = csrfTokenFromCookie();
+    if (csrf) headers["x-opspilot-csrf"] = csrf;
+  }
   const response = await fetch(`/api${path}`, {
     method,
     credentials: "same-origin",
-    headers: { "content-type": "application/json" },
+    headers,
     body: payload === undefined ? undefined : JSON.stringify(payload),
     cache: "no-store",
     signal,

@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine@sha256:383395b794dffa5b53012a212365d40c8e37109a626ca30d6151c8348d380b5f AS build
 WORKDIR /src
 ENV GOFLAGS=-mod=readonly
 COPY agent/go.mod agent/go.sum ./
@@ -7,7 +7,7 @@ COPY agent/ .
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /opspilot-agent ./cmd/opspilot-agent
-FROM alpine:3.21
+FROM alpine:3.21@sha256:bc21487101ae47172509130ee1092cc273a831968d64b617776d1f69c81e42ab
 RUN apk add --no-cache ca-certificates iproute2 && mkdir -p /data && chown 10001:10001 /data
 COPY --from=build /opspilot-agent /usr/local/bin/opspilot-agent
 USER 10001:10001

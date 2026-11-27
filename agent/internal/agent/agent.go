@@ -274,9 +274,10 @@ func enroll(cfg config) (identity, error) {
 		return id, errors.New("invalid enrollment request")
 	}
 	req.Header.Set("content-type", "application/json")
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}}
+	client, err := hubHTTPClient()
+	if err != nil {
+		return id, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return id, errors.New("enrollment request failed")
@@ -384,12 +385,16 @@ func Run() error {
 		notify = make(chan struct{}, 1)
 		startTelemetrySampler(context.Background(), cfg, sampler, queue, notify)
 	}
+	dialer, err := websocketDialer()
+	if err != nil {
+		return err
+	}
 	log.Printf("OpsPilot agent starting; hub=%s interval=%s", cfg.HubURL, cfg.Interval)
 	for {
 		header := http.Header{}
 		header.Set("Authorization", "Bearer "+id.AgentSecret)
 		header.Set("X-OpsPilot-Agent-ID", id.AgentID)
-		conn, response, err := websocket.DefaultDialer.Dial(endpoint, header)
+		conn, response, err := dialer.Dial(endpoint, header)
 		if err != nil {
 			if response != nil {
 				log.Printf("websocket denied: HTTP %d", response.StatusCode)

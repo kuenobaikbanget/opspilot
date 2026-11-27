@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
+import { csrfFromLogin } from "./helpers/csrf";
 
 const integration = providerTestDatabaseAvailable ? test : test.skip;
 const root = new URL("../", import.meta.url).pathname;
@@ -73,9 +74,14 @@ integration("config_snapshot WS ingestion produces a redacted drift timeline, se
       const base = `http://127.0.0.1:${port}`;
       const socketUrl = `ws://127.0.0.1:${port}/api/agents/connect`;
       let cookie = "";
+      let csrf = "";
       const api = (path: string, method = "GET", body?: unknown, auth = true) => fetch(base + path, {
         signal: AbortSignal.timeout(3000),
-        headers: { "content-type": "application/json", ...(auth && cookie ? { cookie } : {}) },
+        headers: {
+          "content-type": "application/json",
+          ...(auth && cookie ? { cookie } : {}),
+          ...(auth && method !== "GET" && csrf ? { "x-opspilot-csrf": csrf } : {}),
+        },
         method,
         body: body === undefined ? undefined : JSON.stringify(body),
       });
@@ -83,6 +89,7 @@ integration("config_snapshot WS ingestion produces a redacted drift timeline, se
       const login = await api("/api/auth/login", "POST", { password });
       expect(login.status).toBe(200);
       cookie = login.headers.get("set-cookie")!.split(";")[0];
+      csrf = csrfFromLogin(login);
 
       // --- Migration 012 applied; legacy hash-only rows keep working with safe defaults ---
       const applied = await db<{ name: string }[]>`SELECT name FROM schema_migrations WHERE name='012_config_drift_diffs.sql'`;

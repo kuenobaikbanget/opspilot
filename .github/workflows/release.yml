@@ -120,17 +120,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # OIDC token for Sigstore keyless cosign attestation in packages.yml
     uses: ./.github/workflows/packages.yml
     with:
       version: ${{ github.ref_name }}
 
   publish:
-    name: Publish GitHub Release after binaries and packages
+    name: Sign, attest, SBOM and publish the GitHub Release
     needs: [validate, binaries, packages]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: write
+      id-token: write # OIDC token for Sigstore keyless cosign signing and GitHub attestations
     steps:
       - name: Download the Linux amd64 agent archive
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -142,23 +144,79 @@ jobs:
         with:
           name: opspilot-agent-linux-arm64
           path: ${{ runner.temp }}/release
-      - name: Generate checksums and create the GitHub Release
+      - name: Install cosign for keyless signing
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+      - name: Generate SHA-256 checksum manifest
+        working-directory: ${{ runner.temp }}/release
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            "opspilot-agent_${VERSION}_linux_amd64.tar.gz" \
+            "opspilot-agent_${VERSION}_linux_arm64.tar.gz" > SHA256SUMS
+      - name: Generate SPDX SBOM for the linux/amd64 agent archive
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+        with:
+          path: ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_amd64.tar.gz
+          format: spdx-json
+          output-file: ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_amd64.tar.gz.spdx.json
+      - name: Generate SPDX SBOM for the linux/arm64 agent archive
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+        with:
+          path: ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_arm64.tar.gz
+          format: spdx-json
+          output-file: ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_arm64.tar.gz.spdx.json
+      - name: Keyless-sign the archives and the checksum manifest
+        working-directory: ${{ runner.temp }}/release
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in \
+            "opspilot-agent_${VERSION}_linux_amd64.tar.gz" \
+            "opspilot-agent_${VERSION}_linux_arm64.tar.gz" \
+            SHA256SUMS; do
+            # Keyless Fulcio signing: detached signature + certificate + verification bundle.
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              --bundle "${f}.bundle" \
+              "$f"
+          done
+      - name: Attest build provenance for archives and checksum manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_amd64.tar.gz
+            ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_arm64.tar.gz
+            ${{ runner.temp }}/release/SHA256SUMS
+      - name: Attest the linux/amd64 SPDX SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_amd64.tar.gz
+          sbom-path: ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_amd64.tar.gz.spdx.json
+      - name: Attest the linux/arm64 SPDX SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_arm64.tar.gz
+          sbom-path: ${{ runner.temp }}/release/opspilot-agent_${{ needs.validate.outputs.version }}_linux_arm64.tar.gz.spdx.json
+      - name: Create the GitHub Release with archives, signatures, bundles, SBOMs and checksums
         working-directory: ${{ runner.temp }}/release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-          VERSION: ${{ needs.validate.outputs.version }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         shell: bash
         run: |
           set -euo pipefail
-          archives=("opspilot-agent_${VERSION}_linux_amd64.tar.gz" "opspilot-agent_${VERSION}_linux_arm64.tar.gz")
-          sha256sum "${archives[@]}" > SHA256SUMS
           release_flags=(--latest=true)
           if [[ "$PRERELEASE" == true ]]; then
             release_flags=(--prerelease --latest=false)
           fi
           gh release create "$RELEASE_TAG" --verify-tag --generate-notes \
             --title "OpsPilot $RELEASE_TAG" "${release_flags[@]}" \
-            "${archives[@]}" SHA256SUMS
+            *.tar.gz SHA256SUMS *.sig *.pem *.bundle *.spdx.json

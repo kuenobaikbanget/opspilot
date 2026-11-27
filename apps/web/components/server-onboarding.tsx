@@ -3,6 +3,7 @@
 import type { AgentInstallConfig, HostList } from "@opspilot/contracts";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { buildAgentInstallCommand } from "../lib/agent-install";
+import { csrfTokenFromCookie } from "../lib/api";
 import { AsciiCardSkeleton, AsciiLoading, usePrefersReducedMotion } from "./ascii-card-reveal";
 import { Button, ButtonLink, Field, Notice, Select } from "./ui";
 
@@ -32,11 +33,17 @@ const steps = [
 class UnauthorizedError extends Error {}
 
 async function request<T>(path: string, signal: AbortSignal, method = "GET"): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (method !== "GET" && method !== "HEAD") {
+    const csrf = csrfTokenFromCookie();
+    if (csrf) headers["x-opspilot-csrf"] = csrf;
+  }
   const response = await fetch(`/api/agents/${path}`, {
     credentials: "same-origin",
     cache: "no-store",
     signal,
     method,
+    headers,
   });
   if (response.status === 401) throw new UnauthorizedError();
   const result = await response.json();

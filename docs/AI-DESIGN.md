@@ -24,11 +24,11 @@ This is a conservative text-model family policy, not model discovery or substitu
 
 ## Workflow
 
-1. Admin reviews the enabled connection destination, revision and explicit model before submitting the incident.
-2. Hub validates credentials/revision before dispatching existing fixed agent operations, then rechecks configuration and incident state under lock.
+1. Admin reviews the enabled connection destination, revision and explicit model before submitting the incident. **Privacy consent gate:** external AI egress requires persisted `privacy_settings.ai_egress_consent_granted = TRUE` (migration 017, `GET`/`PUT /api/privacy/consent`); without it the Hub fails closed with `403 {code:"privacy_consent_required"}` and audits `privacy.egress_blocked`.
+2. Hub validates consent, credentials/revision before dispatching existing fixed agent operations, then rechecks configuration and incident state under lock.
 3. Hub queues an investigation with an immutable non-secret provider snapshot.
 4. Worker reads a queued candidate without locking it, locks its provider row first, then conditionally claims that exact still-queued job with FOR UPDATE SKIP LOCKED before checking revision/decrypting credentials. Provider-first row locking matches connection deletion's foreign-key lock order and avoids a delete/claim deadlock; unavailable/changed connections fail without outbound calls.
-5. Worker redacts common credential patterns, caps context, then uses public DNS-pinned HTTPS with a 30-second total deadline and finite generation budget (1200 tokens, or 2224 combined thinking/answer tokens for the Gemini 2.5 text families above). The untrusted evidence/memory payload is wrapped in explicit `BEGIN/END UNTRUSTED INPUT` delimiters so log strings cannot impersonate instructions.
+5. Worker re-checks the persisted privacy consent before any external call (fail closed: the job terminalizes with `privacy_consent_required`, audited, never retried), then runs the multi-layer redaction pipeline over evidence/memory (plus opt-in email/IP PII layers when `redact_pii` is enabled), caps context, and uses public DNS-pinned HTTPS with a 30-second total deadline and finite generation budget (1200 tokens, or 2224 combined thinking/answer tokens for the Gemini 2.5 text families above). The untrusted evidence/memory payload is wrapped in explicit `BEGIN/END UNTRUSTED INPUT` delimiters so log strings cannot impersonate instructions.
 6. Strict post-processor validates result fields, redacts echoed secrets, and removes every `evidence_id` absent from database input; forces low confidence when no valid evidence IDs remain. The Worker persists the provider-reported token usage and an optional catalog-based USD estimate on the investigation row plus a non-secret `ai.investigation.completed` audit event (observability only; no hard budget block yet).
 7. UI displays hypothesis, confidence and next checks; human chooses what to do.
 8. Human-supplied resolution is stored for future retrieval.
@@ -54,7 +54,7 @@ No answer is treated as guaranteed correct. Display **hypothesis**, not "root ca
 - Reject provider-supplied evidence IDs not minted by DB.
 - Never construct shell command or escalation instructions from model output.
 - Do not send broad system journals, key files or raw entire configuration content.
-- Regex redaction for `token/password/api_key/secret` is only a first line. It **will miss** many secrets, PII, URLs and encodings. Add robust secret detectors, configurable allowlists, preview/consent and synthetic tests before production ingestion.
+- Redaction is a tested, ordered multi-layer pipeline (`packages/ai/src/redaction.ts`): PEM blocks, auth/cookie headers, credential-bearing connection URLs, JWTs, AWS/GitHub/Slack/Stripe/OpenAI/Anthropic token shapes, `password=`/`secret=`/`token=`/`api_key=`-style assignments, and opt-in email/IP PII layers behind the `redact_pii` consent flag. It is still regex-based first-line defense and **will miss** many secrets, PII, URLs and encodings; `tests/log-redaction.test.ts` covers realistic fixtures and bypass edge cases. Robust secret detectors and configurable allowlists remain future work.
 
 ## Incident memory architecture
 

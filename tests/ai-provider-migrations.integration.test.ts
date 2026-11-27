@@ -9,7 +9,7 @@ import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/pro
 
 const root = new URL("../", import.meta.url).pathname;
 const master = Buffer.alloc(32).toString("base64");
-const migrationNames = ["001_init.sql", "002_ai_providers.sql", "003_services_endpoints.sql", "004_systemd_reports.sql", "005_alert_state.sql", "006_metric_retention.sql", "007_workload_inventory.sql", "008_endpoint_monitor_runs.sql", "009_host_services_unique_key.sql", "010_investigation_reliability.sql", "011_investigation_usage_cost.sql", "012_config_drift_diffs.sql", "013_change_events_and_incident_links.sql", "014_memory_embeddings_hybrid.sql", "015_memory_dedup_provenance.sql"];
+const migrationNames = ["001_init.sql", "002_ai_providers.sql", "003_services_endpoints.sql", "004_systemd_reports.sql", "005_alert_state.sql", "006_metric_retention.sql", "007_workload_inventory.sql", "008_endpoint_monitor_runs.sql", "009_host_services_unique_key.sql", "010_investigation_reliability.sql", "011_investigation_usage_cost.sql", "012_config_drift_diffs.sql", "013_change_events_and_incident_links.sql", "014_memory_embeddings_hybrid.sql", "015_memory_dedup_provenance.sql", "016_session_agent_lifecycle.sql", "017_privacy_consent_redaction.sql"];
 const ids = [1, 2, 3].map((n) => `d0000000-0000-4000-8000-${String(n).padStart(12, "0")}`);
 const presets = [AI_PROVIDER_PRESETS.openai, AI_PROVIDER_PRESETS.anthropic, AI_PROVIDER_PRESETS.gemini];
 const keys = ["dummy-openai-secret", "dummy-anthropic-secret", "dummy-gemini-secret"];
@@ -142,6 +142,7 @@ test("package import command ignores retained .env but validates explicitly expo
       "packages/contracts/src/changes.ts",
       "packages/contracts/src/memory.ts",
       "packages/contracts/src/memory-provenance.ts",
+      "packages/contracts/src/privacy.ts",
       "packages/ai/src/credentials.ts",
       "packages/ai/src/provider-http.ts",
     ]) {

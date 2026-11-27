@@ -1,0 +1,49 @@
+# TLS reverse-proxy overlay for OpsPilot. Use together with compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.tls.yaml --profile full up -d
+#
+# This overlay publishes ONLY the reverse proxy (443/80) on the host. Hub, Web, Worker and
+# Postgres keep their loopback/internal bindings from compose.yaml and are reachable solely
+# through the proxy on the internal network. It does not change any base image or digest.
+#
+# Before bringing this up:
+#   1. Place TLS cert/key at infra/proxy/certs/fullchain.pem and privkey.pem
+#      (chmod 600 on the key, owned by root).
+#   2. Set OPSPILOT_DOMAIN in .env (must match the certificate SAN).
+#   3. In the Hub environment (env_file .env or an override below): COOKIE_SECURE=true and
+#      OPSPILOT_PUBLIC_HUB_URL=https://$OPSPILOT_DOMAIN
+#   4. Agents connect with OPSPILOT_HUB_URL=https://$OPSPILOT_DOMAIN and, when the proxy uses
+#      a private CA, OPSPILOT_CA_CERT_FILE=/etc/opspilot/ca.pem (see docs/DEPLOYMENT.md).
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    profiles: ["full"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      OPSPILOT_DOMAIN: ${OPSPILOT_DOMAIN:-localhost}
+    volumes:
+      - ./infra/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/proxy/certs:/etc/caddy/certs:ro
+      - proxy_data:/data
+      - proxy_logs:/var/log/caddy
+    depends_on:
+      hub:
+        condition: service_started
+      web:
+        condition: service_started
+
+  # With the TLS overlay, the Hub must issue Secure cookies and must not publish its port
+  # beyond loopback (compose.yaml already binds 127.0.0.1). These are documentation-grade
+  # overrides: set COOKIE_SECURE=true in .env as well so env_file consumers see it.
+  hub:
+    environment:
+      COOKIE_SECURE: "true"
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+
+volumes:
+  proxy_data:
+  proxy_logs:

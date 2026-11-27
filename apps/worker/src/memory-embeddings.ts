@@ -1,8 +1,9 @@
 import type { SQL } from "bun";
-import { generateEmbedding, redact, supportsEmbeddings, type GeneratedEmbedding, type ProviderConnection } from "@opspilot/ai";
+import { generateEmbedding, redactText, supportsEmbeddings, type GeneratedEmbedding, type ProviderConnection } from "@opspilot/ai";
 import { decryptProviderKey } from "@opspilot/ai/credentials";
 import { MAX_EMBEDDING_DIMENSIONS } from "@opspilot/ai/embeddings";
 import type { ProviderProtocol } from "@opspilot/contracts";
+import { getPrivacySettings } from "../../hub/src/privacy";
 
 /**
  * Opt-in worker-side embedding indexer for incident memory.
@@ -90,6 +91,12 @@ export async function indexPendingMemoryEmbeddings(
   const enabled = options.enabled ?? memoryEmbeddingsEnabled();
   if (!enabled || !masterKey) return 0;
 
+  // Fail closed: never send memory text to an external embedding provider unless
+  // workspace-level AI egress consent is currently granted. Checking settings
+  // first (without writing an audit row on empty ticks) avoids flooding audit_events.
+  const privacy = await getPrivacySettings(db);
+  if (!privacy.aiEgressConsentGranted) return 0;
+
   const providers = await db<EmbeddingProviderRow[]>`
     SELECT id, protocol, base_url, default_model, api_key_ciphertext
     FROM ai_providers
@@ -137,9 +144,12 @@ export async function indexPendingMemoryEmbeddings(
   let processed = 0;
   for (const row of pending) {
     try {
-      // Redact before ANY embed function (generateEmbedding redacts again before
-      // the outbound request); only curated summary+resolution is ever embedded.
-      const text = redact(`${row.summary}\n${row.resolution}`).slice(0, 4000);
+      // Redact (including PII when redact_pii is enabled) before ANY embed function;
+      // only curated summary+resolution is ever embedded.
+      const text = redactText(`${row.summary}\n${row.resolution}`, {
+        redactEmail: privacy.redactPii,
+        redactIp: privacy.redactPii,
+      }).text.slice(0, 4000);
       const embedding = await embedFn(connection, text);
       if (
         !embedding ||

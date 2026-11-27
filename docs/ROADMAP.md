@@ -70,13 +70,13 @@ The [Monochrome workspace](UI-UX.md#fleet-services-dashboard-contract-target) im
 
 ## Phase 4 — Hardened self-hosted release
 
-- [ ] Rate limiting/CSRF, session lifecycle, agent revoke/rotate
-- [ ] TLS reverse-proxy reference deployment / WSS test
-- [ ] Privacy consent & tested log redaction pipeline
-- [ ] Metrics retention, backup & restore validation
+- [x] Rate limiting/CSRF, session lifecycle, agent revoke/rotate
+- [x] TLS reverse-proxy reference deployment / WSS test
+- [x] Privacy consent & tested log redaction pipeline
+- [x] Metrics retention, backup & restore validation
 - [x] Checksummed transactional numbered DB migrations and explicit legacy-provider import
-- [ ] Signed binary releases amd64/arm64 + SBOM, pinned images
-- [ ] Load/chaos tests and public security documentation
+- [x] Signed binary releases amd64/arm64 + SBOM, pinned images
+- [x] Load/chaos tests and public security documentation
 
 **Exit gate:** production checklist green and external review.
 

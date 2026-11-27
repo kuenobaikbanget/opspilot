@@ -6,6 +6,7 @@ import type {
   IncidentTimelineResponse,
 } from "../packages/contracts/src/index";
 import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
+import { csrfFromLogin, withCsrf } from "./helpers/csrf";
 
 const integration = providerTestDatabaseAvailable ? test : test.skip;
 const origin = "http://localhost:3100";
@@ -65,10 +66,12 @@ async function startHub(databaseUrl: string): Promise<Hub> {
   const child = spawn("apps/hub/src/index.ts", childEnv(databaseUrl, port));
   const baseUrl = `http://127.0.0.1:${port}`;
   let cookie = "";
+  let csrf = "";
   async function request(path: string, method = "GET", data?: unknown, overrides: RequestOptions = {}): Promise<Response> {
     const headers = new Headers();
     if (overrides.authenticated !== false && cookie) headers.set("cookie", cookie);
     if (method !== "GET" && overrides.origin !== null) headers.set("origin", overrides.origin ?? origin);
+    withCsrf(headers, method, csrf);
     headers.set("content-type", "application/json");
     return fetch(`${baseUrl}${path}`, {
       method, headers,
@@ -91,6 +94,7 @@ async function startHub(databaseUrl: string): Promise<Hub> {
     const login = await request("/api/auth/login", "POST", { password });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    csrf = csrfFromLogin(login);
     return { request, stop };
   } catch (error) {
     await stop();

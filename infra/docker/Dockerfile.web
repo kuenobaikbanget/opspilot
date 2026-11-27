@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.2 AS build
+FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS build
 WORKDIR /workspace
 COPY package.json bun.lock ./
 COPY apps/hub/package.json apps/hub/package.json
@@ -12,7 +12,7 @@ COPY packages packages
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HUB_INTERNAL_URL=http://hub:3001
 RUN cd apps/web && bun run --bun build
-FROM oven/bun:1.4.2
+FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895
 WORKDIR /workspace
 COPY --from=build /workspace /workspace
 ENV NODE_ENV=production

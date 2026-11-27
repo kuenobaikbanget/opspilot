@@ -244,12 +244,32 @@ describe("reciprocalRankFusion", () => {
 describe("indexPendingMemoryEmbeddings atomic vector update", () => {
   const masterKey = readProviderMasterKey({ AI_PROVIDER_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" })!;
 
-  function mockPgVectorDb(failUpdate: boolean) {
+  function mockPgVectorDb(
+    failUpdate: boolean,
+    options: {
+      consentGranted?: boolean;
+      redactPii?: boolean;
+      emptyPrivacy?: boolean;
+      summary?: string;
+      resolution?: string;
+    } = {},
+  ) {
     const updates: string[] = [];
     const providerId = "11111111-1111-4111-8111-111111111111";
     const ciphertext = encryptProviderKey(providerId, "sk-test-atomic-0123456789", masterKey);
     const exec = async (strings: TemplateStringsArray) => {
       const sql = strings.join("?");
+      if (sql.includes("FROM privacy_settings")) {
+        if (options.emptyPrivacy) return [];
+        return [{
+          ai_egress_consent_granted: options.consentGranted ?? true,
+          consent_version: "2026-04-01",
+          consented_at: "2026-04-01T00:00:00.000Z",
+          consented_by: "admin",
+          redact_pii: options.redactPii ?? false,
+          updated_at: "2026-04-01T00:00:00.000Z",
+        }];
+      }
       if (sql.includes("FROM ai_providers")) {
         return [{ id: providerId, protocol: "openai-compatible", base_url: "https://api.openai.com/v1", default_model: "text-embedding-3-small", api_key_ciphertext: ciphertext }];
       }
@@ -257,7 +277,11 @@ describe("indexPendingMemoryEmbeddings atomic vector update", () => {
         return [{ exists: true }];
       }
       if (sql.includes("FROM incident_memory")) {
-        return [{ id: "22222222-2222-4222-8222-222222222222", summary: "s", resolution: "r" }];
+        return [{
+          id: "22222222-2222-4222-8222-222222222222",
+          summary: options.summary ?? "s",
+          resolution: options.resolution ?? "r",
+        }];
       }
       if (sql.includes("UPDATE incident_memory")) {
         updates.push(sql);
@@ -290,5 +314,50 @@ describe("indexPendingMemoryEmbeddings atomic vector update", () => {
     const count = await indexPendingMemoryEmbeddings(db, masterKey, embedFn, { enabled: true });
     expect(count).toBe(0);
     expect(updates).toHaveLength(1);
+  });
+
+  test("skips embedding cleanly when workspace AI egress consent is not granted", async () => {
+    for (const opts of [{ consentGranted: false }, { emptyPrivacy: true }]) {
+      const { db, updates } = mockPgVectorDb(false, opts);
+      let called = false;
+      const embedFn = async () => {
+        called = true;
+        return { vector: [1, 0], dimensions: 2, model: "text-embedding-3-small" };
+      };
+      const count = await indexPendingMemoryEmbeddings(db, masterKey, embedFn, { enabled: true });
+      expect(count).toBe(0);
+      expect(called).toBe(false);
+      expect(updates).toHaveLength(0);
+    }
+  });
+
+  test("respects privacy_settings.redact_pii when preparing embedding text", async () => {
+    const captured: string[] = [];
+    const embedFn = async (_conn: ProviderConnection, text: string) => {
+      captured.push(text);
+      return { vector: [0.6, 0.8], dimensions: 2, model: "text-embedding-3-small" };
+    };
+
+    const piiOn = mockPgVectorDb(false, {
+      redactPii: true,
+      summary: "Alert from ops@example.com on 10.20.30.40",
+      resolution: "Restarted service with password=hunter2secret",
+    });
+    expect(await indexPendingMemoryEmbeddings(piiOn.db, masterKey, embedFn, { enabled: true })).toBe(1);
+    expect(captured[0]).not.toContain("ops@example.com");
+    expect(captured[0]).not.toContain("10.20.30.40");
+    expect(captured[0]).not.toContain("hunter2secret");
+    expect(captured[0]).toContain("[REDACTED_EMAIL]");
+    expect(captured[0]).toContain("[REDACTED_IP]");
+
+    const piiOff = mockPgVectorDb(false, {
+      redactPii: false,
+      summary: "Alert from ops@example.com on 10.20.30.40",
+      resolution: "Restarted service with password=hunter2secret",
+    });
+    expect(await indexPendingMemoryEmbeddings(piiOff.db, masterKey, embedFn, { enabled: true })).toBe(1);
+    expect(captured[1]).toContain("ops@example.com");
+    expect(captured[1]).toContain("10.20.30.40");
+    expect(captured[1]).not.toContain("hunter2secret");
   });
 });
