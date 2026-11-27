@@ -94,13 +94,18 @@ if [[ "$clean" -eq 1 ]]; then
 fi
 
 restore_log="$(mktemp)"
+trap 'rm -f "$restore_log"' EXIT
 if ! "$pg_restore_bin" -Fc "${restore_flags[@]}" -d "$target_url" "$dump_file" 2> "$restore_log"; then
   # Tolerate ONLY the pre-17 `transaction_timeout` error described above, and only
   # against a pre-17 server; every other pg_restore error still fails the restore.
+  # Require both the expected error line and the final `errors ignored on restore: 1`
+  # summary so a mid-restore crash/kill or silent non-zero exit is never treated as success.
   tolerated=0
   if [[ "$server_major" -lt 17 ]]; then
-    remaining="$(grep -vE '^pg_restore: error: .*unrecognized configuration parameter "transaction_timeout"$|^Command was: SET transaction_timeout = 0;$|^pg_restore: warning: errors ignored on restore: [0-9]+$|^$' "$restore_log" || true)"
-    if [[ -z "$remaining" ]]; then
+    remaining="$(grep -vE '^pg_restore: error: .*unrecognized configuration parameter "transaction_timeout"$|^Command was: SET transaction_timeout = 0;$|^pg_restore: warning: errors ignored on restore: 1$|^$' "$restore_log" || true)"
+    if [[ -z "$remaining" ]] \
+      && grep -qE '^pg_restore: error: .*unrecognized configuration parameter "transaction_timeout"$' "$restore_log" \
+      && grep -qE '^pg_restore: warning: errors ignored on restore: 1$' "$restore_log"; then
       tolerated=1
     fi
   fi
