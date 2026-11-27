@@ -1,8 +1,9 @@
 import type { AiProvider, ProviderConnectionTest, ProviderProtocol } from "@opspilot/contracts";
-import { parseCreateAiProviderRequest, parseUpdateAiProviderRequest } from "@opspilot/contracts";
+import { parseCreateAiProviderRequest, parseUpdateAiProviderRequest, PRIVACY_CONSENT_REQUIRED } from "@opspilot/contracts";
 import { decryptProviderKey, encryptProviderKey, ProviderCredentialError, readProviderMasterKey } from "@opspilot/ai/credentials";
 import { normalizeProviderBaseUrl, ProviderError } from "@opspilot/ai/provider-http";
 import { audit, db } from "./db";
+import { PrivacyConsentError, requireAiEgressConsent } from "./privacy";
 import { aiOrigin, apiError, j, jsonBody, urlUUID } from "./http";
 
 type ProviderRow = {
@@ -150,6 +151,16 @@ export async function providerRoutes(req: Request, path: string, method: string)
 
     const data = await jsonBody(req);
     if (Object.keys(data).length) return apiError("Invalid connection test request", "invalid_request");
+    // Privacy consent gate (fail closed): even a synthetic connection test is external
+    // AI egress, so it requires explicit consent and is audited when blocked.
+    try {
+      await requireAiEgressConsent(db, "provider.test");
+    } catch (error) {
+      if (error instanceof PrivacyConsentError) {
+        return apiError("Privacy consent is required before sending any request to an external AI provider", PRIVACY_CONSENT_REQUIRED, 403);
+      }
+      throw error;
+    }
     return await db.begin(async (tx) => {
       const [row] = await tx<ProviderRow[]>`SELECT * FROM ai_providers WHERE id=${id} FOR UPDATE`;
       if (!row) return apiError("Provider unavailable", "provider_unavailable", 404);

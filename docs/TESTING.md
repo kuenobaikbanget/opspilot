@@ -132,6 +132,47 @@ The one mechanical design scan reported only the existing shared meter-width tra
 
 Browser verification used a locally signed admin session, not a password-login test. All observations/reports/resolutions here are explicitly synthetic fixtures; this does not establish live collection, real AI output, endpoint reachability or agent connectivity.
 
+## TLS / WSS & backup-restore verification — Phase 4
+
+Automated coverage (run with `bun test tests/tls-wss.test.ts tests/retention-backup-restore.test.ts` and `cd agent && go test ./...`):
+
+- `tests/tls-wss.test.ts`: positive wss:// hello/hello_ack round trip against an ephemeral CA + TLS server with the CA trusted; negative — the same endpoint rejects a client that does not trust the CA (no insecure bypass); openssl handshake verify with/without CA; Hub issues `Secure` cookies only with `COOKIE_SECURE=true` and serves authenticated requests carrying `X-Forwarded-Proto`/`X-Forwarded-For` while rejecting those headers as credentials (integration, needs `AI_PROVIDER_TEST_DATABASE_URL` on loopback).
+- `agent/internal/agent/tls_wss_test.go`: agent dialer connects over wss:// with `OPSPILOT_CA_CERT_FILE` (positive) and fails certificate verification without it (negative); invalid/missing CA bundle errors.
+- `tests/retention-backup-restore.test.ts`: retention prunes raw samples into hourly rollups and keeps them bounded; checksum verify positive + tampered/missing-sidecar negatives; corrupt archive rejected by `pg_restore --list`; full backup → restore into an isolated database with schema/row-count comparison (integration, needs loopback postgres plus `PG_DUMP_BIN`/`PG_RESTORE_BIN`).
+
+## Load & chaos tests
+
+`tests/load-chaos.test.ts` + `tools/load-chaos.ts` are a deterministic (seeded PRNG),
+fast, DB-free load & chaos suite over the real contract parsers, the real hub
+`socketMessage` size/protocol gates and the real worker retry policy:
+
+```bash
+bun test tests/load-chaos.test.ts   # 10 tests
+bun run tools/load-chaos.ts         # printable simulation summary
+```
+
+Coverage: concurrent telemetry bursts (64 agents x 200 samples) with bounded
+per-agent memory and full accept/reject accounting; `MAX_WS_MESSAGE_BYTES` (64 KiB)
+oversize frames closed with 1009 through the real hub socket path (plus malformed
+JSON, invalid metrics and future-protocol `hello` refused with 4000); WebSocket
+disconnect/reconnect storms with supersede (4001) and no registry leak;
+duplicate/out-of-order delivery collapsing to unique samples; worker lease expiry
+requeue-vs-terminalize using the real `retryDelayMs`/`isRetryableFailure`; stale and
+future-skewed telemetry timestamps rejected; and agent queue backpressure under a
+hub outage (bounded FIFO, oldest dropped first, durable across restart).
+
+The Go agent has a matching queue chaos/pressure suite
+(`agent/internal/agent/queue_chaos_test.go`): capacity-bounded drop-oldest under a
+10k-sample outage, concurrent push/pop with persistence consistency, age-based
+expiry, and corrupt-line recovery after a torn write.
+
+```bash
+(cd agent && go test ./internal/agent/ -run 'TestQueueChaos' -v)
+```
+
+These are simulation/unit tests against the real parsers and policies — they do not
+replace a live multi-host soak test.
+
 ## Manual smoke test
 
 | # | Test | Expected result |
@@ -158,7 +199,7 @@ Browser verification used a locally signed admin session, not a password-login t
 - Agent `configHashes` with relative path, invalid SHA, >20 entries ignored.
 - Path symlinks cannot be hashed; files >1MiB ignored.
 - Prompt injection in `journalctl` output cannot invoke tools or leak hidden key.
-- Password brute force mitigated before release (currently NOT implemented).
+- Password brute force mitigated before release — implemented in Phase 4.1: per-IP rate limits with `429` + `Retry-After` on login/enroll/enrollment-token/admin writes, CSRF token header on cookie-authenticated mutations, server-side session revocation/expiry, and agent revoke/rotate with active WebSocket enforcement. Covered by `tests/auth-hardening.test.ts` (unit) and `tests/agent-lifecycle.integration.test.ts` (integration, gated on `AUTH_TEST_DATABASE_URL`).
 - All external ports except proxy unexposed in production.
 
 ## Selected-host systemd verification

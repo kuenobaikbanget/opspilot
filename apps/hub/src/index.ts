@@ -8,7 +8,7 @@ import type {
   InvestigationMemoryAttribution,
   ProviderProtocol,
 } from "@opspilot/contracts";
-import { parseEnrollRequest, parseInvestigateRequest, parseMergeMemoryRequest, parseThresholdsUpdate } from "@opspilot/contracts";
+import { parseEnrollRequest, parseInvestigateRequest, parseMergeMemoryRequest, parseThresholdsUpdate, PRIVACY_CONSENT_REQUIRED } from "@opspilot/contracts";
 import { decryptProviderKey, ProviderCredentialError, readProviderMasterKey } from "@opspilot/ai/credentials";
 import { scoreEvidenceRelevance } from "@opspilot/ai/evidence-scoring";
 import {
@@ -17,19 +17,31 @@ import {
   createEnrollmentToken,
   enrollAgent,
   requestDiagnostics,
+  revokeAgent,
+  rotateAgentCredential,
   socketClosed,
   socketMessage,
   socketOpened,
   type SocketData,
 } from "./agents";
 import {
+  authenticateRequest,
+  checkCsrfToken,
   checkPassword,
+  clearCsrfCookie,
   createSession,
+  csrfCookie,
   isAuthDisabled,
-  isAuthed,
+  listSessions,
   logoutCookie,
+  revokeAllSessions,
+  revokeSessionById,
+  revokeSessionToken,
   sessionCookie,
+  sessionTokenFromRequest,
+  storeSession,
 } from "./auth";
+import { adminWriteLimiter, enrollLimiter, loginLimiter, rateLimitKey, type RateLimiter } from "./ratelimit";
 import { audit, db } from "./db";
 import { searchIncidentMemories } from "./memory-retrieval";
 import { createIncident, effectiveThresholds, hostThresholds } from "./incidents";
@@ -38,6 +50,7 @@ import { MemoryMergeError, mergeMemories, recordResolvedIncidentMemory } from ".
 import { isDevLoopbackInstallEnabled, loadHttpsAgentInstaller, readAgentInstallConfig } from "./agent-install";
 import { aiOrigin, apiError, body, HttpError, invalid, j, jsonBody, urlUUID } from "./http";
 import { providerRoutes } from "./providers";
+import { privacyRoutes, PrivacyConsentError, requireAiEgressConsent } from "./privacy";
 import { serviceRoutes } from "./services";
 import { changeRoutes } from "./changes";
 
@@ -92,7 +105,30 @@ function parseRetrievedMemories(value: InvestigationMemoryAttribution[] | string
   return Array.isArray(value) ? value : null;
 }
 
-async function router(req: Request): Promise<Response> {
+const loginRateLimiter = loginLimiter();
+const enrollRateLimiter = enrollLimiter();
+const adminWriteRateLimiter = adminWriteLimiter();
+
+type RemoteInfo = { remoteAddress?: string | null } | undefined;
+
+const remoteOf = (server: { requestIP(req: Request): { address: string } | null }, req: Request): RemoteInfo => ({
+  remoteAddress: server.requestIP(req)?.address,
+});
+
+/** 429 with Retry-After when the bucket is exhausted. */
+function rateLimited(limiter: RateLimiter, key: string): Response | null {
+  const result = limiter.hit(key);
+  if (result.allowed) return null;
+  return j(
+    { error: "Too many requests", code: "rate_limited" },
+    429,
+    { "Retry-After": String(result.retryAfterSeconds) },
+  );
+}
+
+const STATE_CHANGING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+async function router(req: Request, remote?: RemoteInfo): Promise<Response> {
   const path = new URL(req.url).pathname;
   const method = req.method.toUpperCase();
 
@@ -105,7 +141,7 @@ async function router(req: Request): Promise<Response> {
     }
   }
 
-  if (method === "POST" || method === "PATCH" || method === "DELETE") {
+  if (STATE_CHANGING.has(method)) {
     const origin = req.headers.get("origin");
     if (
       origin &&
@@ -116,6 +152,8 @@ async function router(req: Request): Promise<Response> {
   }
 
   if (path === "/api/auth/login" && method === "POST") {
+    const limited = rateLimited(loginRateLimiter, rateLimitKey(req, "login", remote));
+    if (limited) return limited;
     if (isAuthDisabled()) {
       return j({ ok: true, authDisabled: true });
     }
@@ -128,12 +166,33 @@ async function router(req: Request): Promise<Response> {
       await new Promise((resolve) => setTimeout(resolve, 300));
       return invalid("Invalid credentials", 401);
     }
+    const session = createSession();
+    await storeSession(session, req);
     await audit("admin.login", null);
-    return j({ ok: true }, 200, { "Set-Cookie": sessionCookie(createSession()) });
+    const headers = new Headers({
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    headers.append("Set-Cookie", sessionCookie(session.token));
+    headers.append("Set-Cookie", csrfCookie(session.csrfToken));
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
   }
 
-  if (!isAuthed(req)) {
+  // Bounded per-IP write rate limit for all admin mutations (pre-auth backstop).
+  if (STATE_CHANGING.has(method)) {
+    const limited = rateLimited(adminWriteRateLimiter, rateLimitKey(req, "admin-write", remote));
+    if (limited) return limited;
+  }
+
+  const session = await authenticateRequest(req);
+  if (!session) {
     return invalid("Unauthorized", 401);
+  }
+
+  // CSRF: every state-changing cookie-authenticated admin request must echo the
+  // session-bound CSRF token in the header (double-submit cookie transport).
+  if (STATE_CHANGING.has(method) && !checkCsrfToken(req, session)) {
+    return apiError("Missing or invalid CSRF token", "csrf_required", 403);
   }
   const providerResponse = await providerRoutes(req, path, method);
   if (providerResponse) return providerResponse;
@@ -143,6 +202,8 @@ async function router(req: Request): Promise<Response> {
   if (driftResponse) return driftResponse;
   const changeResponse = await changeRoutes(req, path, method);
   if (changeResponse) return changeResponse;
+  const privacyResponse = await privacyRoutes(req, path, method, db);
+  if (privacyResponse) return privacyResponse;
 
 
   if (path === "/api/auth/me" && method === "GET") {
@@ -150,12 +211,72 @@ async function router(req: Request): Promise<Response> {
   }
 
   if (path === "/api/auth/logout" && method === "POST") {
-    return j({ ok: true }, 200, isAuthDisabled() ? {} : { "Set-Cookie": logoutCookie() });
+    const token = sessionTokenFromRequest(req);
+    if (!isAuthDisabled() && token) {
+      await revokeSessionToken(token);
+      await audit("admin.logout", null);
+    }
+    if (isAuthDisabled()) {
+      return j({ ok: true });
+    }
+    const headers = new Headers({
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    headers.append("Set-Cookie", logoutCookie());
+    headers.append("Set-Cookie", clearCsrfCookie());
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
   }
 
+  if (path === "/api/auth/logout-all" && method === "POST") {
+    const token = sessionTokenFromRequest(req);
+    const revoked = isAuthDisabled() ? 0 : await revokeAllSessions(token);
+    await audit("admin.logout_all", null, { revoked });
+    return j({ ok: true, revoked });
+  }
+
+  if (path === "/api/auth/sessions" && method === "GET") {
+    return j({ sessions: await listSessions(isAuthDisabled() ? null : session.sessionHash) });
+  }
+
+  const sessionMatch = path.match(/^\/api\/auth\/sessions\/([^/]+)$/);
+  if (sessionMatch && method === "DELETE") {
+    if (!urlUUID(sessionMatch[1])) {
+      return invalid("Invalid session id");
+    }
+    const revoked = isAuthDisabled() ? false : await revokeSessionById(sessionMatch[1]);
+    if (!revoked) {
+      return invalid("Session not found or already revoked", 404);
+    }
+    await audit("session.revoked", sessionMatch[1]);
+    return j({ ok: true });
+  }
 
   if (path === "/api/agents/enrollment-token" && method === "POST") {
+    const limited = rateLimited(enrollRateLimiter, rateLimitKey(req, "enrollment-token", remote));
+    if (limited) return limited;
     return j(await createEnrollmentToken(), 201);
+  }
+
+  const agentAction = path.match(/^\/api\/agents\/([^/]+)\/(revoke|rotate)$/);
+  if (agentAction && method === "POST") {
+    const agentId = agentAction[1];
+    if (!urlUUID(agentId)) {
+      return invalid("Invalid agent id");
+    }
+    if (agentAction[2] === "revoke") {
+      const revoked = await revokeAgent(agentId);
+      if (!revoked) {
+        return invalid("Agent not found or already revoked", 404);
+      }
+      return j({ ok: true, agentId, revoked: true });
+    }
+    const rotated = await rotateAgentCredential(agentId);
+    if (!rotated) {
+      return invalid("Agent not found", 404);
+    }
+    // The new secret is returned exactly once; deliver it to the host out of band.
+    return j({ ok: true, agentId, agentSecret: rotated.agentSecret });
   }
 
   if (path === "/api/agents/install-config" && method === "GET") {
@@ -457,6 +578,16 @@ async function router(req: Request): Promise<Response> {
     if (!urlUUID(match[1])) return apiError("Invalid incident id", "invalid_request");
     const data = parseInvestigateRequest(await jsonBody(req));
     if (!data) return apiError("Invalid investigation request", "invalid_request");
+    // Privacy consent gate (fail closed): queueing an investigation implies sending
+    // redacted evidence/logs to an external AI provider, which requires explicit consent.
+    try {
+      await requireAiEgressConsent(db, "incident.investigate");
+    } catch (error) {
+      if (error instanceof PrivacyConsentError) {
+        return apiError("Privacy consent is required before sending incident data to an external AI provider", PRIVACY_CONSENT_REQUIRED, 403);
+      }
+      throw error;
+    }
     const masterKey = readProviderMasterKey(process.env);
     if (!masterKey) return apiError("Provider credentials unavailable", "credential_unavailable", 503);
     const providerCheck = await db.begin(async (tx) => {
@@ -641,6 +772,8 @@ const server = Bun.serve<SocketData>({
         if (origin) {
           return invalid("Agent requests must not have browser origin", 403);
         }
+        const limited = rateLimited(enrollRateLimiter, rateLimitKey(req, "enroll", remoteOf(server, req)));
+        if (limited) return limited;
         const data = await body(req);
         const enrollment = parseEnrollRequest(data);
         if (!enrollment) {
@@ -671,7 +804,7 @@ const server = Bun.serve<SocketData>({
         return invalid("Upgrade failed", 400);
       }
 
-      return await router(req);
+      return await router(req, remoteOf(server, req));
     } catch (error: unknown) {
       const aiRequest = url.pathname.startsWith("/api/ai/providers") || /^\/api\/incidents\/[^/]+\/investigate$/.test(url.pathname);
       if (error instanceof HttpError) return apiError(error.message, "invalid_request", error.status);

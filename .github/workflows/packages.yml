@@ -78,6 +78,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # OIDC token for Sigstore keyless image attestation
     strategy:
       fail-fast: false
       matrix:
@@ -115,11 +116,30 @@ jobs:
             org.opencontainers.image.version=${{ needs.validate.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
       - name: Build and publish both Linux architectures
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: infra/docker/Dockerfile.${{ matrix.component }}
           platforms: linux/amd64,linux/arm64
           push: true
+          sbom: true # buildx attaches an SPDX SBOM provenance attestation to the image
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+      - name: Install cosign for keyless attestation
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+      - name: Generate SPDX SBOM for the published image
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+        with:
+          image: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.component }}.spdx.json
+      - name: Keyless-attest the image with its SPDX SBOM predicate
+        env:
+          IMAGE_DIGEST: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign attest --yes --type spdxjson \
+            --predicate "sbom-${{ matrix.component }}.spdx.json" \
+            "$IMAGE_DIGEST"

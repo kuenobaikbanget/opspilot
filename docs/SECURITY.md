@@ -100,6 +100,13 @@ Address policy references: [IANA IPv4](https://www.iana.org/assignments/iana-ipv
 - FTS, vector and hybrid retrieval (`searchIncidentMemories`, `GET /api/memory`) and the Worker's prior-memory lookup only ever query canonical rows (`canonical_memory_id IS NULL`), so merged duplicates are never returned or embedded; they remain reachable through the canonical memory's `sources[]` provenance. The Worker additionally deduplicates exact/near-duplicate candidates before the LLM call and persists a bounded, non-secret `retrieved_memories_json` snapshot (memory ID, redacted summary, 200-char resolution preview, occurrence count, source incident IDs, retrieval method, score, last-confirmed timestamp) on the investigation row; `GET /api/incidents/:id` exposes it as `retrieved_memories`. The UI labels this as fallible prior context, distinct from measured signals, AI hypotheses, and the human-confirmed resolution of the current incident.
 - Unit and integration coverage: `tests/memory-dedup.test.ts` (normalization, fingerprint, similarity, candidate dedup, strict merge parsing incl. self-merge/bad UUID/extra keys) and `tests/memory-dedup.integration.test.ts` (resolve-time dedup with multi-incident provenance, merge auth `401`/origin `403`/validation `400`/self-merge/`404`/`409`, `memory.merged` audit, worker attribution persistence and API exposure).
 
+## Session lifecycle, CSRF, rate limiting, and agent credential revocation (Phase 4.1)
+
+- **Server-side sessions:** every admin login creates a row in the PostgreSQL `sessions` table keyed by the SHA-256 hash of the signed session token (raw token never stored), plus the hash of a per-session CSRF token, `created_at`, `last_seen_at`, `expires_at`, `revoked_at`, `user_agent`, `ip`. Absolute expiry (default 8h, `SESSION_MAX_AGE_SECONDS`) and idle timeout (default 1h, `SESSION_IDLE_TIMEOUT_SECONDS`, enforced via `last_seen_at`) are checked against the DB on every request, so a replayed cookie after logout/revocation/expiry is rejected with `401` even while its HMAC signature and `exp` claim remain valid. `POST /api/auth/logout` revokes the current session; `GET /api/auth/sessions` lists sessions (hashes never returned); `DELETE /api/auth/sessions/:id` revokes one; `POST /api/auth/logout-all` revokes all others. All lifecycle events write `audit_events`.
+- **CSRF:** state-changing cookie-authenticated requests must match `ALLOWED_ORIGIN` exactly (`403 forbidden_origin`) and echo the session-bound CSRF token in the `x-opspilot-csrf` header (`403 csrf_required` otherwise). Login sets `opspilot_session` (HttpOnly, SameSite=Strict) and `opspilot_csrf` (JS-readable double-submit cookie, SameSite=Strict); only hashes are stored server-side and the comparison is constant-time. Bearer-authenticated agent endpoints and login itself are exempt from the token check; agent enrollment/connect reject browser `Origin` outright. The Web client reads the cookie and attaches the header on all mutations.
+- **Rate limiting:** per-IP sliding-window limits return `429` with `Retry-After` — login (default 5/5min), agent enroll + enrollment-token creation (default 10/10min), all other admin writes (default 600/min). Limits are in-memory per Hub process and tunable via `RATE_LIMIT_*` env vars; they are a brute-force backstop, not a cross-instance quota.
+- **Agent revoke/rotate:** `agents.revoked_at` / `agents.last_rotated_at` (migration `016`) drive `POST /api/agents/:id/revoke` and `POST /api/agents/:id/rotate`. Revocation immediately closes the active WebSocket (close code `4003`) and rejects all future HTTP/WS auth (`authenticateAgent` checks `revoked_at IS NULL` and compares the stored hash in constant time). Rotation is an immediate swap: the new secret is shown once, the old secret is rejected, the stale socket is closed (`4002`), and a revoked agent stays revoked until explicitly re-enrolled. Both actions are audited (`agent.revoked`, `agent.rotated`). The agent wire protocol is unchanged; agents treat `401` on connect as invalid/rotated/revoked credentials.
+
 ## Agent tool policy
 
 Tools are fixed in source code:
@@ -152,9 +159,16 @@ Metric telemetry is bounded by policy, not by disk luck: raw `metric_samples` ar
 ## Minimum recommended network exposure
 
 - Local development: bound Compose `3000`, `3001`, PostgreSQL `5433` to `127.0.0.1`.
-- Remote production: expose only a hardened HTTPS reverse proxy (e.g. Caddy/Nginx) on 443. Proxy `/api/agents/connect` with WebSocket upgrade and long idle timeout.
+- Remote production: expose only a hardened HTTPS reverse proxy (reference configs: `infra/proxy/Caddyfile`, `infra/proxy/nginx.conf`, overlay `compose.tls.yaml`) on 443, terminating TLS 1.2/1.3 only. Proxy `/api/agents/connect` with WebSocket upgrade (`Upgrade`/`Connection`) and long idle timeout; forward `Host`, `X-Forwarded-Proto: https`, `X-Forwarded-For`.
 - Do not publicly expose PostgreSQL or agent diagnostic interfaces.
 - `COOKIE_SECURE=true` behind HTTPS; set correct `ALLOWED_ORIGIN` to public dashboard origin.
+
+## Transport security (TLS / WSS)
+
+- The agent control socket is `wss://<hub>/api/agents/connect` whenever `OPSPILOT_HUB_URL` is an `https://` origin. The Go agent always verifies the server certificate (TLS ≥ 1.2, `InsecureSkipVerify` is never set — enforced by `agent/internal/agent/tls_wss_test.go`, which fails if verification is bypassed).
+- Trust roots: system roots (honoring `SSL_CERT_FILE`/`SSL_CERT_DIR`) plus an optional private-CA PEM bundle via `OPSPILOT_CA_CERT_FILE`; the same bundle is used for HTTPS enrollment. A missing or malformed bundle is a startup error, never silently ignored.
+- The Hub issues `Secure` cookies only when `COOKIE_SECURE=true` (required behind the proxy). It never derives trust or public origins from `Host`/`X-Forwarded-*` request headers; those headers are accepted for proxy compatibility but are not credentials (`tests/tls-wss.test.ts`).
+- Backups are `pg_dump -Fc` archives with a mandatory SHA-256 sidecar; `tools/restore-db.sh` refuses tampered/corrupt archives and non-empty targets (without explicit `--clean` for disposable rehearsals).
 
 ## Public design-system reference
 
@@ -178,24 +192,87 @@ Require the `TypeScript — Tests, types & Web build` and `Go agent — Tests` c
 
 The reusable `packages.yml` additionally requires a matching tag-push context. Only its image jobs receive `packages: write`; only the final release job receives `contents: write`. Publication uses the short-lived built-in `GITHUB_TOKEN`, never production credentials, enrollment secrets, database URLs or provider keys. OCI source/revision labels link images to the repository. `.dockerignore` excludes environment secrets, Git metadata and nested local dependency/build directories; do not pass secrets as build arguments or commit them into source.
 
-Agent archives ship SHA-256 checksums, not signatures: these detect corruption but do not establish independent publisher authenticity. Signed releases, SBOMs, digest-pinned base images and security scanning remain roadmap work. Image pushes are not atomic across components or with GitHub Release creation; a failed run may already have updated image aliases. Use reviewed versions and record deployment digests rather than relying on mutable `latest`.
+Agent archives ship a `SHA256SUMS` manifest plus Sigstore keyless signatures (`cosign sign-blob`, `.sig`/`.pem`/`.bundle` verification bundles), SPDX SBOMs (`anchore/sbom-action`) and GitHub build-provenance/SBOM attestations on every release asset; container images get a buildx SPDX SBOM attestation (`sbom: true`) plus a keyless `cosign attest` SBOM predicate. Checksums alone detect corruption but do not establish publisher authenticity — always verify the cosign bundle or the `gh attestation` record as described in [Release Verification](#release-verification) below. All third-party GitHub Actions are pinned to full 40-char commit SHAs, and every base image in `infra/docker/Dockerfile.*` and `compose.yaml` is pinned to an immutable `@sha256:` digest (enforced by `tests/release-hardening.test.ts`). Dependency vulnerability scanning and SAST remain roadmap work. Image pushes are not atomic across components or with GitHub Release creation; a failed run may already have updated image aliases. Use reviewed versions and record deployment digests rather than relying on mutable `latest`.
 
 GHCR visibility/access is a separate package setting; new packages default to private. Review package Actions access and visibility after first publication. Public distribution must use a reviewed commit that includes the [MIT license](../LICENSE) and retain applicable third-party notices. Neither a stable tag nor successful publication resolves the production blockers below. No workflow deploys the application or enables network exposure.
+
+## Production Hardening Checklist
+
+Before exposing OpsPilot beyond a trusted network, verify each item:
+
+- [ ] `main` protected by a ruleset; `v*` tag creation restricted to trusted maintainers; required CI checks enforced without bypass.
+- [ ] HTTPS reverse proxy on 443 only; PostgreSQL and Hub bound to loopback; WebSocket upgrade proxied for `/api/agents/connect`.
+- [ ] `SESSION_SECRET` >= 32 random chars; `COOKIE_SECURE=true`; `ALLOWED_ORIGIN` set to the exact public dashboard origin; `DISABLE_AUTH` never in production.
+- [ ] Strong Argon2id admin password hash; login rate limiting and lockout enabled (see release blockers).
+- [ ] `AI_PROVIDER_ENCRYPTION_KEY` (32 bytes, base64) stored server-side only, backed up separately from PostgreSQL; no provider keys in the browser, env files committed to git, logs or screenshots.
+- [ ] Agent enrollment tokens treated as secrets: never in URLs, persistent browser storage, logs or screenshots; 10-minute one-use TTL enforced.
+- [ ] Deploy images by digest (`@sha256:...`), never by mutable `latest`; verify base-image digest pins in `infra/docker/Dockerfile.*`/`compose.yaml` via `bun test tests/release-hardening.test.ts`.
+- [ ] Release assets verified with `sha256sum -c SHA256SUMS` and `cosign verify-blob --bundle …` (or `gh attestation verify`) before installing on hosts.
+- [ ] No `docker.sock` mount; Docker diagnostics disabled unless explicitly enabled; agent runs as the unprivileged `opspilot` user with 0700 state directory and 0600 identity.
+- [ ] Agent disk queue bounded (`OPSPILOT_QUEUE_MAX_ENTRIES`/`OPSPILOT_QUEUE_MAX_AGE_SECONDS`) so a hub outage cannot grow it without limit.
+- [ ] Metric retention policy reviewed (`METRIC_RAW_RETENTION_HOURS`, `METRIC_ROLLUP_RETENTION_DAYS`); evidence/audit retention set per `docs/DATABASE.md`.
+- [ ] Workload inventory and config-diff collectors remain opt-in; review `OPSPILOT_CONFIG_FILES` allowlist before enabling `OPSPILOT_CONFIG_DIFFS=true`.
+- [ ] Run the load/chaos suite (`bun test tests/load-chaos.test.ts`, `cd agent && go test ./internal/agent/`) after any change to the WS ingress, queue or worker lease paths — see `docs/TESTING.md`.
+
+## Release Verification
+
+Every `v*` tag triggers `.github/workflows/release.yml`, which:
+
+1. Validates strict SemVer and that the tag commit is contained in `origin/main`, then reruns the full CI gate.
+2. Builds static `linux_amd64` and `linux_arm64` agent archives (CGO disabled, `-trimpath -s -w`).
+3. Publishes multi-arch GHCR images (`hub`, `worker`, `web`, `agent`) from digest-pinned base images, attaching a buildx SPDX SBOM attestation (`sbom: true`) and a keyless `cosign attest --type spdxjson` SBOM predicate per image.
+4. Generates `SHA256SUMS`, signs both archives and the manifest with Sigstore keyless `cosign sign-blob` (`.sig`/`.pem`/`.bundle`), generates per-archive SPDX SBOMs, and records GitHub build-provenance and SBOM attestations for all assets.
+5. Creates the GitHub Release with archives, checksums, signatures, bundles and SBOMs attached.
+
+To verify a release locally:
+
+```bash
+# 1. Integrity
+sha256sum -c SHA256SUMS
+
+# 2. Keyless signature (Fulcio identity + Rekor bundle)
+cosign verify-blob \
+  --certificate-identity-regexp '^https://github.com/<owner>/<repo>/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  --bundle opspilot-agent_<version>_linux_amd64.tar.gz.bundle \
+  --signature opspilot-agent_<version>_linux_amd64.tar.gz.sig \
+  opspilot-agent_<version>_linux_amd64.tar.gz
+
+# 3. GitHub attestations (build provenance + SBOM) on the asset
+gh attestation verify opspilot-agent_<version>_linux_amd64.tar.gz --repo <owner>/<repo>
+
+# 4. Image attestations (SBOM predicate) on GHCR
+cosign verify-attestation ghcr.io/<owner>/opspilot-hub:<version> \
+  --certificate-identity-regexp '^https://github.com/<owner>/<repo>/\.github/workflows/packages\.yml@' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
+
+The static guarantees (SHA-pinned actions, `@sha256:`-pinned base images, presence
+of signing/SBOM/attestation steps, amd64+arm64 coverage) are enforced continuously by
+`tests/release-hardening.test.ts`.
 
 ## Open security issues — explicit release blockers
 
 - [ ] Add admin login rate limiting, CSRF defenses, secure cookie lifecycle / revoke-on-logout server-side.
 - [ ] Introduce token rotation/revocation and device authorization management.
-- [ ] Replace simplistic redaction with tested secrets/PII filtering and explicit provider-data consent.
+- [x] Replace simplistic redaction with tested secrets/PII filtering and explicit provider-data consent — implemented as the multi-layer redaction pipeline plus the fail-closed privacy consent gate (migration 017, see [privacy consent & redaction](#privacy-consent-gate-and-tested-redaction-pipeline-phase-42)); still regex-based first-line defense, not a complete secret scanner.
 - [ ] Introduce output sanitization and data minimization for diagnostic output before database and LLM.
 - [ ] Harden HTTP response headers, TLS and authenticated reverse proxy.
 - [ ] Bound CPU, memory and query work for incoming telemetry; schema validate agent messages.
 - [ ] Durable per-agent backpressure, stale/offline TTL and replay protection.
 - [ ] Job leases, retries, dead-letter and crash recovery.
 - [ ] Database retention, backup encryption, migrations, disaster recovery.
-- [ ] Dependency vulnerability scan, SAST, SBOM, pinned Docker image digest, build attestation.
+- [ ] Dependency vulnerability scan, SAST. (SBOM generation, pinned Docker base-image digests and build/SBOM attestations are implemented; see [Release Verification](#release-verification).)
 - [ ] Integration tests for untrusted/compromised agent and malicious log prompt injection.
 
 ## Privacy principle
 
 Self-hosting Hub does not imply that data stays local after an LLM request. Clicking Investigate sends bounded selected incident evidence and retrieved resolution context to the explicitly selected connection endpoint/model. Review that destination and its retention/data-processing policy before sending non-synthetic data. Connection tests send only a synthetic prompt without incident evidence.
+
+### Privacy consent gate and tested redaction pipeline (Phase 4.2)
+
+- **Consent gate (fail closed):** workspace privacy settings persist in PostgreSQL (`privacy_settings`, migration `017_privacy_consent_redaction.sql`): `ai_egress_consent_granted`, `consent_version`, `consented_at`, `consented_by`, `redact_pii`, `updated_at`. Admins inspect/update them via `GET`/`PUT /api/privacy/consent` (admin cookie; PUT additionally requires the exact `ALLOWED_ORIGIN`). Every grant/revoke writes `privacy.consent_granted` / `privacy.consent_revoked` audit events; every blocked egress attempt writes `privacy.egress_blocked` with a non-secret context label.
+- **Enforcement on both sides:** the Hub refuses to queue investigations (`POST /api/incidents/:id/investigate` → `403 {code:"privacy_consent_required"}`) and to queue connection tests (`POST /api/ai/providers/:id/test` → same) when consent is absent or revoked. The Worker independently re-checks the persisted flag before any external LLM call and terminalizes the job/slot with error `privacy_consent_required` (permanent, never retried). No code path sends logs/evidence to an external LLM without explicit consent.
+- **Redaction pipeline (`packages/ai/src/redaction.ts`):** deterministic, ordered, multi-layer pipeline — PEM private-key blocks, `Authorization` Bearer/Basic/Digest/Token headers, `Cookie`/`Set-Cookie` headers, connection URLs with embedded credentials (`scheme://user:pass@`, incl. empty-user `redis://:pass@`), JWTs, AWS `AKIA`/`ASIA`, GitHub `gh[pousr]_`/`github_pat_`, Slack `xox*`, Stripe `sk_live_`/`sk_test_`/`rk_live_`, `sk-`/`sk-ant-` API keys, and `password=`/`secret=`/`token=`/`api_key=`/… assignments (quotes preserved). Optional PII layers (email, IPv4/IPv6) activate only when `redact_pii` consent is enabled. `redactValue` recursively redacts nested JSON evidence/prompt payloads, replacing credential-named object keys wholesale, without corrupting structure.
+- **Structured metadata only:** every redaction returns a `RedactionSummary` (per-category counts + total); raw matched values are never logged, stored, or returned. Evidence ingestion persists the summary in `evidence.redaction_summary`. Both storage (`addEvidence`, config snapshots/diffs) and external prompt assembly (`generateDiagnosisWithUsage`) pass through the pipeline — defense in depth.
+- **Tests:** `tests/log-redaction.test.ts` (systemd/nginx/.env/stack-trace/JSON/PEM/JWT/URL fixtures, bypass edge cases, summary accuracy, zero raw secrets survive) and `tests/privacy-consent.test.ts` (parser negatives, deny-by-default, grant/revoke audit, Worker fail-closed, Hub `403 privacy_consent_required`, redacted egress even with consent). Redaction remains regex-based first-line defense, not a complete secret scanner.

@@ -5,9 +5,10 @@ import { ProviderError, type ProviderErrorCode } from "@opspilot/ai/provider-htt
 import type { InvestigationMemoryAttribution, ProviderProtocol, RetrievedMemoryItem } from "@opspilot/contracts";
 import { searchIncidentMemories } from "../../hub/src/memory-retrieval";
 import { deduplicateMemoryCandidates, MEMORY_RETRIEVAL_LIMIT } from "../../hub/src/memory-dedup";
+import { PrivacyConsentError, requireAiEgressConsent } from "../../hub/src/privacy";
 import { memoryEmbeddingsEnabled, type EmbedFn } from "./memory-embeddings";
 
-type FailureCode = ProviderErrorCode | "provider_unavailable" | "provider_disabled" | "provider_changed" | "credential_unavailable" | "worker_lease_expired";
+type FailureCode = ProviderErrorCode | "provider_unavailable" | "provider_disabled" | "provider_changed" | "credential_unavailable" | "worker_lease_expired" | "privacy_consent_required";
 export type Failure = { code: FailureCode; httpStatus: number | null };
 type ProviderRow = {
   id: string;
@@ -120,8 +121,9 @@ export function isRetryableFailure(failure: Failure): boolean {
       return failure.httpStatus === 429 || (failure.httpStatus !== null && failure.httpStatus >= 500);
     default:
       // provider_changed, provider_disabled, provider_unavailable, credential_unavailable,
-      // provider_invalid_response, provider_egress-class codes, and HTTP 4xx (other than 429)
-      // are permanent: retrying them would only repeat a deterministic failure.
+      // privacy_consent_required, provider_invalid_response, provider_egress-class codes,
+      // and HTTP 4xx (other than 429) are permanent: retrying them would only repeat a
+      // deterministic failure.
       return false;
   }
 }
@@ -297,6 +299,21 @@ export async function runOneInvestigation(
   const { job, connection } = claimed;
   if (!connection) return true;
 
+  // Privacy consent gate (fail closed, defense in depth behind the Hub check): without
+  // persisted egress consent no evidence/logs may leave for an external LLM provider.
+  // The job fails terminally with privacy_consent_required and the attempt is audited.
+  let redactPii = false;
+  try {
+    const consent = await requireAiEgressConsent(db, "investigation.run");
+    redactPii = consent.redactPii;
+  } catch (error) {
+    if (error instanceof PrivacyConsentError) {
+      await failInvestigation(db, job, { code: "privacy_consent_required", httpStatus: null }, workerId, retryBackoffMs);
+      return true;
+    }
+    throw error;
+  }
+
   try {
     const incidents = await db<{ title: string; category: string }[]>`SELECT title,category FROM incidents WHERE id=${job.incident_id}`;
     const incident = incidents[0];
@@ -326,7 +343,8 @@ export async function runOneInvestigation(
       score: item.retrieval_method === "hybrid_rrf" ? item.hybrid_score : item.fts_score,
       last_confirmed_at: item.last_confirmed_at,
     }));
-    const outcome = await generate(connection, incident, evidence, memories);
+    // Evidence is redacted again here (with the consented PII policy) before the LLM call.
+    const outcome = await generate(connection, incident, evidence, memories, undefined, { redactPii });
     const diagnosis = "diagnosis" in outcome ? outcome.diagnosis : outcome;
     const usage = "usage" in outcome ? outcome.usage : null;
     // The worker guard keeps a slow worker whose lease expired and was recovered
@@ -428,10 +446,20 @@ export async function runOneProviderTest(
   if (!connection) return true;
 
   let failure: Failure | null = null;
+  // Privacy consent gate (fail closed): even a synthetic test prompt is external AI
+  // egress. A blocked attempt is audited and terminalizes the slot as failed.
   try {
-    await generate(connection, { title: "OpsPilot connection test", category: "connection_test" }, [], []);
-  } catch (error: unknown) {
-    failure = failureFrom(error);
+    await requireAiEgressConsent(db, "provider.test");
+  } catch (error) {
+    if (error instanceof PrivacyConsentError) failure = { code: "privacy_consent_required", httpStatus: null };
+    else throw error;
+  }
+  if (!failure) {
+    try {
+      await generate(connection, { title: "OpsPilot connection test", category: "connection_test" }, [], []);
+    } catch (error: unknown) {
+      failure = failureFrom(error);
+    }
   }
 
   const persisted = await db.begin(async (tx) => {

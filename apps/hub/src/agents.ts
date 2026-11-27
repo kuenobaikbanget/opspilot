@@ -1,11 +1,14 @@
 import type { ServerWebSocket } from "bun";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   MAX_CONFIG_SNAPSHOT_BYTES,
   MAX_SYSTEMD_REPORT_BYTES,
   MAX_WS_MESSAGE_BYTES,
   MAX_WORKLOAD_INVENTORY_BYTES,
   PROTOCOL_VERSION,
+  WS_CLOSE_AGENT_REVOKED,
+  WS_CLOSE_CREDENTIAL_ROTATED,
+  WS_CLOSE_SUPERSEDED,
   negotiateCapabilities,
   parseAgentHello,
   parseConfigSnapshot,
@@ -69,7 +72,11 @@ export async function enrollAgent(
   return { agentId: rows[0].id as string, agentSecret };
 }
 
-/** Authenticates an agent request using `x-opspilot-agent-id` and a Bearer secret. */
+/**
+ * Authenticates an agent request using `x-opspilot-agent-id` and a Bearer secret.
+ * Revoked agents (`revoked_at IS NOT NULL`) are always rejected; the stored
+ * SHA-256 hash is compared in constant time after the row lookup.
+ */
 export async function authenticateAgent(req: Request): Promise<string | null> {
   const id = req.headers.get("x-opspilot-agent-id") || "";
   const bearer = req.headers.get("authorization") || "";
@@ -80,10 +87,62 @@ export async function authenticateAgent(req: Request): Promise<string | null> {
     return null;
   }
 
-  const hash = hashSecret(bearer.slice(7));
   const rows =
-    await db`SELECT id FROM agents WHERE id=${id} AND token_hash=${hash}`;
-  return rows.length ? (rows[0].id as string) : null;
+    await db<{ id: string; token_hash: string; revoked_at: Date | null }[]>`
+      SELECT id,token_hash,revoked_at FROM agents WHERE id=${id}`;
+  const row = rows[0];
+  if (!row || row.revoked_at !== null) {
+    return null;
+  }
+  const expected = Buffer.from(row.token_hash, "utf8");
+  const actual = Buffer.from(hashSecret(bearer.slice(7)), "utf8");
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+    return null;
+  }
+  return row.id;
+}
+
+/** Immediately closes the active WebSocket for an agent, if any. */
+export function closeAgentSocket(agentId: string, code: number, reason: string): boolean {
+  const socket = connections.get(agentId);
+  if (!socket) return false;
+  try {
+    socket.close(code, reason);
+  } catch {
+    // already closed
+  }
+  return true;
+}
+
+/**
+ * Revokes an agent credential: marks it revoked, closes any active WebSocket and
+ * audits the action. Revoked agents fail all future HTTP/WS auth attempts.
+ * Returns false when the agent does not exist or was already revoked.
+ */
+export async function revokeAgent(agentId: string): Promise<boolean> {
+  const rows =
+    await db<{ id: string }[]>`UPDATE agents SET revoked_at=NOW() WHERE id=${agentId} AND revoked_at IS NULL RETURNING id`;
+  if (!rows.length) return false;
+  closeAgentSocket(agentId, WS_CLOSE_AGENT_REVOKED, "Agent revoked");
+  await audit("agent.revoked", agentId, { at: new Date().toISOString() });
+  return true;
+}
+
+/**
+ * Rotates an agent credential (immediate swap): issues a new secret, updates
+ * token_hash, records last_rotated_at, disconnects stale WebSocket sessions and
+ * audits the rotation. The revoked flag is deliberately NOT cleared — a revoked
+ * agent stays revoked until explicitly re-enrolled. Returns the new secret
+ * exactly once, or null when the agent does not exist.
+ */
+export async function rotateAgentCredential(agentId: string): Promise<{ agentSecret: string } | null> {
+  const agentSecret = secret();
+  const rows =
+    await db<{ id: string }[]>`UPDATE agents SET token_hash=${hashSecret(agentSecret)},last_rotated_at=NOW() WHERE id=${agentId} RETURNING id`;
+  if (!rows.length) return null;
+  closeAgentSocket(agentId, WS_CLOSE_CREDENTIAL_ROTATED, "Credential rotated; reconnect with the new secret");
+  await audit("agent.rotated", agentId, { at: new Date().toISOString() });
+  return { agentSecret };
 }
 
 /** Issues a single-use agent enrollment token expiring in 10 minutes. */
@@ -98,7 +157,7 @@ export async function createEnrollmentToken() {
 export function socketOpened(ws: ServerWebSocket<SocketData>) {
   const existing = connections.get(ws.data.agentId);
   if (existing && existing !== ws) {
-    existing.close(4001, "Superseded by new session");
+    existing.close(WS_CLOSE_SUPERSEDED, "Superseded by new session");
   }
   connections.set(ws.data.agentId, ws);
   void db`UPDATE agents SET status='online',last_seen_at=NOW() WHERE id=${ws.data.agentId}`

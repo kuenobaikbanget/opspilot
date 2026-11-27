@@ -3,6 +3,22 @@ export * from "./drift";
 /** Maximum permitted WebSocket frame payload size in bytes. */
 export const MAX_WS_MESSAGE_BYTES = 64 * 1024;
 
+/**
+ * CSRF double-submit contract for browser/admin traffic: the hub sets the
+ * `opspilot_csrf` cookie at login (JS-readable, SameSite=Strict) and requires
+ * the same value echoed in the `x-opspilot-csrf` header on every state-changing
+ * cookie-authenticated request. The hub compares only the SHA-256 hash of the
+ * header against the session-bound hash, so the raw token never leaves the
+ * client. Bearer-authenticated agent endpoints are exempt.
+ */
+export const CSRF_HEADER = "x-opspilot-csrf";
+export const CSRF_COOKIE = "opspilot_csrf";
+
+/** WebSocket close codes used for agent session lifecycle events. */
+export const WS_CLOSE_SUPERSEDED = 4001;
+export const WS_CLOSE_CREDENTIAL_ROTATED = 4002;
+export const WS_CLOSE_AGENT_REVOKED = 4003;
+
 export type {
   MemoryEmbeddingStatus,
   MemoryRetrievalMode,
@@ -1042,6 +1058,9 @@ export function parseUpdateEndpointMonitorRequest(value: unknown): UpdateEndpoin
 // Change events and the non-causal incident timeline (deployments/config changes
 // linked to incidents as temporal context only, never as claimed root cause).
 export * from "./changes";
+
+// Privacy consent gate for external AI/LLM egress and redaction options.
+export * from "./privacy";
 
 // Memory deduplication and provenance: canonical incident memories, source
 // attribution, per-investigation retrieved-memory attribution and the merge parser.

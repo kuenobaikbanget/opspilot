@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostMetric, HostSystemdStatus } from "../packages/contracts/src/index";
 import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
+import { csrfFromLogin } from "./helpers/csrf";
 
 const integration = providerTestDatabaseAvailable ? test : test.skip;
 const root = new URL("../", import.meta.url).pathname;
@@ -77,15 +78,21 @@ integration("Go wire, authenticated systemd snapshots and selected-host reads in
       const base = `http://127.0.0.1:${port}`;
       const socketUrl = `ws://127.0.0.1:${port}/api/agents/connect`;
       let cookie = "";
+      let csrf = "";
       const api = (path: string, body?: unknown, auth = true) => fetch(base + path, {
         signal: AbortSignal.timeout(3000),
-        headers: { "content-type": "application/json", ...(auth && cookie ? { cookie } : {}) },
+        headers: {
+          "content-type": "application/json",
+          ...(auth && cookie ? { cookie } : {}),
+          ...(auth && body !== undefined && csrf ? { "x-opspilot-csrf": csrf } : {}),
+        },
         method: body === undefined ? "GET" : "POST",
         body: body === undefined ? undefined : JSON.stringify(body),
       });
       const login = await api("/api/auth/login", { password });
       expect(login.status).toBe(200);
       cookie = login.headers.get("set-cookie")!.split(";")[0];
+      csrf = csrfFromLogin(login);
       const token = async (): Promise<string> => {
         const response = await api("/api/agents/enrollment-token", {});
         expect(response.status).toBe(201);

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { runDueEndpointChecks } from "../apps/worker/src/endpoint-scheduler";
 import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
+import { csrfFromLogin, withCsrf } from "./helpers/csrf";
 
 const integration = providerTestDatabaseAvailable ? test : test.skip;
 
@@ -87,12 +88,14 @@ async function startHub(databaseUrl: string) {
     await Bun.sleep(25);
   }
   let cookie = "";
+  let csrf = "";
   async function request(path: string, method = "GET", data?: unknown): Promise<Response> {
     const headers = new Headers();
     if (cookie) headers.set("cookie", cookie);
     if (method !== "GET") {
       headers.set("origin", origin);
       headers.set("content-type", "application/json");
+      withCsrf(headers, method, csrf);
     }
     return fetch(`${baseUrl}${path}`, {
       method,
@@ -112,6 +115,7 @@ async function startHub(databaseUrl: string) {
       });
       expect(res.status).toBe(200);
       cookie = res.headers.get("set-cookie")!.split(";")[0];
+      csrf = csrfFromLogin(res);
     },
     async stop(): Promise<void> {
       await child.stop();

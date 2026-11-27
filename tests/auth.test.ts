@@ -63,7 +63,7 @@ async function authDisabled(env: Record<string, string>) {
     console.log(JSON.stringify(isAuthDisabled(JSON.parse(process.argv[1]))));
   `, JSON.stringify(env)], {
     cwd: root,
-    env: { PATH: process.env.PATH || "", NODE_ENV: "test", SESSION_SECRET: sessionSecret },
+    env: { PATH: process.env.PATH || "", NODE_ENV: "test", SESSION_SECRET: sessionSecret, DATABASE_URL: dummyDb },
     stdout: "pipe",
     stderr: "pipe",
   });

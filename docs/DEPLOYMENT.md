@@ -150,9 +150,40 @@ OPSPILOT_ENROLL_TOKEN='<one-time-token>' \
 
 This is intentionally a *limited capability* agent: `/proc` read-only mount may allow CPU/RAM/network telemetry; disk path `/` reflects container filesystem, and systemd/journal may not exist. No default Docker daemon socket mount. To monitor host disk, configure explicit read-only mount and set `OPSPILOT_DISK_PATH` to its mount point; review security implications.
 
+## TLS reverse proxy (reference deployment)
+
+Publish **only** a TLS-terminating reverse proxy; Hub, Web, Worker and PostgreSQL stay on the internal/loopback network. Reference configs live in `infra/proxy/` and the overlay in `compose.tls.yaml`:
+
+```bash
+# 1. Put your certificate + key at infra/proxy/certs/fullchain.pem and privkey.pem (key 0600, root-owned)
+# 2. Set OPSPILOT_DOMAIN in .env to a name covered by the certificate SAN
+# 3. Hub env: COOKIE_SECURE=true and OPSPILOT_PUBLIC_HUB_URL=https://$OPSPILOT_DOMAIN
+docker compose -f compose.yaml -f compose.tls.yaml --profile full up -d
+```
+
+- **Caddy** (`infra/proxy/Caddyfile`): serves `https://$OPSPILOT_DOMAIN`, proxies `/api/agents/connect` straight to `hub:3001` and everything else to `web:3000`, enforces TLS 1.2/1.3 only, and forwards `Host`, `X-Forwarded-Proto: https`, `X-Forwarded-For` plus `Upgrade`/`Connection` for WebSocket.
+- **Nginx** (`infra/proxy/nginx.conf`): equivalent `443 ssl` server with `ssl_protocols TLSv1.2 TLSv1.3`, `map $http_upgrade $connection_upgrade`, the same forwarding headers, long read timeouts on the WSS location, and an HTTP→HTTPS redirect on port 80. Mount it as `/etc/nginx/conf.d/opspilot.conf` with certs at `/etc/nginx/certs/`.
+- Agents then connect with `OPSPILOT_HUB_URL=https://$OPSPILOT_DOMAIN` (the agent maps `https://` to `wss://` for `/api/agents/connect`). When the proxy terminates TLS with a **private CA**, install that CA on agent hosts and set `OPSPILOT_CA_CERT_FILE=/etc/opspilot/ca.pem`; the agent loads the system roots (which already honor `SSL_CERT_FILE`/`SSL_CERT_DIR`) plus that bundle and always verifies the server certificate — there is no insecure-skip mode. Enrollment (`/api/agents/enroll`) uses the same trust bundle.
+- The Hub never derives a public origin from `Host`/`X-Forwarded-*` headers; it only reads explicit env config, and with `COOKIE_SECURE=true` it issues `Secure` session cookies. Forwarded headers are accepted but never treated as credentials.
+
+## Metrics retention tuning
+
+Worker retention is policy-bounded: raw `metric_samples` are kept `METRIC_RAW_RETENTION_HOURS` (default 168, clamp 1–8760), then rolled up per hour into `metric_samples_hourly` and deleted in the same transaction; rollups expire after `METRIC_ROLLUP_RETENTION_DAYS` (default 90, clamp 1–3650). Each pass processes at most one 6-hour window so the poll loop stays bounded. Tune via env on the Worker; see `docs/SECURITY.md` → Data retention.
+
 ## Backup / restore
 
-- Backup DB with `pg_dump` (avoid copying mutable DB volume live).
+- Use the checked-in tooling instead of ad-hoc `pg_dump` (never copy a mutable DB volume live):
+  ```bash
+  # Backup: compressed custom-format archive + SHA-256 sidecar (never overwrites)
+  DATABASE_URL=postgres://... tools/backup-db.sh ./backups
+  # Restore drill into a FRESH database (refuses non-empty targets unless --clean):
+  tools/restore-db.sh ./backups/opspilot-<ts>.dump --target-url postgres://.../restore_drill
+  # Verify: checksum, archive structure, then schema/row-count comparison
+  bun run tools/validate-backup-restore.ts verify-checksum ./backups/opspilot-<ts>.dump
+  bun run tools/validate-backup-restore.ts verify-archive ./backups/opspilot-<ts>.dump
+  bun run tools/validate-backup-restore.ts compare "$SOURCE_URL" "$TARGET_URL"
+  ```
+  `restore-db.sh` always verifies the `.sha256` sidecar and `pg_restore --list` integrity **before** touching the target; a tampered or corrupt archive is rejected. Run a restore drill on a disposable database at least quarterly and after any schema change.
 - Protect backup encryption and verify restore in a disposable environment.
 - Back up `agent` identity securely and document rotation; secret reuse after cloning hosts is dangerous.
 - Back up `AI_PROVIDER_ENCRYPTION_KEY` separately; a DB backup without its original master cannot decrypt provider credentials.
@@ -160,7 +191,7 @@ This is intentionally a *limited capability* agent: `/proc` read-only mount may 
 
 ## Environment variables
 
-Hub: `DATABASE_URL`, `PORT`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, `ALLOWED_ORIGIN`, `COOKIE_SECURE`, `ALERT_*`, `AI_PROVIDER_ENCRYPTION_KEY`, and optional onboarding settings `OPSPILOT_PUBLIC_HUB_URL`, `OPSPILOT_AGENT_VERSION`, `OPSPILOT_AGENT_REPOSITORY`, `OPSPILOT_DEV_LOOPBACK_INSTALL` described above. Worker: `DATABASE_URL`, `AI_PROVIDER_ENCRYPTION_KEY`, `INVESTIGATION_POLL_MS`. Web: `HUB_INTERNAL_URL` (server-side Next rewrite, never the public agent origin or master/provider keys). Agent: `OPSPILOT_HUB_URL`, transient `OPSPILOT_ENROLL_TOKEN`, `OPSPILOT_AGENT_STATE_PATH`, `OPSPILOT_ALLOWED_SERVICES`, `OPSPILOT_CONFIG_FILES`, `OPSPILOT_ENABLE_DOCKER`, `OPSPILOT_PROC_ROOT`, `OPSPILOT_DISK_PATH`, `OPSPILOT_INTERVAL_SECONDS`.
+Hub: `DATABASE_URL`, `PORT`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, `ALLOWED_ORIGIN`, `COOKIE_SECURE`, `ALERT_*`, `AI_PROVIDER_ENCRYPTION_KEY`, and optional onboarding settings `OPSPILOT_PUBLIC_HUB_URL`, `OPSPILOT_AGENT_VERSION`, `OPSPILOT_AGENT_REPOSITORY`, `OPSPILOT_DEV_LOOPBACK_INSTALL` described above. Worker: `DATABASE_URL`, `AI_PROVIDER_ENCRYPTION_KEY`, `INVESTIGATION_POLL_MS`, `METRIC_RAW_RETENTION_HOURS`, `METRIC_ROLLUP_RETENTION_DAYS`. Web: `HUB_INTERNAL_URL` (server-side Next rewrite, never the public agent origin or master/provider keys). Agent: `OPSPILOT_HUB_URL`, transient `OPSPILOT_ENROLL_TOKEN`, `OPSPILOT_CA_CERT_FILE` (extra PEM CA bundle for private-proxy TLS), `OPSPILOT_AGENT_STATE_PATH`, `OPSPILOT_ALLOWED_SERVICES`, `OPSPILOT_CONFIG_FILES`, `OPSPILOT_ENABLE_DOCKER`, `OPSPILOT_PROC_ROOT`, `OPSPILOT_DISK_PATH`, `OPSPILOT_INTERVAL_SECONDS`. Backup/restore tools: `DATABASE_URL`, `BACKUP_DIR`, `PG_DUMP_BIN`, `PG_RESTORE_BIN`, `PSQL_BIN` (point at a matching-version binary or a wrapper).
 
 ## Before external deployment
 

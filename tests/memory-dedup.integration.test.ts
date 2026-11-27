@@ -6,6 +6,8 @@ import { encryptProviderKey, readProviderMasterKey } from "../packages/ai/src/cr
 import { runOneInvestigation } from "../apps/worker/src/jobs";
 import { memoryFingerprint } from "../apps/hub/src/memory-dedup";
 import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
+import { csrfFromLogin, withCsrf } from "./helpers/csrf";
+import { grantAiEgressConsent } from "./helpers/privacy-consent";
 
 const integration = providerTestDatabaseAvailable ? test : test.skip;
 const root = new URL("../", import.meta.url).pathname;
@@ -101,6 +103,7 @@ async function startHub(databaseUrl: string): Promise<Hub> {
   const child = spawn("apps/hub/src/index.ts", { ...childEnv(databaseUrl), PORT: String(port) });
   const baseUrl = `http://127.0.0.1:${port}`;
   let cookie = "";
+  let csrf = "";
   async function request(path: string, method = "GET", data?: unknown, headers: Record<string, string> = {}): Promise<Response> {
     const all = new Headers(headers);
     if (cookie && !all.has("cookie")) all.set("cookie", cookie);
@@ -108,6 +111,7 @@ async function startHub(databaseUrl: string): Promise<Hub> {
       all.set("origin", origin);
       all.set("content-type", "application/json");
     }
+    withCsrf(all, method, csrf);
     return fetch(`${baseUrl}${path}`, {
       method, headers: all, body: data === undefined ? undefined : JSON.stringify(data),
       signal: AbortSignal.timeout(5_000),
@@ -122,6 +126,7 @@ async function startHub(databaseUrl: string): Promise<Hub> {
     const login = await request("/api/auth/login", "POST", { password });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    csrf = csrfFromLogin(login);
     return { request, stop: child.stop };
   } catch (error) {
     await child.stop();
@@ -180,6 +185,7 @@ async function memoryRows(db: SQL): Promise<MemoryRow[]> {
 integration("resolving repeat incidents deduplicates into one canonical memory with full source provenance", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const hub = await startHub(url);
     try {
       const agentId = await seedAgent(db);
@@ -262,6 +268,7 @@ integration("resolving repeat incidents deduplicates into one canonical memory w
 integration("POST /api/memory/merge enforces auth and origin, rejects invalid requests, and merges with provenance", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const hub = await startHub(url);
     try {
       const agentId = await seedAgent(db);
@@ -336,6 +343,7 @@ integration("POST /api/memory/merge enforces auth and origin, rejects invalid re
 integration("worker investigation deduplicates canonical memories and persists retrieved_memories_json", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const hub = await startHub(url);
     try {
       const provider = await seedProvider(db);

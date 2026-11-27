@@ -23,6 +23,7 @@ erDiagram
   agents ||--o{ change_events : records
   change_events ||--o{ incident_change_links : targeted_by
   config_snapshots ||--o{ incident_change_links : targeted_by
+  privacy_settings : singleton_consent_row
   ai_providers ||--o{ incident_memory : embeds
   agents { uuid id PK; text hostname; text token_hash; int protocol_version; text[] capabilities; timestamptz last_seen_at }
   metric_samples { bigint id PK; uuid agent_id FK; timestamptz sampled_at; float cpu_percent; float memory_percent; float disk_percent }
@@ -31,7 +32,8 @@ erDiagram
   alert_conditions { uuid agent_id PK; text metric PK; text state; int consecutive; timestamptz cooldown_until; uuid incident_id FK }
   config_snapshots { uuid id PK; uuid agent_id FK; text file_path; text checksum_sha256; uuid previous_snapshot_id FK; text diff_status; text unavailable_reason; text content_format; text content_redacted; bool content_truncated; int redaction_count; jsonb semantic_diff_json; text diff_summary; uuid incident_id FK; timestamptz captured_at }
   incidents { uuid id PK; uuid agent_id FK; text title; text category; text status; text resolution }
-  evidence { uuid id PK; uuid incident_id FK; text source; text content }
+  evidence { uuid id PK; uuid incident_id FK; text source; text content; jsonb redaction_summary }
+  privacy_settings { int id PK (=1); bool ai_egress_consent_granted; text consent_version; timestamptz consented_at; text consented_by; bool redact_pii; timestamptz updated_at }
   investigations { uuid id PK; uuid incident_id FK; uuid provider_id FK; text provider_name; text provider_protocol; text provider_model; text status; jsonb result_json; jsonb retrieved_memories_json }
   ai_providers ||--o{ investigations : snapshots
   ai_providers { uuid id PK; text protocol; int revision; text api_key_ciphertext; uuid last_test_id; text last_test_status }
@@ -45,12 +47,14 @@ erDiagram
 
 | Table | Purpose | Retention proposal |
 |---|---|---|
-| `agents` | enrollment identity hash, name, wire protocol version, negotiated capabilities, last contact | until deletion |
+| `agents` | enrollment identity hash, name, wire protocol version, negotiated capabilities, last contact, `revoked_at`/`last_rotated_at` credential lifecycle (migration 016) | until deletion |
+| `sessions` | server-side admin session lifecycle (migration 016): `session_hash` (SHA-256 of the signed token, UNIQUE), `csrf_hash`, `created_at`, `last_seen_at`, `expires_at`, `revoked_at`, `user_agent`, `ip`; revoked/expired/idle rows are rejected at request time | until revoked + audit retention |
 | `enrollment_tokens` | one-time SHA256 token + TTL/used flag | worker deletes spent/expired rows after 24h |
 | `metric_samples` | 15s telemetry samples per host | raw window `METRIC_RAW_RETENTION_HOURS` (default 168 = 7d), then rolled up and deleted by the worker |
 | `config_snapshots` | allowlisted file hash history, plus opt-in redacted snapshots, semantic diffs and drift incident links (migration 012) | 90d or per-policy |
 | `incidents` | incident lifecycle & human resolution | until archive |
-| `evidence` | bounded diagnostic output | 30–90d based on privacy |
+| `evidence` | bounded diagnostic output, always redacted, with `redaction_summary` JSONB (per-category counts, never raw matched values; migration 017) | 30–90d based on privacy |
+| `privacy_settings` | singleton workspace privacy consent row (`id=1`): `ai_egress_consent_granted` (default FALSE — external AI egress fails closed without it), `consent_version`, `consented_at`, `consented_by`, `redact_pii`, `updated_at` (migration 017); grant/revoke audited as `privacy.consent_granted`/`privacy.consent_revoked`, blocked egress as `privacy.egress_blocked` | until changed; audited |
 | `ai_providers` | connection metadata, encrypted key, one bounded asynchronous test slot | credential deleted with connection; no test history table |
 | `investigations` | immutable non-secret provider snapshot, status, validated JSON, safe error | 90d |
 | `incident_memory` | canonical, deduplicated human-confirmed resolution (`canonical_memory_id IS NULL` = active canonical; non-NULL = merged into that memory) | opt-in long term |
@@ -90,6 +94,8 @@ erDiagram
 - Migration 014 adds hybrid-retrieval embedding columns to `incident_memory`: `embedding_values DOUBLE PRECISION[]` (always persisted, so hybrid retrieval works on plain PostgreSQL 16 via an exact bounded cosine-similarity fallback), `embedding_dimensions`, `embedding_model`, `embedding_provider_id UUID REFERENCES ai_providers(id) ON DELETE SET NULL`, `embedded_at` and `embedding_consent BOOLEAN NOT NULL DEFAULT FALSE` (opt-in). When `pg_available_extensions` contains `'vector'` (e.g. `pgvector/pgvector:pg16`, but NOT plain `postgres:16-alpine`) the migration also runs `CREATE EXTENSION IF NOT EXISTS vector` and adds a nullable `embedding_vector vector` column used for native `<=>` cosine-distance queries. Partial indexes serve the pending-embedding scan (`embedding_consent AND embedded_at IS NULL`) and the embedded-rows retrieval scan (`embedding_values IS NOT NULL`).
 
 - Migration 015 adds memory deduplication/provenance: `incident_memory.content_fingerprint` (SHA-256 over redacted, normalized summary+resolution), `canonical_memory_id` (self-FK, NULL = canonical active memory, `ON DELETE SET NULL`), `occurrence_count` (>= 1, default 1) and `last_confirmed_at` on `incident_memory`, plus the `incident_memory_sources` provenance table (`PRIMARY KEY (memory_id, incident_id)`, cascades, incident-indexed) backfilled from existing rows, and `investigations.retrieved_memories_json` (bounded `InvestigationMemoryAttribution[]` snapshot). Partial indexes cover canonical fingerprint lookups and merged-row scans. Resolve-time dedup matches an exact fingerprint or a near-duplicate (token Jaccard on the resolution >= 0.85) among recent canonical memories; merges move all source rows and recompute the target's `occurrence_count`/`last_confirmed_at` from distinct sources. Only columns from 001..011 are referenced, so 015 applies on top of 011 and after 012..014.
+- Migration 016 adds the server-side admin session lifecycle and agent credential lifecycle: the `sessions` table (`session_hash` UNIQUE — SHA-256 hex of the full signed session token, never the raw token — plus `csrf_hash`, `created_at`, `last_seen_at`, `expires_at`, `revoked_at`, `user_agent`, `ip`; partial indexes on active rows by `session_hash` and `expires_at`) and `agents.revoked_at` / `agents.last_rotated_at` with a partial index on revoked agents. Request-time validation rejects rows that are revoked, past `expires_at`, or idle beyond `SESSION_IDLE_TIMEOUT_SECONDS` (checked against `last_seen_at`), so replayed cookies fail with 401 even with a valid signature. `DELETE /api/auth/sessions/:id`, logout and logout-all set `revoked_at`; the session hash is never returned by the list endpoint.
+- Migration 017 adds the workspace privacy consent singleton `privacy_settings` (`id INTEGER PRIMARY KEY CHECK (id = 1)`, seeded once with `ai_egress_consent_granted = FALSE`) and `evidence.redaction_summary JSONB` (structured per-category redaction counts stored at ingestion; never raw matched values). Hub/Worker enforce the consent gate fail-closed against this row (investigations and provider tests require `ai_egress_consent_granted = TRUE`); `redact_pii = TRUE` additionally enables email/IP redaction in the pipeline. Only columns from 001..015 are referenced, so 017 applies cleanly on top of 015 and after 016.
 
 ## Hybrid full-text + vector retrieval over canonical memories (implemented)
 

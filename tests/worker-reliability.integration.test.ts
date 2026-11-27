@@ -6,6 +6,8 @@ import { encryptProviderKey, readProviderMasterKey } from "../packages/ai/src/cr
 import { ProviderError } from "../packages/ai/src/provider-http";
 import { recoverExpiredLeases, runOneInvestigation } from "../apps/worker/src/jobs";
 import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
+import { csrfFromLogin, withCsrf } from "./helpers/csrf";
+import { grantAiEgressConsent } from "./helpers/privacy-consent";
 
 const integration = providerTestDatabaseAvailable ? test : test.skip;
 const root = new URL("../", import.meta.url).pathname;
@@ -113,12 +115,14 @@ async function startHub(databaseUrl: string): Promise<Hub> {
   const child = spawn("apps/hub/src/index.ts", { ...childEnv(databaseUrl), PORT: String(port) });
   const baseUrl = `http://127.0.0.1:${port}`;
   let cookie = "";
+  let csrf = "";
   async function request(path: string, method = "GET", data?: unknown): Promise<Response> {
     const headers = new Headers();
     if (cookie) headers.set("cookie", cookie);
     if (method !== "GET") {
       headers.set("origin", origin);
       headers.set("content-type", "application/json");
+      withCsrf(headers, method, csrf);
     }
     return fetch(`${baseUrl}${path}`, {
       method, headers, body: data === undefined ? undefined : JSON.stringify(data),
@@ -134,6 +138,7 @@ async function startHub(databaseUrl: string): Promise<Hub> {
     const login = await request("/api/auth/login", "POST", { password });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    csrf = csrfFromLogin(login);
     return { request, stop: child.stop };
   } catch (error) {
     await child.stop();
@@ -192,6 +197,7 @@ async function jobRow(db: SQL, id: string): Promise<JobRow> {
 integration("expired leases are recovered: requeued inside the budget, terminalized at the budget", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const provider = await seedProvider(db);
     const incidentId = await seedIncident(db);
     const expired = new Date(Date.now() - 1_000);
@@ -255,6 +261,7 @@ integration("expired leases are recovered: requeued inside the budget, terminali
 integration("a stale worker whose lease was recovered cannot overwrite the new owner's state", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const provider = await seedProvider(db);
     const incidentId = await seedIncident(db);
     const jobId = await insertJob(db, incidentId, provider);
@@ -305,6 +312,7 @@ integration("a stale worker whose lease was recovered cannot overwrite the new o
 integration("transient failures requeue with backoff until max_attempts, then fail terminally", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const provider = await seedProvider(db);
     const incidentId = await seedIncident(db);
     const jobId = await insertJob(db, incidentId, provider);
@@ -356,6 +364,7 @@ integration("transient failures requeue with backoff until max_attempts, then fa
 integration("HTTP 429 and 5xx are retried; a later success completes within the budget", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const provider = await seedProvider(db);
     const incidentId = await seedIncident(db);
     const jobId = await insertJob(db, incidentId, provider);
@@ -383,6 +392,7 @@ integration("HTTP 429 and 5xx are retried; a later success completes within the 
 integration("permanent errors fail immediately on attempt 1 without any retry", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const provider = await seedProvider(db);
     const incidentId = await seedIncident(db);
 
@@ -443,6 +453,7 @@ integration("permanent errors fail immediately on attempt 1 without any retry", 
 integration("the partial unique index atomically rejects duplicate active dedupe keys", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const provider = await seedProvider(db);
     const incidentId = await seedIncident(db);
     const key = "ab".repeat(32);
@@ -466,6 +477,7 @@ integration("the partial unique index atomically rejects duplicate active dedupe
 integration("investigate endpoint deduplicates active investigations and allows fresh ones after terminal state", async () => {
   await withProviderTestDb(async (db, url) => {
     await migrate(url);
+    await grantAiEgressConsent(db);
     const hub = await startHub(url);
     try {
       const created = await json<{ provider: AiProvider }>(await hub.request(providerPath, "POST", {

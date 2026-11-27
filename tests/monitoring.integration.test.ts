@@ -3,6 +3,7 @@ import type { SQL } from "bun";
 import type { AlertCondition, HostList, HostMetric, HostThresholds } from "../packages/contracts/src/index";
 import { runMetricRetention } from "../apps/worker/src/jobs";
 import { providerTestDatabaseAvailable, withProviderTestDb } from "./helpers/provider-test-db";
+import { csrfFromLogin } from "./helpers/csrf";
 
 const integration = providerTestDatabaseAvailable ? test : test.skip;
 const root = new URL("../", import.meta.url).pathname;
@@ -44,11 +45,16 @@ async function startHub(databaseUrl: string): Promise<Hub> {
   if (!port) throw new Error("Hub did not announce its test port");
   const base = `http://127.0.0.1:${port}`;
   let cookie = "";
+  let csrf = "";
   const api = (path: string, init: { method?: string; body?: unknown; auth?: boolean } = {}) => {
     const method = init.method ?? (init.body === undefined ? "GET" : "POST");
     return fetch(base + path, {
       signal: AbortSignal.timeout(3000),
-      headers: { "content-type": "application/json", ...(init.auth !== false && cookie ? { cookie } : {}) },
+      headers: {
+        "content-type": "application/json",
+        ...(init.auth !== false && cookie ? { cookie } : {}),
+        ...(init.auth !== false && method !== "GET" && csrf ? { "x-opspilot-csrf": csrf } : {}),
+      },
       method,
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
     });
@@ -56,6 +62,7 @@ async function startHub(databaseUrl: string): Promise<Hub> {
   const login = await api("/api/auth/login", { body: { password } });
   expect(login.status).toBe(200);
   cookie = login.headers.get("set-cookie")!.split(";")[0];
+  csrf = csrfFromLogin(login);
   return {
     base,
     socketUrl: `ws://127.0.0.1:${port}/api/agents/connect`,
