@@ -7,7 +7,7 @@ process.env.DATABASE_URL = "postgres://opspilot:opspilot@127.0.0.1:5433/opspilot
 process.env.NODE_ENV = "test";
 delete process.env.DISABLE_AUTH;
 
-const { RateLimiter } = await import("../apps/hub/src/ratelimit");
+const { RateLimiter, rateLimitKey, resolveClientIp } = await import("../apps/hub/src/ratelimit");
 const auth = await import("../apps/hub/src/auth");
 const { hashSecret } = await import("../apps/hub/src/db");
 
@@ -37,6 +37,34 @@ test("RateLimiter allows up to max hits then rejects with retryAfterSeconds", ()
 test("RateLimiter validates its configuration", () => {
   expect(() => new RateLimiter({ windowMs: 0, max: 1 })).toThrow();
   expect(() => new RateLimiter({ windowMs: 1000, max: 0 })).toThrow();
+});
+
+test("rateLimitKey ignores X-Forwarded-For unless remoteAddress is a trusted proxy", () => {
+  const req = new Request("http://hub/api/auth/login", {
+    headers: { "x-forwarded-for": "198.51.100.42", "x-real-ip": "198.51.100.99" },
+  });
+  // Unset TRUSTED_PROXY_IPS -> header cannot be spoofed.
+  expect(rateLimitKey(req, "login", { remoteAddress: "203.0.113.5" }, "")).toBe("login:203.0.113.5");
+  // Untrusted peer even when TRUSTED_PROXY_IPS is set -> header still ignored.
+  expect(rateLimitKey(req, "login", { remoteAddress: "203.0.113.5" }, "127.0.0.1,172.16.0.0/12")).toBe("login:203.0.113.5");
+});
+
+test("resolveClientIp walks X-Forwarded-For right-to-left across trusted proxies and normalizes IPv4-mapped IPv6", () => {
+  const req = new Request("http://hub/api/auth/login", {
+    headers: { "x-forwarded-for": "198.51.100.1, 203.0.113.77, 172.18.0.3" },
+  });
+  // Both 172.18.0.2 (socket, IPv4-mapped) and 172.18.0.3 (proxy hop) are trusted;
+  // 203.0.113.77 is the nearest untrusted client IP (ignoring spoofed 198.51.100.1).
+  expect(
+    resolveClientIp(req, { remoteAddress: "::ffff:172.18.0.2" }, "127.0.0.1, 172.16.0.0/12"),
+  ).toBe("203.0.113.77");
+
+  // Falls back to X-Real-IP when X-Forwarded-For is absent, and ignores invalid values.
+  const realIpReq = new Request("http://hub/api/agents/enroll", { headers: { "x-real-ip": "198.51.100.10" } });
+  expect(resolveClientIp(realIpReq, { remoteAddress: "127.0.0.1" }, "127.0.0.1")).toBe("198.51.100.10");
+
+  const garbageReq = new Request("http://hub/api/agents/enroll", { headers: { "x-forwarded-for": "not-an-ip" } });
+  expect(resolveClientIp(garbageReq, { remoteAddress: "127.0.0.1" }, "127.0.0.1")).toBe("127.0.0.1");
 });
 
 test("session token roundtrip verifies and carries jti/exp", () => {

@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 /**
  * Bounded in-memory sliding-window rate limiter for sensitive hub endpoints.
  * State is per-process and intentionally small; it is a backstop against
@@ -93,7 +95,150 @@ export const adminWriteLimiter = () =>
     max: envInt("RATE_LIMIT_ADMIN_MAX", 600, 1, 100_000),
   });
 
-/** Client identity for rate limiting: socket address only, never a spoofable header. */
-export function rateLimitKey(req: Request, scope: string, info?: { remoteAddress?: string | null }): string {
-  return `${scope}:${info?.remoteAddress ?? "unknown"}`;
+type IpMatcher = (ip: string) => boolean;
+
+function normalizeIp(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed.startsWith("::ffff:")) {
+    const mapped = trimmed.slice(7);
+    if (isIP(mapped) === 4) return mapped;
+  }
+  return trimmed;
+}
+
+function ipv4ToUint32(ip: string): number {
+  return ip.split(".").reduce((acc, part) => ((acc << 8) | Number(part)) >>> 0, 0);
+}
+
+function ipv6ToBigInt(ip: string): bigint | null {
+  let addr = ip;
+  const lastColon = addr.lastIndexOf(":");
+  if (lastColon !== -1 && addr.includes(".")) {
+    const v4 = addr.slice(lastColon + 1);
+    if (isIP(v4) !== 4) return null;
+    const n = ipv4ToUint32(v4);
+    addr = `${addr.slice(0, lastColon + 1)}${((n >>> 16) & 0xffff).toString(16)}:${(n & 0xffff).toString(16)}`;
+  }
+  const halves = addr.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - (left.length + right.length);
+  if (halves.length === 1 && missing !== 0) return null;
+  if (halves.length === 2 && missing < 0) return null;
+  const groups = [...left, ...Array<string>(Math.max(0, missing)).fill("0"), ...right];
+  if (groups.length !== 8) return null;
+  let value = 0n;
+  for (const g of groups) {
+    const n = Number.parseInt(g, 16);
+    if (!Number.isInteger(n) || n < 0 || n > 0xffff) return null;
+    value = (value << 16n) | BigInt(n);
+  }
+  return value;
+}
+
+function compileTrustedProxyEntry(entry: string): IpMatcher | null {
+  const trimmed = entry.trim();
+  if (!trimmed) return null;
+  const slash = trimmed.indexOf("/");
+  if (slash === -1) {
+    const target = normalizeIp(trimmed);
+    const kind = isIP(target);
+    if (kind === 0) return null;
+    if (kind === 4) return (ip) => isIP(ip) === 4 && ip === target;
+    const targetVal = ipv6ToBigInt(target);
+    if (targetVal === null) return null;
+    return (ip) => isIP(ip) === 6 && ipv6ToBigInt(ip) === targetVal;
+  }
+
+  const base = normalizeIp(trimmed.slice(0, slash));
+  const prefix = Number(trimmed.slice(slash + 1));
+  const kind = isIP(base);
+  if (kind === 4 && Number.isInteger(prefix) && prefix >= 0 && prefix <= 32) {
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    const net = (ipv4ToUint32(base) & mask) >>> 0;
+    return (ip) => isIP(ip) === 4 && ((ipv4ToUint32(ip) & mask) >>> 0) === net;
+  }
+  if (kind === 6 && Number.isInteger(prefix) && prefix >= 0 && prefix <= 128) {
+    const baseVal = ipv6ToBigInt(base);
+    if (baseVal === null) return null;
+    const shift = BigInt(128 - prefix);
+    const mask = prefix === 0 ? 0n : ((1n << 128n) - 1n) ^ ((1n << shift) - 1n);
+    const net = baseVal & mask;
+    return (ip) => {
+      if (isIP(ip) !== 6) return false;
+      const v = ipv6ToBigInt(ip);
+      return v !== null && (v & mask) === net;
+    };
+  }
+  return null;
+}
+
+let cachedProxyRaw: string | undefined;
+let cachedProxyMatchers: IpMatcher[] = [];
+
+function getTrustedProxyMatchers(override?: string): IpMatcher[] {
+  const raw = override !== undefined ? override : (process.env.TRUSTED_PROXY_IPS ?? "");
+  if (override === undefined && raw === cachedProxyRaw) return cachedProxyMatchers;
+  const matchers = raw
+    .split(",")
+    .map(compileTrustedProxyEntry)
+    .filter((m): m is IpMatcher => m !== null);
+  if (override === undefined) {
+    cachedProxyRaw = raw;
+    cachedProxyMatchers = matchers;
+  }
+  return matchers;
+}
+
+/**
+ * Resolves the client IP for rate limiting. By default (when `TRUSTED_PROXY_IPS` is unset)
+ * only the socket `remoteAddress` is used so `X-Forwarded-For` cannot be spoofed. When
+ * `remoteAddress` matches an explicit trusted proxy IP/CIDR, `X-Forwarded-For` is walked
+ * right-to-left to find the nearest untrusted hop (falling back to `X-Real-IP`).
+ */
+export function resolveClientIp(
+  req: Request,
+  info?: { remoteAddress?: string | null },
+  trustedProxies?: string,
+): string {
+  const rawRemote = info?.remoteAddress;
+  if (!rawRemote) return "unknown";
+  const remote = normalizeIp(rawRemote);
+  if (!remote) return "unknown";
+
+  const matchers = getTrustedProxyMatchers(trustedProxies);
+  if (matchers.length === 0) return remote;
+  const isTrusted = (ip: string) => matchers.some((m) => m(ip));
+  if (!isTrusted(remote)) return remote;
+
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) {
+    const hops = xff
+      .split(",")
+      .map(normalizeIp)
+      .filter((ip) => isIP(ip) !== 0);
+    for (let i = hops.length - 1; i >= 0; i--) {
+      if (!isTrusted(hops[i])) return hops[i];
+    }
+    if (hops.length > 0) return hops[0];
+  }
+
+  const realIp = req.headers.get("x-real-ip");
+  if (realIp) {
+    const normalized = normalizeIp(realIp);
+    if (isIP(normalized) !== 0) return normalized;
+  }
+
+  return remote;
+}
+
+/** Client identity for rate limiting: socket address or trusted-proxy forwarded client IP. */
+export function rateLimitKey(
+  req: Request,
+  scope: string,
+  info?: { remoteAddress?: string | null },
+  trustedProxies?: string,
+): string {
+  return `${scope}:${resolveClientIp(req, info, trustedProxies)}`;
 }

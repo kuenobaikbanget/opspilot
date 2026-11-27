@@ -1,5 +1,6 @@
 import type { SQL } from "bun";
 import { db, audit } from "./db";
+import { getPrivacySettings } from "./privacy";
 import { redactText } from "@opspilot/ai";
 import type { HostThresholds } from "@opspilot/contracts";
 
@@ -33,7 +34,11 @@ export async function addEvidence(
   content: string,
   executor: SQL = db,
 ) {
-  const result = redactText(content);
+  const privacy = await getPrivacySettings(executor);
+  const result = redactText(content, {
+    redactEmail: privacy.redactPii,
+    redactIp: privacy.redactPii,
+  });
   const cleaned = result.text.slice(0, 6000);
   await executor`INSERT INTO evidence(incident_id,source,content,redaction_summary)
     VALUES(${incidentId},${source.slice(0, 100)},${cleaned},${JSON.stringify(result.summary)}::jsonb)`;

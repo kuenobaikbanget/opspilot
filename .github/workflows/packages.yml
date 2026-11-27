@@ -126,20 +126,47 @@ jobs:
           sbom: true # buildx attaches an SPDX SBOM provenance attestation to the image
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+      - name: Resolve per-architecture image digests
+        id: digests
+        env:
+          IMAGE: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          inspect=$(docker buildx imagetools inspect "$IMAGE" --raw)
+          amd64=$(echo "$inspect" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
+          arm64=$(echo "$inspect" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="arm64") | .digest')
+          if [[ -z "$amd64" || -z "$arm64" ]]; then
+            echo "Failed to resolve amd64/arm64 digests from $IMAGE" >&2
+            exit 1
+          fi
+          echo "amd64=$amd64" >> "$GITHUB_OUTPUT"
+          echo "arm64=$arm64" >> "$GITHUB_OUTPUT"
       - name: Install cosign for keyless attestation
         uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
-      - name: Generate SPDX SBOM for the published image
+      - name: Generate SPDX SBOM for the published linux/amd64 image
         uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
-          image: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+          image: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.component }}@${{ steps.digests.outputs.amd64 }}
           format: spdx-json
-          output-file: sbom-${{ matrix.component }}.spdx.json
-      - name: Keyless-attest the image with its SPDX SBOM predicate
+          output-file: sbom-${{ matrix.component }}-amd64.spdx.json
+      - name: Generate SPDX SBOM for the published linux/arm64 image
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+        with:
+          image: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.component }}@${{ steps.digests.outputs.arm64 }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.component }}-arm64.spdx.json
+      - name: Keyless-attest both architecture images with their SPDX SBOM predicates
         env:
-          IMAGE_DIGEST: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+          IMAGE_BASE: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.component }}
+          DIGEST_AMD64: ${{ steps.digests.outputs.amd64 }}
+          DIGEST_ARM64: ${{ steps.digests.outputs.arm64 }}
         shell: bash
         run: |
           set -euo pipefail
           cosign attest --yes --type spdxjson \
-            --predicate "sbom-${{ matrix.component }}.spdx.json" \
-            "$IMAGE_DIGEST"
+            --predicate "sbom-${{ matrix.component }}-amd64.spdx.json" \
+            "${IMAGE_BASE}@${DIGEST_AMD64}"
+          cosign attest --yes --type spdxjson \
+            --predicate "sbom-${{ matrix.component }}-arm64.spdx.json" \
+            "${IMAGE_BASE}@${DIGEST_ARM64}"

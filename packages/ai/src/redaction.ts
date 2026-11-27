@@ -129,7 +129,7 @@ const LAYERS: Layer[] = [
   },
   {
     category: "secret_assignment",
-    pattern: new RegExp(`(${SECRET_KEY_NAME}\\s*[:=]\\s*["']?)[^\\s,;"']+`, "gi"),
+    pattern: new RegExp(`(${SECRET_KEY_NAME}["']?\\s*[:=]\\s*["']?)[^\\s,;"'\\}]+`, "gi"),
     replacement: "$1[REDACTED]",
   },
   {
@@ -143,7 +143,7 @@ const LAYERS: Layer[] = [
     pii: "ip",
     // IPv4 dotted quad, full 8-group IPv6, or compressed IPv6 containing "::".
     // (Deliberately does not match plain times like 12:30:45.)
-    pattern: /\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\b[0-9a-fA-F]{0,4}::[0-9a-fA-F:]*\b/g,
+    pattern: /\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|(?:^|(?<=[\s\[,("'=]))(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{0,4}::(?:[0-9a-fA-F:]*[0-9a-fA-F]|(?:[0-9a-fA-F:]*:)?(?:\d{1,3}\.){3}\d{1,3})?(?=$|[\s\],)"';])/g,
     replacement: "[REDACTED_IP]",
   },
 ];

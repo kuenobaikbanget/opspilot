@@ -468,3 +468,36 @@ integration("Hub API: consent endpoints gate investigate and provider tests, wit
     }
   });
 }, 60_000);
+
+test("addEvidence redacts email and IP addresses before storage when redact_pii is enabled", async () => {
+  process.env.DATABASE_URL ??= "postgres://opspilot:opspilot@127.0.0.1:5433/opspilot";
+  const { addEvidence } = await import("../apps/hub/src/incidents");
+
+  const runWithPii = async (redactPii: boolean) => {
+    const { sql, calls } = fakeExecutor((sqlText) =>
+      sqlText.includes("FROM privacy_settings") ? [{ ...GRANTED_ROW, redact_pii: redactPii }] : [],
+    );
+    await addEvidence(
+      "00000000-0000-4000-8000-000000000001",
+      "journal",
+      "user ops@example.com failed from ::1 and 10.0.0.5 password=hunter2",
+      sql,
+    );
+    const insert = calls.find((c) => c.sql.includes("INSERT INTO evidence"));
+    expect(insert).toBeDefined();
+    return insert!.values[2] as string;
+  };
+
+  const withPii = await runWithPii(true);
+  expect(withPii).not.toContain("ops@example.com");
+  expect(withPii).not.toContain("::1");
+  expect(withPii).not.toContain("10.0.0.5");
+  expect(withPii).not.toContain("hunter2");
+  expect(withPii).toContain("[REDACTED_EMAIL]");
+  expect(withPii).toContain("[REDACTED_IP]");
+
+  const withoutPii = await runWithPii(false);
+  expect(withoutPii).toContain("ops@example.com");
+  expect(withoutPii).toContain("10.0.0.5");
+  expect(withoutPii).not.toContain("hunter2");
+});

@@ -260,3 +260,23 @@ test("negative/bypass edge cases: quoting, casing, whitespace and partial tokens
   const tokenOnly = redactText(`key ${OPENAI_KEY}`);
   expect(redactText(tokenOnly.text).summary.total).toBe(0);
 });
+
+test("JSON log strings and IPv6 addresses starting with :: are redacted", () => {
+  const jsonLog = '{"user":"ops","password": "rahasia-json","api_key":"tok-999","token":unquoted_tok}';
+  const redactedJson = redactText(jsonLog);
+  expect(redactedJson.text).not.toContain("rahasia-json");
+  expect(redactedJson.text).not.toContain("tok-999");
+  expect(redactedJson.text).not.toContain("unquoted_tok");
+  expect(redactedJson.text).toContain('"user":"ops"');
+  expect(redactedJson.text).toContain('"password": "[REDACTED]"');
+  expect(redactedJson.text).toContain('"token":[REDACTED]}');
+  expect(redactedJson.summary.byCategory.secret_assignment).toBe(3);
+
+  const ipv6Log = "peer ::1 connected, mapped ::ffff:192.0.2.1, bracketed [::1], link fe80:: at 12:30:45";
+  const redactedIp = redactText(ipv6Log, { redactIp: true });
+  expect(redactedIp.text).not.toContain("::1");
+  expect(redactedIp.text).not.toContain("192.0.2.1");
+  expect(redactedIp.text).not.toContain("fe80::");
+  expect(redactedIp.text).toContain("12:30:45");
+  expect(redactedIp.summary.byCategory.ip_address).toBe(4);
+});

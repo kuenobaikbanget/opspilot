@@ -120,6 +120,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # OIDC token for Sigstore keyless cosign attestation in packages.yml
     uses: ./.github/workflows/packages.yml
     with:
       version: ${{ github.ref_name }}

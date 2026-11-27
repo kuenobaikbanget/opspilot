@@ -92,6 +92,21 @@ test("packages.yml publishes amd64+arm64, embeds and attests SBOMs", () => {
   expect(/sbom-action@/.test(packages)).toBe(true);
   expect(packages.includes("cosign attest")).toBe(true);
   expect(packages.includes("id-token: write")).toBe(true);
+  expect(packages.includes("steps.digests.outputs.amd64")).toBe(true);
+  expect(packages.includes("steps.digests.outputs.arm64")).toBe(true);
+
+  // Caller job in release.yml must also grant id-token: write to packages.yml.
+  const release = read(".github/workflows/release.yml");
+  const packagesJobBlock = release.slice(release.indexOf("  packages:"), release.indexOf("  publish:"));
+  expect(packagesJobBlock.includes("id-token: write")).toBe(true);
+});
+
+test("Caddyfile uses valid Caddy v2 output file log syntax and nginx.conf documents template mount", () => {
+  const caddy = read("infra/proxy/Caddyfile");
+  expect(caddy).toContain("output file /var/log/caddy/opspilot-access.log");
+  expect(caddy).not.toContain("format append");
+  const nginx = read("infra/proxy/nginx.conf");
+  expect(nginx).toContain("/etc/nginx/templates/opspilot.conf.template");
 });
 
 test("negative: unpinned tags and mutable references are rejected by the same checks", () => {

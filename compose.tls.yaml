@@ -29,6 +29,7 @@ services:
       - ./infra/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./infra/proxy/certs:/etc/caddy/certs:ro
       - proxy_data:/data
+      - proxy_logs:/var/log/caddy
     depends_on:
       hub:
         condition: service_started
@@ -41,6 +42,8 @@ services:
   hub:
     environment:
       COOKIE_SECURE: "true"
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
 
 volumes:
   proxy_data:
+  proxy_logs:

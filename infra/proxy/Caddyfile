@@ -57,8 +57,7 @@
 	}
 
 	log {
-		format append {
-			path /var/log/caddy/opspilot-access.log
+		output file /var/log/caddy/opspilot-access.log {
 			roll_size 100mb
 			roll_keep 5
 		}
