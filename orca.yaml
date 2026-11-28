@@ -1,0 +1,48 @@
+setupAgentStartupPolicy: wait-for-setup
+
+scripts:
+  setup: |
+    set -euo pipefail
+    WORKTREE_DIR="${ORCA_WORKTREE_PATH:-$(pwd)}"
+    ROOT_DIR="${ORCA_ROOT_PATH:-}"
+    cd "$WORKTREE_DIR"
+
+    if [ ! -f .env ]; then
+      if [ -n "$ROOT_DIR" ] && [ -f "$ROOT_DIR/.env" ]; then
+        cp "$ROOT_DIR/.env" .env
+      elif [ -f .env.example ]; then
+        cp .env.example .env
+      fi
+    fi
+
+    bun install --frozen-lockfile
+
+    if command -v go >/dev/null 2>&1 && [ -f agent/go.mod ]; then
+      (cd agent && go mod download)
+    fi
+
+  archive: |
+    set -euo pipefail
+    WORKTREE_DIR="${ORCA_WORKTREE_PATH:-$(pwd)}"
+
+    if command -v bun >/dev/null 2>&1 && [ -f "$WORKTREE_DIR/tools/worktree-cleanup.ts" ]; then
+      bun run "$WORKTREE_DIR/tools/worktree-cleanup.ts" --path "$WORKTREE_DIR" || true
+    fi
+
+    rm -rf \
+      "$WORKTREE_DIR/.next" \
+      "$WORKTREE_DIR/apps/web/.next" \
+      "$WORKTREE_DIR/dist" \
+      "$WORKTREE_DIR/coverage" \
+      "$WORKTREE_DIR/agent/bin"
+
+    if [ -d "$WORKTREE_DIR" ]; then
+      find "$WORKTREE_DIR" -maxdepth 3 -name "*.tsbuildinfo" -delete 2>/dev/null || true
+    fi
+
+defaultTabs:
+  - type: terminal
+    title: Worktree Dev (Mock)
+    command: bun run dev:worktree:mock
+  - type: terminal
+    title: Shell
